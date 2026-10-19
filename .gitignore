@@ -1,0 +1,70 @@
+# ============================================================
+# Secrets - NEVER commit these (revoke/rotate if ever pushed)
+# ============================================================
+# Riot dev key (data/solo queue collection) + W&B key (training logs).
+# Both are provided via env vars; see data/solo queue/riot_api.py and
+# model/pretraining/train.py. Keep only .env.example in the repo.
+.env
+.env.*
+*.pem
+*.key
+wandb_key.txt
+**/wandb_key.txt
+*w_key.txt
+*secret*
+*token*
+credentials*.json
+secrets*.json
+
+# ============================================================
+# Model weights / checkpoints (100MB+ each, GitHub blocks >100MB)
+# ============================================================
+*.pt
+*.pth
+*.bin
+*.onnx
+*.ckpt
+*.safetensors
+model/**/ckpt/
+model/**/uploaded/
+model/finetune/ckpt/
+model/pretraining/ckpt/
+
+# ============================================================
+# Data (GBs of match records, derived caches, player ids)
+# Raw + derived match data stays local; collectors rebuild it.
+# ============================================================
+data/solo queue/matchdata/
+data/solo queue/matchids/
+data/solo queue/puuids/
+data/solo queue/process matchdata/drafts_*.pt
+data/pro play/*.csv
+data/pro play/*.pt
+*.jsonl
+*.jsonl.gz
+matchids/
+puuids/
+matchdata/
+
+# ============================================================
+# Logs / run outputs / caches (machine-specific, noisy)
+# ============================================================
+wandb/
+**/wandb/
+frontend/server.log
+frontend/server.err
+frontend/.cache/
+*.log
+*.err
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+last_run.json
+**/last_run.json
+evaluate_report.json
+**/evaluate_report.json
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

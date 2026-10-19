@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Draft Assistant — SoloQ model</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>Draft Assistant</h1>
+  <div id="model-info" class="muted">loading model…</div>
+  <div class="model-pick">
+    <select id="ckpt-select" title="checkpoints on this machine"></select>
+    <button id="btn-load-ckpt" title="load the selected checkpoint">Load</button>
+    <button id="btn-upload" title="upload a .pt file from this machine">From file…</button>
+  </div>
+  <div class="spacer"></div>
+  <button id="btn-reset">Reset draft</button>
+  <input id="file-input" type="file" accept=".pt" class="hidden">
+</header>
+
+<div id="wt-bar">
+  <span class="wt-title">Real draft</span>
+  <select id="wt-select"><option value="">— pick a game —</option></select>
+  <input id="wt-filter" type="text" placeholder="filter team / league / date…">
+  <button id="wt-random" title="load a random game">🎲 random</button>
+  <span class="spacer"></span>
+  <span id="wt-info" class="muted">no game loaded</span>
+  <button id="wt-prev" disabled title="undo the last move">◀</button>
+  <span id="wt-step" class="wt-step"></span>
+  <button id="wt-next" disabled title="apply the next real move">next real move ▶</button>
+  <button id="wt-exit" disabled title="leave the walkthrough">✕</button>
+</div>
+<div id="wt-compare" class="hidden"></div>
+
+<main>
+  <section class="team" id="team-blue">
+    <h2>Blue side <span class="turn" id="turn-blue"></span></h2>
+    <div class="row">
+      <span class="row-label">Bans</span>
+      <div class="strip" id="bans-blue"></div>
+    </div>
+    <div class="row">
+      <span class="row-label">Picks</span>
+      <div class="strip" id="slots-blue"></div>
+    </div>
+    <div class="row">
+      <span class="row-label">Likely roles</span>
+      <div class="strip roles-strip" id="roles-blue"></div>
+    </div>
+    <div class="sugs-head">Suggested picks per role
+      <span class="muted">(flex = suggested for 2+ roles)</span></div>
+    <div class="sug-table" id="sugs-blue"></div>
+  </section>
+
+  <section class="team" id="team-red">
+    <h2>Red side <span class="turn" id="turn-red"></span></h2>
+    <div class="row">
+      <span class="row-label">Bans</span>
+      <div class="strip" id="bans-red"></div>
+    </div>
+    <div class="row">
+      <span class="row-label">Picks</span>
+      <div class="strip" id="slots-red"></div>
+    </div>
+    <div class="row">
+      <span class="row-label">Likely roles</span>
+      <div class="strip roles-strip" id="roles-red"></div>
+    </div>
+    <div class="sugs-head">Suggested picks per role
+      <span class="muted">(flex = suggested for 2+ roles)</span></div>
+    <div class="sug-table" id="sugs-red"></div>
+  </section>
+</main>
+
+<footer class="muted">
+  5 role-conditioned suggestions per role &amp; team (banned &amp; picked
+  champions excluded, flex picks flagged) · highlighted slot = next move
+  in a standard pro draft (highlight only, nothing enforced) · champion
+  art from Riot's dDragon CDN (needs internet once) · local only ·
+  active model (pretraining or pro-finetune) shown in the header
+</footer>
+
+<div id="picker" class="hidden">
+  <div class="picker-box">
+    <div class="picker-head">
+      <h3 id="picker-title">Pick a champion</h3>
+      <input id="picker-search" type="text" placeholder="search…" autofocus>
+      <button id="picker-close">✕</button>
+    </div>
+    <div id="picker-grid" class="picker-grid"></div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
