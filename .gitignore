@@ -5,7 +5,7 @@
 # Both are provided via env vars; see data/solo queue/riot_api.py and
 # model/pretraining/train.py. Keep only .env.example in the repo.
 .env
-.env.*
+!.env.example
 *.pem
 *.key
 wandb_key.txt
