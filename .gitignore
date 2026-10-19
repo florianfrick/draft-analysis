@@ -68,3 +68,4 @@ evaluate_report.json
 Thumbs.db
 .vscode/
 .idea/
+*.corrupt
