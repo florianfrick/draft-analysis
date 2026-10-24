@@ -4,14 +4,26 @@ Built on pipeline.py rows (cached pro_drafts.pt). Both emit a per-example
 `weight` (recency, from pipeline.assign_weights) so training can skew to
 recent meta without touching the val/test distribution.
 
-ProNextMoveDataset: unrolls each 20-move draft into 20 examples
-(prefix -> next move). Prefix state uses the SoloQ partial-draft encoding
-(unpicked slots = CHAMP_PAD + pad_mask, per model/README.md Sec.3), plus
-ban list, turn info (move idx, phase, side to move, first-pick side),
-fearless unavailability mask, and legality mask (taken | unavailable)
-for -inf suppression at the head. Targets: (is_ban, champ[, role for
-picks]). Batches add win_label (blue wins) for the future value head -
-deliberately NOT part of the soloQ pretraining contract.
+ProNextMoveDataset: (prefix -> next move) examples from each 20-move
+draft. Prefix state uses the SoloQ partial-draft encoding (unpicked
+slots = CHAMP_PAD + pad_mask, per model/README.md Sec.3), plus ban list,
+turn info (move idx, phase, side to move, first-pick side), the patch
+id, fearless unavailability mask, and legality mask (taken |
+unavailable) for -inf suppression at the head. Targets: (is_ban,
+champ[, role for picks]). Batches add win_label (blue wins) for the
+value head - deliberately NOT part of the soloQ pretraining contract.
+
+Two prefix modes, because the 20 prefixes of one game are
+near-duplicates of each other (same draft, same label):
+  'all'    -> 20 examples/game, every prefix. Val/test only, so metrics
+              stay comparable across runs.
+  'random' -> 1 example/game/epoch, move index redrawn by set_epoch().
+              Training default: the effective sample size of this task
+              is len(rows), not 20*len(rows), so unrolling all 20 per
+              epoch mostly buys memorisation.
+
+`swap_aug` mirrors blue<->red with p=0.5 (see `swap_sides`): doubles the
+effective data and enforces the Siamese symmetry the encoder claims.
 
 ProMaskedDraftDataset: full 10-pick pro drafts through the SAME masking
 semantics as soloQ pretraining (apply_masking imported from the soloQ
@@ -74,7 +86,115 @@ def phase_of(move_idx):
     return PHASE_OF[move_idx]
 
 
-def build_prefix(row, move_idx, num_champs=NUM_REAL_CHAMPS):
+# ---------------------------------------------------------------- patches
+#
+# Patch conditioning. `patch` is carried in every row as a string
+# ('16.03'), but until now it only ever reached the model inside `meta`,
+# i.e. it was never a tensor and StateEmbedding had no way to see it.
+# That made the first ban of a game unpredictable by construction: with
+# no picks on the board, the only thing that determines which champ gets
+# banned is the current patch's priority list (measured: model 12.3%
+# top-5 on bans1 vs 37.4% for a lookup table fit on the test patches).
+PATCH_UNK_ID = 0  # index 0 reserved for unseen patches
+
+
+def patch_key(patch):
+    """Normalize a patch label to 'major.mm' ('16.3' -> '16.03')."""
+    s = str(patch or "").strip()
+    if not s:
+        return ""
+    maj, _, mnr = s.partition(".")
+    if not mnr:
+        mnr = "0"
+    try:
+        return "%d.%02d" % (int(maj), int(mnr))
+    except ValueError:
+        return s
+
+
+def _patch_sort_key(key):
+    maj, _, mnr = key.partition(".")
+    try:
+        return (int(maj), int(mnr))
+    except ValueError:
+        return (10 ** 6, 0)
+
+
+def build_patch_vocab(rows):
+    """Patch vocabulary over ALL rows -> (sorted keys, {key: id}).
+
+    Built over train+val+test on purpose: a patch label is metadata, not
+    a label, so this is not leakage (same reasoning as the champion
+    vocab). Index 0 is PATCH_UNK_ID so a patch never seen in training
+    (the next patch, at inference time) falls back to a learned row
+    instead of crashing. Pass the SAME dict to every split, otherwise
+    train/val/test disagree on patch ids.
+    """
+    keys = sorted({patch_key(r.get("patch")) for r in rows} - {""},
+                  key=_patch_sort_key)
+    return keys, {k: i + 1 for i, k in enumerate(keys)}
+
+
+def patch_to_id(patch, patch_index):
+    """Map a row's patch string to its vocab id (UNK if unknown)."""
+    if not patch_index:
+        return PATCH_UNK_ID
+    return patch_index.get(patch_key(patch), PATCH_UNK_ID)
+
+
+def patch_index_from_vocab(vocab):
+    """Rebuild {patch_key: id} from a checkpoint's stored `patch_vocab`.
+
+    Diagnostics/inference must use the vocabulary the model was trained
+    with, not one rebuilt from whatever rows are on hand: the patch
+    embedding rows are indexed by the training-time vocab, so a
+    different ordering silently shifts every patch vector.
+    """
+    return {k: i + 1 for i, k in enumerate(vocab or [])}
+
+
+def swap_sides(sample):
+    """Mirror an example blue<->red. Returns a new dict.
+
+    Valid augmentation because the encoder is Siamese (one set of weights
+    for both teams) and carries no team embedding, so the mirrored draft
+    is the same draft viewed from the other side, with the win label
+    flipped.
+
+    Swapped: champ_ids / role_ids / pad_mask (the two 5-slot team blocks
+    trade places - role index is preserved within a team, so the
+    role->slot convention survives), to_move, first_pick, win_label, and
+    the (blue, red) pairs inside econ_target.
+
+    NOT swapped, deliberately:
+      - ban_ids: BanContext embeds bans as champ_lookup + FLEX role and
+        cross-attends with no positional or team signal, so the ban list
+        is team-agnostic to the model. A team swap also leaves the
+        chronological ban order unchanged, so the array is already the
+        correct mirrored representation.
+      - taken_mask / unavailable_mask: sets of champions, not per-team.
+      - target_champ / target_role / is_ban / move_idx / phase: the same
+        team is still to move and still makes the same move.
+      - patch_id: unchanged by a side swap.
+    """
+    out = dict(sample)
+    half = TEAM_SIZE
+    for key in ("champ_ids", "role_ids", "pad_mask"):
+        t = sample[key]
+        out[key] = torch.cat([t[half:], t[:half]], dim=0)
+    out["to_move"] = 1 - sample["to_move"]
+    out["first_pick"] = 1 - sample["first_pick"]
+    out["win_label"] = 1 - sample["win_label"]
+    # econ_target is (gold10_b, gold10_r, gold15_b, gold15_r, xp10_b,
+    # xp10_r): flip each (blue, red) pair, otherwise the econ head is
+    # taught that this side's gold is the other side's.
+    e = sample.get("econ_target")
+    if e is not None and e.numel() % 2 == 0:
+        out["econ_target"] = e.reshape(-1, 2)[:, [1, 0]].reshape(-1)
+    return out
+
+
+def build_prefix(row, move_idx, num_champs=NUM_REAL_CHAMPS, patch_index=None):
     """Encode draft state after moves[:move_idx] -> example dict.
 
     Slot tensors follow the soloQ partial-draft convention: unpicked
@@ -82,6 +202,9 @@ def build_prefix(row, move_idx, num_champs=NUM_REAL_CHAMPS):
     hold (champ, exact role). Bans so far go in `ban_ids` (PAD-padded),
     fearless champs in `unavailable_mask`, and `taken_mask` unions
     bans+picks+unavailable for -inf legality suppression at the head.
+
+    `patch_index` (from build_patch_vocab) turns the row's patch string
+    into `patch_id`; None -> PATCH_UNK_ID.
     """
     champ_ids = torch.full((N_SLOTS,), CHAMP_PAD_ID, dtype=torch.long)
     role_ids = torch.full((N_SLOTS,), ROLE_FLEX_ID, dtype=torch.long)
@@ -126,6 +249,18 @@ def build_prefix(row, move_idx, num_champs=NUM_REAL_CHAMPS):
         "win_label": torch.tensor(row["blue_win"], dtype=torch.long),
         "weight": torch.tensor(float(row.get("weight", 1.0)),
                                dtype=torch.float32),
+        # Patch conditioning: the model had no way to see which patch it
+        # is predicting for, which is the whole reason bans1 (no picks on
+        # the board, patch-only prior) lost to a lookup table.
+        "patch_id": torch.tensor(patch_to_id(row.get("patch"), patch_index),
+                                 dtype=torch.long),
+        # Econ labels: these were missing from build_prefix entirely, so
+        # PolicyValueModel's econ head was trained against nothing (only
+        # ProMaskedDraftDataset carried them). Wired here so the head
+        # gets real supervision; `has_econ` masks the ~9% of rows without.
+        "econ_target": torch.tensor(econ_targets(row), dtype=torch.float32),
+        "has_econ": torch.tensor(1.0 if row.get("has_econ") else 0.0,
+                                 dtype=torch.float32),
         "meta": {"gameid": row["gameid"], "series_id": row["series_id"],
                  "league": row["league"], "patch": row["patch"],
                  "date": row["date"], "blue_team": row["blue_team"],
@@ -134,22 +269,83 @@ def build_prefix(row, move_idx, num_champs=NUM_REAL_CHAMPS):
 
 
 class ProNextMoveDataset(Dataset):
-    """20 examples per draft: (prefix state -> next move). Index mapping is
-    deterministic (game_idx * 20 + move_idx) so splits/weights at the row
-    level apply cleanly. `indices` restricts to a split."""
+    """(prefix -> next move) examples from pro drafts.
 
-    def __init__(self, rows, indices=None, num_champs=NUM_REAL_CHAMPS):
+    prefix_mode:
+      'all'    -> len(rows) * N_MOVES. Index mapping is deterministic
+                  (game_idx * 20 + move_idx) so splits/weights at the
+                  row level apply cleanly. Val/test.
+      'random' -> len(rows). Each game yields ONE example per epoch at a
+                  move index redrawn by set_epoch(). Training.
+
+    Why 'random' is the training default: the 20 prefixes of a game are
+    the same draft with the same next-move label at different depths, so
+    they are near-duplicates. Unrolling all 20 every epoch inflates the
+    apparent dataset to 810k while the effective sample size stays at
+    len(rows) ~ 46.6k, which is exactly the regime where val loss starts
+    climbing after epoch 1. One prefix per game per epoch keeps the same
+    information over E epochs, makes each epoch 20x cheaper, and turns
+    the redundancy into augmentation instead of repetition.
+
+    swap_aug: mirror blue<->red with p=0.5 (see `swap_sides`).
+    """
+
+    def __init__(self, rows, indices=None, num_champs=NUM_REAL_CHAMPS,
+                 patch_index=None, prefix_mode="all", swap_aug=False,
+                 seed=0):
+        if prefix_mode not in ("all", "random"):
+            raise ValueError("prefix_mode must be 'all' or 'random', got %r"
+                             % (prefix_mode,))
         self.rows = rows if indices is None else [rows[i] for i in indices]
         self.num_champs = num_champs
+        self.patch_index = patch_index
+        self.prefix_mode = prefix_mode
+        self.swap_aug = swap_aug
+        self.seed = seed
+        self.epoch = 0
+        self._move_of = None
+        # Own stream so augmentation draws don't depend on loader order.
+        self._aug_rng = torch.Generator().manual_seed(seed + 4241)
+        if prefix_mode == "random":
+            self.set_epoch(0)
+
+    def set_epoch(self, epoch):
+        """Redraw the per-game move index (random mode only).
+
+        Deterministic in (seed, epoch) so a resumed run reproduces the
+        same augmentation schedule.
+        """
+        self.epoch = epoch
+        if self.prefix_mode != "random":
+            return
+        g = torch.Generator().manual_seed(
+            (self.seed * 7919 + epoch * 104729) % (2 ** 63 - 1))
+        self._move_of = torch.randint(0, N_MOVES, (len(self.rows),),
+                                      generator=g)
 
     def __len__(self):
+        if self.prefix_mode == "random":
+            return len(self.rows)
         return len(self.rows) * N_MOVES
 
     def __getitem__(self, idx):
-        row = self.rows[idx // N_MOVES]
-        return build_prefix(row, idx % N_MOVES, self.num_champs)
+        if self.prefix_mode == "random":
+            row = self.rows[idx]
+            move_idx = int(self._move_of[idx])
+        else:
+            row = self.rows[idx // N_MOVES]
+            move_idx = idx % N_MOVES
+        sample = build_prefix(row, move_idx, self.num_champs,
+                              self.patch_index)
+        if self.swap_aug and \
+                torch.rand((), generator=self._aug_rng).item() < 0.5:
+            sample = swap_sides(sample)
+        return sample
 
     def weights(self):
+        """Recency weight per example, aligned with __len__."""
+        if self.prefix_mode == "random":
+            return [float(r.get("weight", 1.0)) for r in self.rows]
         return [float(r.get("weight", 1.0)) for r in self.rows
                 for _ in range(N_MOVES)]
 

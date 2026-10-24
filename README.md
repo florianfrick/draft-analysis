@@ -73,7 +73,7 @@ See each folder's README for full commands.
                                          Inter-Team Symmetric Cross-Attention
                                                          │
                                                          ▼ 
-                                        ┌────────────────┴──────────────────────────────────────┐
+                                        ┌────────────────┴────--(potentially/finetune)──────────┐
                                         ▼                                                       ▼
                                 [Slot-Level Vectors]                                     [PMA Set Pooling]
                                    Extract H_masks                                    v_Blue, v_Red 1D vectors
@@ -126,6 +126,7 @@ Why set attention blocks (and not ISAB):
 Draft Format:
 
 Fearless bans (previously played champions in the series can not be picked again)
+First pick no longer always blue.
 Ban Phase 1:	Blue / Red	Alternating 3 bans per side (3-3 split)
 Pick Phase 1:   B1
                 R1, R2
