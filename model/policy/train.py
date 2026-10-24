@@ -176,14 +176,20 @@ def load_soloq_rows():
 
 
 def fit_econ_stats(rows, indices, n_econ=6):
-    """Mean/std of raw econ targets on train rows with has_econ."""
+    """Mean/std of raw econ targets on train rows with has_econ.
+
+    `n_econ` selects a PREFIX of the 6 raw targets (gold10 b/r, gold15
+    b/r, xp10 b/r) to match the width of the econ head. Without the
+    slice, `acc` was allocated as zeros(n_econ) but accumulated a
+    6-vector, so any --n-econ other than 0 or 6 raised a size mismatch.
+    """
     acc, cnt = torch.zeros(n_econ), 0
     acc2 = torch.zeros(n_econ)
     for i in indices:
         row = rows[i]
         if not row.get("has_econ"):
             continue
-        v = torch.tensor(PRO_DATA.econ_targets(row))
+        v = torch.tensor(PRO_DATA.econ_targets(row))[:n_econ]
         acc += v
         acc2 += v * v
         cnt += 1
@@ -221,12 +227,17 @@ def value_loss(out, batch):
 
 
 def econ_loss(out, batch, econ_mean, econ_std):
-    """MSE on standardized econ, masked to has_econ rows."""
+    """MSE on standardized econ, masked to has_econ rows.
+
+    build_prefix always emits all 6 raw targets, so slice the target to
+    the head's width: --n-econ may select a prefix of them.
+    """
     if "econ_target" not in batch or "has_econ" not in batch:
         return out.get("econ_pred", torch.zeros(1)).sum() * 0.0
     if int(batch["has_econ"].sum()) == 0:
         return out["econ_pred"].sum() * 0.0
-    tgt = (batch["econ_target"] - econ_mean) / econ_std
+    n = out["econ_pred"].shape[1]
+    tgt = (batch["econ_target"][:, :n] - econ_mean) / econ_std
     err = (out["econ_pred"] - tgt) ** 2
     w = batch["has_econ"].unsqueeze(1)
     return (err * w).sum() / (w.sum() * err.shape[1])
@@ -260,6 +271,12 @@ def evaluate(model, loaders, args, device, econ_mean, econ_std):
     # Value metrics
     val_logits, val_labels = [], []
     econ_err, econ_n = 0.0, 0
+    # Econ drift accounting: gold/xp at 10/15 min inflate patch over patch,
+    # so a model that predicts the TRAIN mean perfectly still scores
+    # RMSE ~1.5 on a split 3-6 patches later. Track the residual bias and
+    # the target variance so econ_rmse can be read against a constant
+    # predictor instead of against zero.
+    econ_pred_sum, econ_tgt_sum, econ_tgt_sq, econ_cnt = 0.0, 0.0, 0.0, 0
 
     for batch in loaders["val"]:
         batch = {k: v.to(device) if torch.is_tensor(v) else v
@@ -295,11 +312,24 @@ def evaluate(model, loaders, args, device, econ_mean, econ_std):
         # existing too, or n_econ=0 runs would KeyError here.
         if "econ_pred" in out and "has_econ" in batch \
                 and int(batch["has_econ"].sum()):
-            tgt = (batch["econ_target"] - econ_mean) / \
+            n = out["econ_pred"].shape[1]
+            tgt = (batch["econ_target"][:, :n] - econ_mean) / \
                 econ_std.to(batch["econ_target"].device)
-            err = (out["econ_pred"] - tgt) ** 2
+            keep = batch["has_econ"].bool()
+            w = batch["has_econ"].unsqueeze(1)
+            # Mask the numerator by has_econ as well as the denominator.
+            # Rows without econ labels have econ_target = zeros, which
+            # standardizes to roughly -16 and squares to ~256: summing
+            # those into the numerator while excluding them from the
+            # count made econ_rmse meaningless (~1.5-2.6 for any model,
+            # including one that just predicts the mean).
+            err = ((out["econ_pred"] - tgt) ** 2) * w
             econ_err += float(err.sum())
-            econ_n += int(batch["has_econ"].sum()) * err.shape[1]
+            econ_n += int(keep.sum()) * err.shape[1]
+            econ_pred_sum += float(out["econ_pred"][keep].double().sum())
+            econ_tgt_sum += float(tgt[keep].double().sum())
+            econ_tgt_sq += float((tgt[keep].double() ** 2).sum())
+            econ_cnt += int(keep.sum()) * err.shape[1]
 
     out_m = {}
     out_m["policy_loss"] = loss_sum / max(1, n_total)
@@ -321,6 +351,24 @@ def evaluate(model, loaders, args, device, econ_mean, econ_std):
         ((torch.sigmoid(val_logits) - val_labels.float()) ** 2).mean())
     out_m["win_base_rate"] = float(val_labels.float().mean())
     out_m["econ_rmse"] = (econ_err / max(1, econ_n)) ** 0.5
+    # Decompose MSE = var(residual) + bias^2. The bias is the patch drift,
+    # which no draft-only model can predict. `econ_rmse_const` is what the
+    # best constant predictor scores on this split, so econ_rmse_centered
+    # < econ_rmse_const means the head has real signal. econ_skill is the
+    # resulting R^2.
+    if econ_cnt:
+        mse = econ_err / econ_cnt
+        bias = econ_pred_sum / econ_cnt - econ_tgt_sum / econ_cnt
+        var_t = max(1e-9, econ_tgt_sq / econ_cnt
+                    - (econ_tgt_sum / econ_cnt) ** 2)
+        centered = max(0.0, mse - bias ** 2)
+        out_m["econ_rmse_centered"] = centered ** 0.5
+        out_m["econ_rmse_const"] = var_t ** 0.5
+        out_m["econ_skill"] = 1.0 - centered / var_t
+    else:
+        out_m["econ_rmse_centered"] = 0.0
+        out_m["econ_rmse_const"] = 0.0
+        out_m["econ_skill"] = 0.0
     out_m["n_win"] = int(val_labels.numel())
 
     return out_m
@@ -702,12 +750,12 @@ def train(args):
                           step=global_step)
             print("val ep %d: top1 %.4f top5 %.4f top10 %.4f "
                   "ban@5 %.4f pick@5 %.4f win_auc %.4f brier %.4f "
-                  "econ_rmse %.4f (%.0fs)" %
+                  "econ_rmse %.3f skill %.3f (%.0fs)" %
                   (epoch, metrics["top1"], metrics["top5"],
                    metrics["top10"], metrics["ban_top5"],
                    metrics["pick_top5"], metrics["win_auc"],
                    metrics["win_brier"], metrics["econ_rmse"],
-                   time.time() - t0))
+                   metrics["econ_skill"], time.time() - t0))
 
             extra = {"init_ckpt": ckpt_spec,
                      "patch": payload.get("patch"),
@@ -735,9 +783,10 @@ def train(args):
         tm = evaluate(model, {"val": te_loader}, args, device, emu, esd)
         report[name] = tm
         print("TEST %s: top1 %.4f top5 %.4f win_auc %.4f brier %.4f "
-              "econ_rmse %.4f" % (name, tm["top1"], tm["top5"],
-                                  tm["win_auc"], tm["win_brier"],
-                                  tm["econ_rmse"]))
+              "econ_rmse %.3f skill %.3f" % (name, tm["top1"], tm["top5"],
+                                             tm["win_auc"], tm["win_brier"],
+                                             tm["econ_rmse"],
+                                             tm["econ_skill"]))
     with open(run_dir / "test_report.json", "w", encoding="utf-8") as f:
         json.dump(report, f, indent=1)
     print("done: best policy top5 %.4f, best win AUC %.4f (%s)"

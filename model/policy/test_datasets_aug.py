@@ -34,10 +34,13 @@ def make_row(first_pick=0, seed=0, patch="16.03", blue_win=1):
     moves = PRO_PIPE.interleaved_moves(first_pick, bans_by_team,
                                        picks_by_team)
     assert len(moves) == N_MOVES
+    # econ varies with seed so variance-based metrics are well defined
     return {
         "moves": moves, "first_pick": first_pick, "unavailable": [],
         "blue_win": blue_win, "weight": 1.0, "patch": patch,
-        "econ": [1500.0, 1400.0, 2400.0, 2300.0, 9000.0, 8800.0],
+        "econ": [1500.0 + 40 * seed, 1400.0 + 30 * seed,
+                 2400.0 + 60 * seed, 2300.0 + 50 * seed,
+                 9000.0 + 90 * seed, 8800.0 + 80 * seed],
         "has_econ": True, "gameid": "g%d" % seed, "series_id": "s%d" % seed,
         "league": "LCK", "date": "2026-03-01",
         "blue_team": "T1", "red_team": "GEN",
@@ -229,6 +232,91 @@ def test_swap_aug_only_in_train_mode():
         # base row has first_pick=0, so a swap shows up as first_pick=1
         flipped += int(s["first_pick"]) == 1
     assert 0 < flipped < len(rows), "swap augmentation not applied ~50/50"
+
+
+# ----------------------------------------------------------------- econ
+
+def test_econ_labels_present_in_prefix():
+    """The econ head was trained on nothing because build_prefix never
+    emitted these keys (only ProMaskedDraftDataset did)."""
+    rows = [make_row(seed=1)]
+    s = PRO_DATA.build_prefix(rows[0], 5)
+    assert "econ_target" in s and "has_econ" in s
+    assert s["econ_target"].shape == (6,)
+    assert float(s["has_econ"]) == 1.0
+    assert s["econ_target"].abs().sum() > 0
+
+
+def test_econ_labels_missing_row_marked():
+    rows = [make_row(seed=2)]
+    rows[0]["has_econ"] = False
+    rows[0]["econ"] = None
+    s = PRO_DATA.build_prefix(rows[0], 5)
+    assert float(s["has_econ"]) == 0.0
+
+
+def test_fit_econ_stats_subset_widths():
+    """--n-econ selects a prefix of the 6 raw targets."""
+    rows = [make_row(seed=i) for i in range(12)]
+    for n in (6, 3, 1):
+        m, s = T.fit_econ_stats(rows, list(range(12)), n)
+        assert m.shape == (n,) and s.shape == (n,), n
+        assert float(s.min()) > 0
+
+
+def test_econ_loss_subset_head_width():
+    batch = {"econ_target": torch.randn(4, 6),
+             "has_econ": torch.ones(4)}
+    out = {"econ_pred": torch.randn(4, 3)}
+    loss = T.econ_loss(out, batch, torch.zeros(3), torch.ones(3))
+    assert torch.isfinite(loss) and float(loss) > 0
+
+
+def test_econ_loss_ignores_rows_without_labels():
+    batch = {"econ_target": torch.zeros(4, 6),
+             "has_econ": torch.zeros(4)}
+    out = {"econ_pred": torch.randn(4, 6)}
+    loss = T.econ_loss(out, batch, torch.zeros(6), torch.ones(6))
+    assert torch.isfinite(loss)
+
+
+def test_econ_metric_constant_predictor_scores_zero_skill():
+    """Regression: `evaluate` summed the squared error over ALL rows but
+    divided by the labeled rows only. Unlabeled rows have econ_target=0,
+    which standardizes to ~-16 and squares to ~256, so even a model that
+    predicts the mean scored econ_skill ~-1.2 and econ_rmse ~1.5.
+    """
+    from torch.utils.data import DataLoader
+    rows = [make_row(seed=i) for i in range(6)]
+    rows[0]["has_econ"] = False
+    rows[0]["econ"] = None
+    ds = PRO_DATA.ProNextMoveDataset(rows, prefix_mode="all")
+    loader = DataLoader(ds, batch_size=8, shuffle=False,
+                        collate_fn=PRO_DATA.pro_collate)
+    enc = SoloQPretrainedModel(num_champs=C, embed_dim=32, num_heads=4,
+                               num_intra_layers=1, num_cross_layers=1)
+    m = PolicyValueModel(enc, embed_dim=32, state_dim=16, n_econ=6).eval()
+
+    class ZeroEcon:
+        def __init__(self, inner):
+            self.inner = inner
+
+        def eval(self):
+            return self
+
+        def __call__(self, b):
+            o = self.inner(b)
+            o["econ_pred"] = torch.zeros_like(o["econ_pred"])
+            return o
+
+    met = T.evaluate(ZeroEcon(m), {"val": loader}, None, None,
+                     torch.zeros(6), torch.ones(6))
+    assert abs(met["econ_skill"]) < 1e-4, met["econ_skill"]
+    # A constant predictor has zero residual variance once the mean offset
+    # is removed, so the centered RMSE must equal the constant baseline.
+    # (Plain econ_rmse still carries the bias, so it is NOT equal to it.)
+    assert abs(met["econ_rmse_centered"]
+               - met["econ_rmse_const"]) < 1e-3 * met["econ_rmse_const"]
 
 
 # ------------------------------------------------------ model integration

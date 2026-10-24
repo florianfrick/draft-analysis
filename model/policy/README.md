@@ -162,8 +162,17 @@ upweighted. Series-grouped train/val/test split (no leakage).
 | `pick_top5` | top-5 on pick moves only |
 | `win_auc` | blue-win AUC on prefix states |
 | `win_brier` | Brier score on win prediction |
-| `econ_rmse` | standardized econ RMSE |
+| `econ_rmse` | standardized econ RMSE (includes the patch-drift offset) |
+| `econ_rmse_centered` | econ RMSE after removing the split's mean residual |
+| `econ_rmse_const` | what the best constant predictor scores on this split |
+| `econ_skill` | `1 - centered/const` = R²; **> 0 means the head beats a constant** |
 | `policy_loss` | mean policy CE |
+
+Reading the econ numbers: gold/XP at 10/15 min inflate patch over patch, so
+the val/test targets sit +0.8 to +1.5σ above the train-fitted
+standardization. `econ_rmse` alone therefore cannot fall below
+`econ_rmse_const` even for a perfect model, because the drift is in the
+level and no draft-only model can see it. Judge the head by `econ_skill`.
 
 ## Checkpoints (ckpt/run_<ts>[_<name>]/)
 
