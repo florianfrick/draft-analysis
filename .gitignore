@@ -45,6 +45,7 @@ data/pro play/*.pt
 # derived markdown and the generated index.
 data/patch notes/patch_*.md
 data/patch notes/index.json
+data/patch notes/clean/
 *.jsonl
 *.jsonl.gz
 matchids/

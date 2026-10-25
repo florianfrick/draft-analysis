@@ -47,6 +47,18 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 BLOCK = ("h1", "h2", "h3", "h4", "h5", "p", "li", "table", "blockquote")
 SKIP_CLASSES = {"mw-editsection", "toc", "navbox", "noprint", "reference"}
 
+# Page furniture, dropped before walking. The wiki marks its own junk:
+# `navbox-wrapper` holds the footer link farm ("Patch History", "Riot
+# Games", "Microsoft Windows, macOS") and `hidden-metadata` holds the
+# champion ability-tooltip tables. Note `.navbox` does NOT match
+# `navbox-wrapper` - that one-character gap was leaking 59% of the wiki
+# article (267KB of 645KB across the 20 wiki-sourced patches) into the
+# corpus as if it were patch notes.
+JUNK = ("script", "style", "noscript", ".mw-editsection", ".toc",
+        ".navbox", ".navbox-wrapper", ".va-collapsible-content",
+        ".hidden-metadata", ".navigation-not-searchable", ".noprint",
+        ".reference", "sup.reference")
+
 
 SEASON_MAP = {"15": "25", "16": "26"}
 
@@ -153,9 +165,7 @@ def clean_node(node, depth=0):
 
 def html_to_md(body):
     """Walk the content container in document order, keeping block breaks."""
-    for junk in body.select("script, style, noscript, .mw-editsection, "
-                            ".toc, .navbox, .noprint, .reference, "
-                            "sup.reference"):
+    for junk in body.select(",".join(JUNK)):
         junk.decompose()
     out, emitted = [], set()
     for node in body.find_all(BLOCK + ("div",)):
@@ -197,10 +207,19 @@ def wiki_to_md(body):
     before each change list, not headings. Without promoting them the
     balance changes lose their subject ("Base damage reduced to 5-25")
     and the file is useless for retrieval.
+
+    Two truncations matter as much as the promotion:
+
+    * Everything before the first <h2> is the article preamble - intro
+      blurb plus the "Patch chronology" nav, whose items are <h3>s in
+      their own right (V26.19, V26.21, "League Classic", "here"), so
+      they cannot be filtered by heading level.
+    * Everything from "Patch History" onward is wiki furniture: navboxes,
+      the "Riot Games"/"Microsoft Windows" footer link farm, and the
+      champion ability-tooltip tables. That tail was 41% of the wiki
+      half of this corpus (267KB of 645KB) and is not patch notes.
     """
-    for junk in body.select("script, style, noscript, .mw-editsection, "
-                            ".toc, .navbox, .noprint, .reference, "
-                            "sup.reference"):
+    for junk in body.select(",".join(JUNK)):
         junk.decompose()
     SKIP_HEAD = {"contents", "references", "see also", "navigation",
                  "patch chronology"}
@@ -213,6 +232,12 @@ def wiki_to_md(body):
             # links inside prose or list items.
             if node.find_parent(["p", "li", "table", "h2", "h3", "h4"]):
                 continue
+            # ...and never one from the preamble above the first <h2>,
+            # which is the "Patch chronology" nav: its items are bare
+            # links (V26.19, V26.21, "League Classic", "Patch History")
+            # that would otherwise be promoted to headings.
+            if node.find_previous("h2") is None:
+                continue
             text = tidy(node.get_text(" ", strip=True))
             if not text or len(text) > 40:
                 continue
@@ -221,7 +246,10 @@ def wiki_to_md(body):
             continue
         if node.name in ("h2", "h3", "h4"):
             text = tidy(node.get_text(" ", strip=True))
-            if not text or text.lower() in SKIP_HEAD:
+            low = text.lower()
+            if low.startswith("patch history"):
+                break
+            if not text or low in SKIP_HEAD:
                 emitted.add(id(node))
                 continue
         line = clean_node(node)
