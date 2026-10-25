@@ -83,8 +83,8 @@ def build_popularity(rows, indices, num_champs):
 
 @torch.no_grad()
 def hits(model, loader, device):
-    """Per-example top-1 / top-5 hit flags."""
-    h1, h5 = [], []
+    """Per-example top-1 / top-5 hit flags plus the targets they scored."""
+    h1, h5, tg = [], [], []
     for batch in loader:
         batch = {k: (v.to(device) if torch.is_tensor(v) else v)
                  for k, v in batch.items()}
@@ -95,7 +95,8 @@ def hits(model, loader, device):
         r = (cl > tl[:, None]).sum(1)
         h1.append(r < 1)
         h5.append(r < 5)
-    return torch.cat(h1), torch.cat(h5)
+        tg.append(tc)
+    return torch.cat(h1), torch.cat(h5), torch.cat(tg)
 
 
 def mcnemar(a, b):
@@ -152,8 +153,8 @@ def main():
     else:
         la = lb = loader_for(pa)
 
-    a1, a5 = hits(ma, la, device)
-    b1, b5 = hits(mb, lb, device)
+    a1, a5, targets = hits(ma, la, device)
+    b1, b5, _ = hits(mb, lb, device)
 
     # per-move phase index for each example (dataset order = row*20+move)
     move_idx = torch.arange(len(a1)) % N_MOVES
@@ -198,7 +199,6 @@ def main():
 
     # popularity baseline
     ranks, tops = build_popularity(rows, splits["train"], num_champs)
-    targets = torch.tensor([int(ds[i]["target_champ"]) for i in range(len(ds))])
     pr = torch.stack([ranks[int(m)][targets[i]]
                       for i, m in enumerate(move_idx)])
     print()
