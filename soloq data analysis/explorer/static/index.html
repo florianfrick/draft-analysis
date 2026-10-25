@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Stats Explorer — soloQ draft data</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>Stats Explorer</h1>
+  <span id="corpus" class="muted">loading…</span>
+  <div class="spacer"></div>
+  <label class="ctl">patch <select id="patch"></select></label>
+  <label class="ctl">sides
+    <select id="sides">
+      <option value="any">either side</option>
+      <option value="fixed">as drawn</option>
+    </select>
+  </label>
+</header>
+
+<nav id="tabs">
+  <button data-tab="draft" class="active">Draft builder</button>
+  <button data-tab="matchup">Matchup</button>
+  <span class="spacer"></span>
+  <span class="muted tiny" id="latency"></span>
+</nav>
+
+<main>
+  <section id="view-draft">
+    <div class="builder">
+      <div class="team" id="team-blue">
+        <h2><span class="dot blue"></span>Blue</h2>
+        <div class="slots" id="slots-blue"></div>
+      </div>
+      <div class="team" id="team-red">
+        <h2><span class="dot red"></span>Red</h2>
+        <div class="slots" id="slots-red"></div>
+      </div>
+      <div class="builder-foot">
+        <button id="btn-clear">Clear</button>
+        <button id="btn-random" title="load a real game from the corpus">Random real game</button>
+      </div>
+    </div>
+
+    <div class="results" id="draft-results">
+      <div class="empty">Pick a champion to start. The count below is how many
+        real games contain everything you have selected.</div>
+    </div>
+  </section>
+
+  <section id="view-matchup" class="hidden">
+    <div class="matchup-bar">
+      <button class="pick" id="m-x">champion</button>
+      <div class="mode-toggle" id="m-mode">
+        <button data-mode="with" class="active">with</button>
+        <button data-mode="vs">against</button>
+      </div>
+      <button class="pick" id="m-y">champion</button>
+      <label class="ctl">role <select id="m-role">
+        <option value="">any</option>
+      </select></label>
+    </div>
+    <div class="results" id="matchup-results">
+      <div class="empty">Pick two champions to see the measured pair.</div>
+    </div>
+  </section>
+</main>
+
+<div id="picker" class="hidden">
+  <div class="picker-box">
+    <div class="picker-head">
+      <h3 id="picker-title">Pick a champion</h3>
+      <input id="picker-search" type="text" placeholder="search…" autofocus>
+      <button id="picker-close">✕</button>
+    </div>
+    <div id="picker-grid" class="picker-grid"></div>
+  </div>
+</div>
+
+<footer class="muted tiny">
+  Every number is measured from the soloQ corpus; <b>n</b> is the number of games
+  behind it. Capability 1 (two champions) is read from a precomputed table;
+  capability 2 (a whole draft) is a live scan. When n is small the panel says so
+  and offers a first-order estimate built from the pair data instead.
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>

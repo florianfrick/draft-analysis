@@ -9,20 +9,22 @@ Design notes
 ------------
 - ONE request per match (GET /lol/match/v5/matches/{id}); no timeline calls,
   so the total API cost equals the size of the stage-2 worklist.
-- Compact records: each match is reduced AT DOWNLOAD TIME to a ~3 kB record
+- Compact records: each match is reduced AT DOWNLOAD TIME to a compact record
   of just the fields the auxiliary heads need (the raw DTO is ~50 kB and is
   NOT kept). Per match: match_id, queue_id, gameVersion, start, duration,
   surrender flags, per-team win / kills / deaths / gold / objectives
   (kills + first flags, incl. team dragon kills) / bans, and per participant:
   champion, position, K/D/A, gold, damage, CS, vision, first blood/tower
-  flags, plus a `challenges` whitelist (goldPerMinute, damagePerMinute,
-  visionScorePerMinute, killParticipation, teamDamagePercentage,
-  maxCsAdvantageOnLaneOpponent, maxLevelLeadLaneOpponent,
-  earliestTowerTakedown/Dragon/Herald/Baron). NOT collected (would need the
-  timeline endpoint, i.e. a second request per match): gold/XP leads at fixed
-  minutes - maxCsAdvantageOnLaneOpponent / maxLevelLeadLaneOpponent are the
-  peak lane-lead stand-ins. Quality gates (queueId, patch, remakes) remain
-  derivable from these fields offline.
+  flags, plus a `challenges` whitelist (rate-normalized performance, peak
+  lane-lead + laning-phase gold/XP lead, objective tempo and participation,
+  combat/CC profile). NOT collected: gold/XP/CS at fixed minutes
+  (goldAt10, xpAt15, ...). Those fields do NOT exist on this endpoint - they
+  are derived from the TIMELINE endpoint, i.e. a second request per match,
+  and that is how Oracle's Elixir builds its goldat10/goldat15/xpat10
+  columns. The single-endpoint substitutes kept here are
+  laningPhaseGoldExpAdvantage / earlyLaningPhaseGoldExpAdvantage and the
+  peak maxCsAdvantageOnLaneOpponent / maxLevelLeadLaneOpponent.
+  Quality gates (queueId, patch, remakes) remain derivable offline.
 - Resumability: on startup every shard is scanned for the match ids already
   stored and only new ids are queued, so re-running after stage 2 has grown
   (e.g. the americas crawl still in flight) automatically picks up the new
@@ -51,10 +53,16 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from riot_api import HostRateLimiters, fetch_json, new_session
+from riot_api import HostRateLimiters, RiotAuthError, fetch_json, new_session
 
 SHARD_SIZE = 5000  # matches per shard file
-WORKERS_PER_REGION = 16  # concurrent in-flight requests per routing region
+WORKERS_PER_REGION = 12  # concurrent in-flight requests per routing region
+# The binding limit is the 2-minute window (100 req / 2 min per key per
+# region), i.e. ~0.83 req/s per key, NOT the 20 req/s burst. So only a
+# handful of requests need to be in flight to saturate a region; a high
+# worker count just overshoots the window and earns 429s (measured: 32
+# workers overshot a 95/100 window). 12 gives ~6 in flight per key with two
+# keys, which keeps the pipe full without burning Retry-After sleeps.
 PROGRESS_INTERVAL = 30  # seconds between progress lines per region
 ROUTINGS = ("americas", "asia", "europe", "sea")
 
@@ -191,6 +199,9 @@ class RegionState:
         self.failed = 0
         self.gone = 0
         self.lock = asyncio.Lock()
+        # Set when the API key is rejected (expired/invalid); every worker
+        # stops instead of draining the worklist into failed.txt.
+        self.abort = asyncio.Event()
 
     async def record(self, match_id, match):
         async with self.lock:
@@ -222,8 +233,18 @@ class RegionState:
                 self.failed += 1
 
 
-# `challenges` whitelist kept per participant - the full dict has ~300 keys
+# `challenges` whitelist kept per participant - the full dict has ~130 keys
 # of mostly noise; missing keys are simply omitted from the record.
+#
+# VERIFIED against live Match-V5 responses (8 matches, 4 regions, patches
+# 16.19/16.20): every key below is present in real responses. Notably the
+# `goldAtN` / `xpAtN` / `csAtN` / `goldLeadNAt` / `killsAtN` family does NOT
+# exist on this endpoint - those minute snapshots come from the TIMELINE
+# endpoint (a second request per match), which is what Oracle's Elixir uses
+# to build its goldat10/goldat15/xpat10 columns. The closest single-endpoint
+# substitutes are laningPhaseGoldExpAdvantage / earlyLaningPhaseGoldExpAdvantage
+# (gold+XP lead over the direct lane opponent during laning), plus the peak
+# maxCsAdvantage / maxLevelLead stand-ins.
 CHALLENGE_KEYS = (
     # rate-normalized performance
     "goldPerMinute",
@@ -231,15 +252,37 @@ CHALLENGE_KEYS = (
     "visionScorePerMinute",
     "killParticipation",
     "teamDamagePercentage",
-    # lane dominance proxies (peak lead over the direct lane opponent; the
-    # single-endpoint stand-in for a gold/XP lead at a fixed minute)
+    "damageTakenOnTeamPercentage",
+    # lane dominance: peak lead + laning-phase gold/XP lead over lane opponent
     "maxCsAdvantageOnLaneOpponent",
     "maxLevelLeadLaneOpponent",
-    # tempo proxies (when the objective fell)
-    "earliestTowerTakedown",
-    "earliestDragon",
-    "earliestHerald",
+    "laningPhaseGoldExpAdvantage",
+    "earlyLaningPhaseGoldExpAdvantage",
+    "visionScoreAdvantageLaneOpponent",
+    "jungleCsBefore10Minutes",
+    "laneMinionsFirst10Minutes",
+    "takedownsFirstXMinutes",
+    # tempo proxies (when the objective fell / how it was taken)
     "earliestBaron",
+    "firstTurretKilledTime",
+    "turretPlatesTaken",
+    "turretTakedowns",
+    # objective participation (per player, complements team-level obj counts)
+    "dragonTakedowns",
+    "baronTakedowns",
+    "riftHeraldTakedowns",
+    "teamBaronKills",
+    "teamRiftHeraldKills",
+    "teamElderDragonKills",
+    # combat profile: isolation kills, deaths, CC applied, healing/shielding
+    "soloKills",
+    "deathsByEnemyChamps",
+    "enemyChampionImmobilizations",
+    "effectiveHealAndShielding",
+    "killsNearEnemyTurret",
+    "maxKillDeficit",
+    "bountyGold",
+    "outnumberedKills",
 )
 
 
@@ -324,7 +367,7 @@ async def fetch_match(session, limiters, routing, match_id):
 
 
 async def worker(session, limiters, state, queue):
-    while True:
+    while not state.abort.is_set():
         try:
             match_id = queue.get_nowait()
         except asyncio.QueueEmpty:
@@ -334,6 +377,17 @@ async def worker(session, limiters, state, queue):
             payload = extract(match)
             payload["match_id"] = match_id
             await state.record(match_id, payload)
+        except RiotAuthError as exc:
+            # Key expired/invalid: stop the whole region rather than writing
+            # every remaining match id into failed.txt.
+            if not state.abort.is_set():
+                print(
+                    "  %-9s ABORTING: %s\n"
+                    "  %-9s refresh RIOT_API_KEY and re-run; progress so far "
+                    "is kept." % (state.routing, exc, state.routing)
+                )
+                state.abort.set()
+            return
         except Exception as exc:  # noqa: BLE001 - keep crawling, retry next run
             permanent = "HTTP 404" in str(exc)
             await state.record_failure(match_id, str(exc), permanent)
@@ -430,6 +484,13 @@ async def main(routing_filter, workers, limit):
         return
 
     limiters = HostRateLimiters()
+    print(
+        "Using %d API key(s)%s. Dev-key ceiling is 100 req/2min per region "
+        "(~0.83 matches/s), so the crawl is rate-bound, not worker-bound."
+        % (limiters.key_count,
+           " (shared budget: extra keys give no throughput)"
+           if limiters.key_count > 1 else "")
+    )
     states = {}
     async with new_session() as session:
         region_tasks = {

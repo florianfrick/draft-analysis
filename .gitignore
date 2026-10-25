@@ -46,11 +46,20 @@ data/pro play/*.pt
 data/patch notes/patch_*.md
 data/patch notes/index.json
 data/patch notes/clean/
+data/patch notes/raw/
 *.jsonl
 *.jsonl.gz
 matchids/
 puuids/
 matchdata/
+
+# ============================================================
+# Analytical store (derived, ~800MB, rebuilt by `store.py build`)
+# ============================================================
+soloq data analysis/store/
+**/*.duckdb
+**/*.duckdb.wal
+**/*.parquet
 
 # ============================================================
 # Logs / run outputs / caches (machine-specific, noisy)
@@ -74,4 +83,5 @@ evaluate_report.json
 Thumbs.db
 .vscode/
 .idea/
+.workbuddy-ai/
 *.corrupt
