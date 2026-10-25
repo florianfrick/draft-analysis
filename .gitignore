@@ -40,6 +40,11 @@ data/solo queue/puuids/
 data/solo queue/process matchdata/drafts_*.pt
 data/pro play/*.csv
 data/pro play/*.pt
+# Patch notes corpus is scraped; `collect.py` rebuilds it on demand.
+# Keep the collector, its tests and the README; ignore the 3.6MB of
+# derived markdown and the generated index.
+data/patch notes/patch_*.md
+data/patch notes/index.json
 *.jsonl
 *.jsonl.gz
 matchids/
