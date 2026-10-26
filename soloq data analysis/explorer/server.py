@@ -1,24 +1,28 @@
 """Empirical stats explorer over the soloQ store (DuckDB, read-only).
 
-Answers the two questions the draft UI needs, from measured data only:
+Answers the questions the draft UI needs, from measured data only:
 
   matchup   avg stats of champ X when paired with / against champ Y   (2-way)
-  draft     given the picks built so far, how many games match, and what
-            did each champion actually do in those games              (N-way)
+  draft     given the picks built so far, how many games match, how the two
+            teams fared, and what each champion actually did             (N-way)
+  suggest   which champions would best complete / counter a team        (2-way)
+  champion  one champion's full stat line inside the matching games     (N-way)
 
 Design notes
 ------------
-- The 2-way question is served from the precomputed `cube2` table (~1 ms).
+- 2-way questions are served from the precomputed `cube2` table (~1 ms).
 - The N-way question is a LIVE SCAN of `drafts` (415k rows, one per game),
   not a precomputed cube. A 5-champion cube would be 240M cells / 1.1 GB and
   is 99.99% empty (the densest 5-champ cell in 415k games has 21 games), so
   there is nothing to precompute.
 - Containment is tested with bitmasks, not `list_has_all`: three integer ANDs
   per row instead of rebuilding a list per row. Measured 40 ms -> 3 ms.
-- Everything the UI shows is returned with its `n`. When n is small the
-  response also carries `estimate`, a first-order additive prediction built
-  from the (dense) 2-way tables, so a 0-game draft still says something
-  honest instead of nothing.
+- `sides=any` (the default and the only mode the UI uses) treats a draft as an
+  unordered pair of teams: the selection may have been blue or red in the real
+  game. Counts are therefore orientation-free, and any per-side statistic is
+  computed relative to the *selection*, not to the literal blue side.
+- Every metric lives in METRICS. Adding a stat means adding one entry there
+  plus the column in store.py - the cube, the API and the UI all read it.
 
 Run:  python explorer/server.py --port 8778
 Open: http://127.0.0.1:8778
@@ -43,8 +47,66 @@ ICON_CACHE = PROJ / "frontend" / ".cache" / "champion_16.20.1.json"
 CDN = "https://ddragon.leagueoflegends.com/cdn/"
 VER = "16.20.1"
 
-STATS = ["win", "kills", "deaths", "assists", "gold", "dmg", "cs", "vision"]
 ROLES = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"]
+
+# ---------------------------------------------------------------- metric registry
+# better: +1 = higher is better, -1 = lower is better. The UI colours deltas and
+# sorts by it, so a metric only has to be declared once.
+# hidden: kept for the per-champion detail panel but not offered in the metric
+#         selector, because the cube's cell `n` would overstate its coverage.
+# partial: only recorded by the newer collector schema (~1% of rows so far), so
+#         its averages cover a subset and the panel must show the real count.
+#
+# Checked against the corpus on 2026-10-25: the core eight and the four rate
+# stats are present on ~98-100% of rows. The objectives block is present on
+# ~44.7k rows (the live crawl) and absent from the archive snapshot. Note that
+# `laningPhaseGoldExpAdvantage` is a 0/1 flag, not a lead magnitude, so it is
+# deliberately not exposed as a metric - the real gold-lead-at-10 stat will slot
+# into the "lane" group once the collector carries it.
+METRICS = [
+    # core box score (every row has these, archive included)
+    {"key": "win", "label": "win rate", "better": 1, "fmt": "pct", "group": "core"},
+    {"key": "gold", "label": "gold", "better": 1, "fmt": "int", "group": "core"},
+    {"key": "dmg", "label": "damage", "better": 1, "fmt": "int", "group": "core"},
+    {"key": "cs", "label": "CS", "better": 1, "fmt": "num1", "group": "core"},
+    {"key": "vision", "label": "vision", "better": 1, "fmt": "num1", "group": "core"},
+    {"key": "kills", "label": "kills", "better": 1, "fmt": "num2", "group": "core"},
+    {"key": "deaths", "label": "deaths", "better": -1, "fmt": "num2", "group": "core"},
+    {"key": "assists", "label": "assists", "better": 1, "fmt": "num2", "group": "core"},
+    # rates and lane leads (present on ~98% of rows)
+    {"key": "goldPerMinute", "label": "gold / min", "better": 1, "fmt": "num1", "group": "lane"},
+    {"key": "damagePerMinute", "label": "damage / min", "better": 1, "fmt": "num1", "group": "lane"},
+    {"key": "maxCsAdvantageOnLaneOpponent", "label": "max CS lead vs laner",
+     "better": 1, "fmt": "num1", "group": "lane"},
+    {"key": "maxLevelLeadLaneOpponent", "label": "max level lead vs laner",
+     "better": 1, "fmt": "num1", "group": "lane"},
+    {"key": "killParticipation", "label": "kill participation",
+     "better": 1, "fmt": "pct", "group": "team"},
+    {"key": "teamDamagePercentage", "label": "share of team damage",
+     "better": 1, "fmt": "pct", "group": "team"},
+    # newer-schema only - detail panel, not the selector
+    {"key": "laneMinionsFirst10Minutes", "label": "lane minions @10",
+     "better": 1, "fmt": "num1", "group": "lane", "hidden": 1, "partial": 1},
+    {"key": "visionScoreAdvantageLaneOpponent", "label": "vision lead vs laner",
+     "better": 1, "fmt": "num1", "group": "lane", "hidden": 1, "partial": 1},
+    {"key": "turretPlatesTaken", "label": "plates taken",
+     "better": 1, "fmt": "num1", "group": "team", "hidden": 1, "partial": 1},
+    {"key": "soloKills", "label": "solo kills",
+     "better": 1, "fmt": "num1", "group": "team", "hidden": 1, "partial": 1},
+    {"key": "dragonTakedowns", "label": "dragons",
+     "better": 1, "fmt": "num1", "group": "team", "hidden": 1, "partial": 1},
+    {"key": "baronTakedowns", "label": "barons",
+     "better": 1, "fmt": "num1", "group": "team", "hidden": 1, "partial": 1},
+]
+METRIC_BY_KEY = {m["key"]: m for m in METRICS}
+PARTIAL = [m["key"] for m in METRICS if m.get("partial")]
+# every registered metric, in registry order. The cubes carry all of them (plus
+# the unregistered challenge keys), so the pair matrix, the per-champion table
+# and the matchup card all iterate this: adding an entry to METRICS is enough
+# to make a stat selectable everywhere.
+STATS = [m["key"] for m in METRICS]
+# every column we can aggregate for a single champion's detail view
+DETAIL = STATS
 
 _lock = threading.Lock()
 APP = {}
@@ -104,8 +166,9 @@ def _contains(side, riots):
 def draft_filter(blue, red, patch=None, sides="any"):
     """WHERE clause over `drafts` for 'blue contains X and red contains Y'.
 
-    sides='any' accepts either orientation (a draft is a set of two teams, so
-    blue-in-my-UI may have been red in the actual game).
+    sides='any' treats the draft as an unordered pair of teams: the selection
+    may have been blue or red in the real game. That also applies when only one
+    team is filled in - a lone champion set matches whichever side held it.
     """
     parts, params = [], []
     if blue or red:
@@ -116,6 +179,12 @@ def draft_filter(blue, red, patch=None, sides="any"):
             r2, p4 = _contains("red", blue)
             parts.append("((%s AND %s) OR (%s AND %s))" % (b1, r1, b2, r2))
             params += p1 + p2 + p3 + p4
+        elif sides == "any":
+            only = blue or red
+            b1, p1 = _contains("blue", only)
+            r1, p2 = _contains("red", only)
+            parts.append("(%s OR %s)" % (b1, r1))
+            params += p1 + p2
         else:
             if blue:
                 s, p = _contains("blue", blue)
@@ -136,6 +205,17 @@ def count_drafts(con, blue, red, patch, sides):
     return con.execute("SELECT count(*) FROM drafts WHERE " + where, params).fetchone()[0]
 
 
+def _num(v):
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 # ------------------------------------------------------------------- endpoints
 
 def api_meta(con):
@@ -149,6 +229,7 @@ def api_meta(con):
         "patches": patches,
         "queues": queues,
         "roles": ROLES,
+        "metrics": METRICS,
         "champions": APP["champions"],
         "thresholds": {"strong": 200, "ok": 50, "weak": 20},
     }
@@ -159,26 +240,40 @@ def _statrow(row, cols):
             for c, v in zip(cols, row) if v is not None}
 
 
+def cube_cell(con, table, keys, cols, patch=None):
+    """One cube cell, or the patch-weighted union of them when no patch is pinned.
+
+    The cubes are keyed by patch so that two metas are never averaged together
+    by accident. When the user does ask for "all patches" the cells still have
+    to be combined, and the only correct way to do that with per-cell averages
+    is to weight by the cell's own n - a plain mean would let a 3-game cell
+    outvote a 900-game one. `nullif(...)` keeps a stat whose cells are all NULL
+    reporting NULL instead of 0.
+    """
+    where = " AND ".join("%s = ?" % k for k in keys)
+    params = list(keys.values())
+    if patch:
+        row = con.execute(
+            "SELECT n, %s FROM %s WHERE %s AND patch = ?"
+            % (", ".join(cols), table, where), params + [patch]).fetchone()
+    else:
+        aggs = ["sum(n) AS n"] + [
+            "sum(%s * n) / nullif(sum(CASE WHEN %s IS NOT NULL THEN n END), 0) AS %s"
+            % (c, c, c) for c in cols]
+        row = con.execute(
+            "SELECT %s FROM %s WHERE %s" % (", ".join(aggs), table, where),
+            params).fetchone()
+    return row
+
+
 def api_matchup(con, champ, partner, mode, patch, role):
     """2-way: served from the precomputed cube2 (no scan)."""
     kind = "vs" if mode == "vs" else "with"
-    sql = ("SELECT n, win, kills, deaths, assists, gold, dmg, cs, vision "
-           "FROM cube2 WHERE champ = ? AND partner = ? AND kind = ?")
-    params = [champ, partner, kind]
-    if patch:
-        sql += " AND patch = ?"
-        params.append(patch)
     cols = ["n"] + STATS
-    row = con.execute(sql, params).fetchone()
+    row = cube_cell(con, "cube2", {"champ": champ, "partner": partner,
+                                   "kind": kind}, STATS, patch)
     out = {"mode": kind, "n": 0, "stats": None}
-
-    base_sql = "SELECT n, win, kills, deaths, assists, gold, dmg, cs, vision " \
-               "FROM champ_base WHERE champ = ?"
-    bp = [champ]
-    if patch:
-        base_sql += " AND patch = ?"
-        bp.append(patch)
-    brow = con.execute(base_sql, bp).fetchone()
+    brow = cube_cell(con, "champ_base", {"champ": champ}, STATS, patch)
 
     if row:
         out["n"] = int(row[0])
@@ -190,13 +285,8 @@ def api_matchup(con, champ, partner, mode, patch, role):
                             for k in STATS if out["stats"].get(k) is not None
                             and out["baseline"].get(k) is not None}
     if role:
-        rsql = ("SELECT n, win, gold, dmg FROM champ_pos_base "
-                "WHERE champ = ? AND pos = ?")
-        rp = [champ, role]
-        if patch:
-            rsql += " AND patch = ?"
-            rp.append(patch)
-        rrow = con.execute(rsql, rp).fetchone()
+        rrow = cube_cell(con, "champ_pos_base", {"champ": champ, "pos": role},
+                         ["win", "gold"], patch)
         if rrow:
             out["role"] = {"pos": role, "n": int(rrow[0]),
                            "win": float(rrow[1]) if rrow[1] is not None else None,
@@ -205,7 +295,7 @@ def api_matchup(con, champ, partner, mode, patch, role):
 
 
 def presence_histogram(con, selected, patch):
-    """One scan -> {(presence_code, games)} for the selected champions.
+    """One scan -> [(presence_code, games)] for the selected champions.
 
     Bit 2j of the code = "champion j is on the blue side of this game",
     bit 2j+1 = "on the red side". Every question the UI asks (the exact
@@ -240,25 +330,76 @@ def presence_histogram(con, selected, patch):
     return [(int(c), int(n)) for c, n in rows]
 
 
+def _holds(code, blue_pos, red_pos):
+    return (all((code >> (2 * j)) & 1 for j in blue_pos) and
+            all((code >> (2 * j + 1)) & 1 for j in red_pos))
+
+
 def hist_count(hist, blue_pos, red_pos, sides):
-    """Games whose blue side holds every blue_pos champion and red every red_pos."""
+    """Games whose blue side holds every blue_pos champion and red every red_pos.
+
+    With sides='any' the same set is also accepted on the opposite side, which
+    is what makes a half-built draft count every game that contained those
+    champions rather than only the ones drawn the way the UI shows them.
+    """
     total = 0
     for code, n in hist:
-        ok = all((code >> (2 * j)) & 1 for j in blue_pos) and \
-             all((code >> (2 * j + 1)) & 1 for j in red_pos)
-        if not ok and sides == "any" and blue_pos and red_pos:
-            ok = all((code >> (2 * j)) & 1 for j in red_pos) and \
-                 all((code >> (2 * j + 1)) & 1 for j in blue_pos)
+        ok = _holds(code, blue_pos, red_pos)
+        if not ok and sides == "any":
+            ok = _holds(code, red_pos, blue_pos)
         if ok:
             total += n
     return total
+
+
+def team_block(con, blue, red, patch):
+    """Win rate *between the two selections*, orientation-corrected.
+
+    With sides=any, the blue selection was on the red side in roughly half the
+    matching games, so 'blue won' is not the same as 'our team won'. The
+    subject is the blue selection (or red if blue is empty) and its win is
+    read from whichever side it actually held.
+    """
+    subject = blue or red
+    if not subject:
+        return None
+    other = red if blue else []
+    s_sql, s_p = _contains("blue", subject)
+    if other:
+        o_sql, o_p = _contains("red", other)
+        drawn, dp = "(%s AND %s)" % (s_sql, o_sql), s_p + o_p
+    else:
+        drawn, dp = s_sql, s_p
+    any_where, any_p = draft_filter(blue, red, patch, "any")
+    sql = """
+      SELECT count(blue_win) n, count(*) games,
+             sum(CASE WHEN drawn THEN blue_win ELSE 1 - blue_win END) sel_wins,
+             sum(CASE WHEN drawn THEN blue_gold - red_gold
+                      ELSE red_gold - blue_gold END) gold_diff,
+             sum(CASE WHEN drawn THEN blue_kills - red_kills
+                      ELSE red_kills - blue_kills END) kill_diff
+      FROM (SELECT blue_win, blue_gold, red_gold, blue_kills, red_kills,
+                   %s AS drawn
+            FROM drafts WHERE %s) t
+    """ % (drawn, any_where)
+    n, games, wins, gd, kd = con.execute(sql, dp + any_p).fetchone()
+    n = int(n or 0)
+    wins = int(wins or 0)
+    return {
+        "subject": "blue" if blue else "red",
+        "n": n, "games": int(games or 0), "sel_wins": wins,
+        "sel_win_rate": (wins / n) if n else None,
+        "gold_diff": (float(gd) / n) if n and gd is not None else None,
+        "kill_diff": (float(kd) / n) if n and kd is not None else None,
+    }
 
 
 def api_draft(con, blue, red, patch, sides):
     """N-way: live scan of `drafts` (bitmask containment)."""
     selected = [("blue", r) for r in blue] + [("red", r) for r in red]
     names = APP["names"]
-    out = {"blue": blue, "red": red, "selected": len(selected), "sides": sides}
+    out = {"blue": blue, "red": red, "selected": len(selected), "sides": sides,
+           "pairs": [], "estimate": [], "baseline": {}, "champ_stats": []}
 
     if not selected:
         out["n"] = int(con.execute(
@@ -266,19 +407,9 @@ def api_draft(con, blue, red, patch, sides):
             ("patch = ?" if patch else "TRUE"),
             [patch] if patch else []).fetchone()[0])
         out["ladder"], out["drop_one"] = [], []
-        out["champ_stats"] = []
-        # with nothing selected, hand back a few random real drafts to load
-        rows = con.execute(
-            "SELECT match_id, blue_champs, red_champs, blue_win, duration "
-            "FROM drafts" + (" WHERE patch = ?" if patch else "") +
-            " USING SAMPLE 12 ROWS (reservoir, 42)",
-            [patch] if patch else []).fetchall()
-        out["games"] = [{"match_id": g[0],
-                         "blue": [names.get(int(c), str(c)) for c in g[1]],
-                         "red": [names.get(int(c), str(c)) for c in g[2]],
-                         "blue_win": int(g[3]) if g[3] is not None else None,
-                         "duration": int(g[4]) if g[4] is not None else None}
-                        for g in rows]
+        out["champ_stats"], out["pairs"] = [], []
+        out["team"] = None
+        out["games"] = _sample_games(con, names, patch)
         return out
 
     hist = presence_histogram(con, selected, patch)
@@ -309,54 +440,63 @@ def api_draft(con, blue, red, patch, sides):
             "n_without": hist_count(hist, bi, ri, sides),
         })
 
-    # --- what the selected champions actually did in the matching games
-    if selected:
-        where, params = draft_filter(blue, red, patch, sides)
-        riots = [r for _, r in selected]
-        ph = ",".join("?" * len(riots))
-        rows = con.execute(f"""
-          SELECT w.champ, count(*) n, avg(w.win) win, avg(w.kills) kills,
-                 avg(w.deaths) deaths, avg(w.assists) assists, avg(w.gold) gold,
-                 avg(w.dmg) dmg, avg(w.cs) cs, avg(w.vision) vision
-          FROM wide w
-          WHERE w.champ IN ({ph})
-            AND w.match_id IN (SELECT match_id FROM drafts WHERE {where})
-          GROUP BY 1
-        """, riots + params).fetchall()
-        out["champ_stats"] = [
-            dict(riot=int(r[0]), name=names.get(int(r[0]), str(r[0])),
-                 **{c: (float(v) if isinstance(v, float) else int(v))
-                    for c, v in zip(["n"] + STATS, r[1:])})
-            for r in rows]
+    out["team"] = team_block(con, blue, red, patch)
+    # each side on its own, so the side views can say "these five champions
+    # together" without borrowing the (much smaller) whole-draft sample
+    out["side_stats"] = {
+        "blue": team_block(con, blue, [], patch) if blue else None,
+        "red": team_block(con, [], red, patch) if red else None,
+    }
 
-    # --- pairwise deltas among the selection (the dense, measurable part)
+    # --- what the selected champions actually did in the matching games
+    where, params = draft_filter(blue, red, patch, sides)
+    riots = [r for _, r in selected]
+    ph = ",".join("?" * len(riots))
+    saggs = ", ".join("avg(w.%s) AS %s" % (k, k) for k in STATS)
+    rows = con.execute(f"""
+      SELECT w.champ, count(*) n, {saggs}
+      FROM wide w
+      WHERE w.champ IN ({ph})
+        AND w.match_id IN (SELECT match_id FROM drafts WHERE {where})
+      GROUP BY 1
+    """, riots + params).fetchall()
+    out["champ_stats"] = [
+        dict(riot=int(r[0]), name=names.get(int(r[0]), str(r[0])),
+             n=int(r[1]), **{c: _num(v) for c, v in zip(STATS, r[2:])})
+        for r in rows]
+
+    # --- pairwise values among the selection (the dense, measurable part)
     if len(selected) >= 2:
-        riots = [r for _, r in selected]
         ph = ",".join("?" * len(riots))
-        psql = (f"SELECT champ, partner, kind, n, win FROM cube2 "
+        mcols = ", ".join(STATS)
+        psql = (f"SELECT champ, partner, kind, n, {mcols} FROM cube2 "
                 f"WHERE champ IN ({ph}) AND partner IN ({ph})")
         pp = riots + riots
         if patch:
             psql += " AND patch = ?"
             pp.append(patch)
-        base = {}
-        bsql = f"SELECT champ, n, win FROM champ_base WHERE champ IN ({ph})"
+        bsql = f"SELECT champ, n, {mcols} FROM champ_base WHERE champ IN ({ph})"
         bp = riots
         if patch:
             bsql += " AND patch = ?"
             bp.append(patch)
-        for c, bn, bw in con.execute(bsql, bp).fetchall():
-            base[int(c)] = (int(bn), float(bw) if bw is not None else None)
+        base = {}
+        for row in con.execute(bsql, bp).fetchall():
+            base[int(row[0])] = dict(n=int(row[1]),
+                                     **{k: _num(v) for k, v in zip(STATS, row[2:])})
         pairs = []
-        for c, p, k, pn, pw in con.execute(psql, pp).fetchall():
-            c, p = int(c), int(p)
-            b = base.get(c)
-            if not b or b[1] is None or pw is None:
+        for row in con.execute(psql, pp).fetchall():
+            c, p = int(row[0]), int(row[1])
+            bm = base.get(c)
+            if not bm:
                 continue
-            pairs.append({"champ": c, "partner": p, "kind": k, "n": int(pn),
-                          "win": float(pw), "delta": float(pw) - b[1]})
+            vals = {k: _num(v) for k, v in zip(STATS, row[4:])}
+            deltas = {k: vals[k] - bm[k] for k in STATS
+                      if vals.get(k) is not None and bm.get(k) is not None}
+            pairs.append({"champ": c, "partner": p, "kind": row[2],
+                          "n": int(row[3]), "vals": vals, "deltas": deltas})
         out["pairs"] = pairs
-        out["baseline"] = {str(k): {"n": v[0], "win": v[1]} for k, v in base.items()}
+        out["baseline"] = {str(k): v for k, v in base.items()}
 
         # --- partner-effect summary: mean of the measured pair deviations.
         # Summing them would double-count, because the nine pairs share games
@@ -365,45 +505,184 @@ def api_draft(con, blue, red, patch, sides):
         # shift and does not compound.
         by = {(x["champ"], x["partner"], x["kind"]): x for x in pairs}
         est = []
-        for side, r in selected:
-            b = base.get(r)
-            if not b or b[1] is None:
+        for side, rr in selected:
+            bm = base.get(rr)
+            if not bm or bm.get("win") is None:
                 continue
-            allies = [x for s, x in selected if s == side and x != r]
+            allies = [x for s, x in selected if s == side and x != rr]
             enemies = [x for s, x in selected if s != side]
             terms = []
             for a in allies:
-                e = by.get((r, a, "with"))
-                if e:
-                    terms.append(e["delta"])
+                e = by.get((rr, a, "with"))
+                if e and "win" in e["deltas"]:
+                    terms.append(e["deltas"]["win"])
             for e_ in enemies:
-                e = by.get((r, e_, "vs"))
-                if e:
-                    terms.append(e["delta"])
+                e = by.get((rr, e_, "vs"))
+                if e and "win" in e["deltas"]:
+                    terms.append(e["deltas"]["win"])
             if not terms:
                 continue
             mean_d = sum(terms) / len(terms)
-            est.append({"riot": r, "name": names.get(r, str(r)),
-                        "base": b[1], "n_base": b[0],
+            est.append({"riot": rr, "name": names.get(rr, str(rr)),
+                        "base": bm["win"], "n_base": bm["n"],
                         "mean_delta": mean_d,
-                        "estimate": max(0.0, min(1.0, b[1] + mean_d)),
+                        "estimate": max(0.0, min(1.0, bm["win"] + mean_d)),
                         "terms": len(terms),
                         "best": max(terms), "worst": min(terms)})
         out["estimate"] = est
 
     # --- the matching games themselves (a few, for eyeballing)
     where, params = draft_filter(blue, red, patch, sides)
+    subject = set(blue or red)
     games = con.execute(f"""
       SELECT match_id, blue_champs, red_champs, blue_win, duration
       FROM drafts WHERE {where} LIMIT 12
     """, params).fetchall()
-    out["games"] = [{"match_id": g[0],
-                     "blue": [names.get(int(c), str(c)) for c in g[1]],
-                     "red": [names.get(int(c), str(c)) for c in g[2]],
-                     "blue_win": int(g[3]) if g[3] is not None else None,
-                     "duration": int(g[4]) if g[4] is not None else None}
-                    for g in games]
+    out["games"] = [{
+        "match_id": g[0],
+        "blue": [names.get(int(c), str(c)) for c in g[1]],
+        "red": [names.get(int(c), str(c)) for c in g[2]],
+        "blue_win": int(g[3]) if g[3] is not None else None,
+        "duration": int(g[4]) if g[4] is not None else None,
+        "mine": "blue" if subject and subject <= set(int(c) for c in g[1])
+                else ("red" if subject else None),
+    } for g in games]
     return out
+
+
+def _sample_games(con, names, patch, limit=12):
+    rows = con.execute(
+        "SELECT match_id, blue_champs, red_champs, blue_win, duration "
+        "FROM drafts" + (" WHERE patch = ?" if patch else "") +
+        " USING SAMPLE %d ROWS (reservoir, 42)" % limit,
+        [patch] if patch else []).fetchall()
+    return [{"match_id": g[0],
+             "blue": [names.get(int(c), str(c)) for c in g[1]],
+             "red": [names.get(int(c), str(c)) for c in g[2]],
+             "blue_win": int(g[3]) if g[3] is not None else None,
+             "duration": int(g[4]) if g[4] is not None else None,
+             "mine": None} for g in rows]
+
+
+def api_suggest(con, side, blue, red, metric, patch):
+    """Best allies to add to a team, and best enemies to play into it.
+
+    Both questions are answered from the 2-way cube, which is dense (median
+    370-495 games per cell), rather than from the matching games, which are not.
+
+      synergy  candidate C with each of my champions     cube2(champ=C, partner=X, 'with')
+      counter  candidate C against each of my champions  cube2(champ=C, partner=X, 'vs')
+
+    Both read the candidate out of `champ`, because that is the row the metrics
+    belong to. `with` is symmetric in the data, so (C, X, 'with') and
+    (X, C, 'with') describe the same games from the two sides - taking the
+    first keeps every number attached to the champion being ranked.
+
+    Each candidate comes back with two numbers:
+      general   the candidate's own average over the patch (large n)
+      specific  the same metric aggregated over *my* champions only (small n)
+    and their difference, which is what separates "strong champion" from
+    "strong against this draft".
+    """
+    mine = blue if side == "blue" else red
+    other = red if side == "blue" else blue
+    m = metric if metric in METRIC_BY_KEY and not METRIC_BY_KEY[metric].get("hidden") else "win"
+    out = {"side": side, "metric": m, "mine": mine, "theirs": other,
+           "synergy": [], "counter": []}
+    if not mine:
+        return out
+
+    names = APP["names"]
+    excl = set(mine) | set(other)
+    ph = ",".join("?" * len(mine))
+    pat = " AND patch = ?" if patch else ""
+    pp = [patch] if patch else []
+
+    # candidate -> (games, weighted mean of the metric, how many of my champs)
+    # A cube row always describes `champ`; `partner` is only the other side of
+    # the relation. So both questions have to keep the CANDIDATE in `champ`:
+    # reading synergy off (champ=my champ, partner=candidate) would average my
+    # own champions' stats and call it the candidate's. `with` is symmetric, so
+    # (candidate, my champ, 'with') carries the same n and win.
+    wavg = ("sum(%s * n) / nullif(sum(CASE WHEN %s IS NOT NULL THEN n END), 0)"
+            % (m, m))
+
+    def candidates(kind):
+        return con.execute(f"""
+          SELECT champ, sum(n), {wavg}, count(DISTINCT partner)
+          FROM cube2 WHERE kind = '{kind}' AND partner IN ({ph}){pat}
+          GROUP BY 1""", mine + pp).fetchall()
+
+    syn = candidates("with")
+    ctr = candidates("vs")
+
+    if patch:
+        base_sql = "SELECT champ, n, %s FROM champ_base WHERE patch = ?" % m
+        grow = con.execute(base_sql, pp).fetchall()
+    else:
+        grow = con.execute(
+            "SELECT champ, sum(n), %s FROM champ_base GROUP BY 1" % wavg).fetchall()
+    general = {int(c): (int(n), _num(v)) for c, n, v in grow}
+
+    def build(rows):
+        items = []
+        for cand, n, val, terms in rows:
+            cand = int(cand)
+            if cand in excl:
+                continue
+            g = general.get(cand)
+            if not g or g[1] is None or val is None:
+                continue
+            items.append({
+                "riot": cand, "name": names.get(cand, str(cand)),
+                "specific": _num(val), "n_specific": int(n), "terms": int(terms),
+                "general": g[1], "n_general": g[0],
+                "delta": _num(val) - g[1],
+            })
+        # direction-aware: for 'deaths', lower is better
+        sign = METRIC_BY_KEY[m]["better"]
+        items.sort(key=lambda x: (sign * x["specific"], -x["n_specific"]),
+                   reverse=True)
+        return items
+
+    out["synergy"] = build(syn)
+    out["counter"] = build(ctr)
+    out["partial"] = bool(METRIC_BY_KEY[m].get("partial"))
+    return out
+
+
+def api_champion(con, champ, blue, red, patch):
+    """One champion's full stat line, inside the matching games and overall.
+
+    Partial stats are averaged over the rows that carry them, so the response
+    also carries `n_<key>` counts - otherwise a 40-game average of a stat that
+    only exists in the newer schema would be indistinguishable from a 12k one.
+    """
+    where, params = draft_filter(blue, red, patch, "any")
+    aggs = ", ".join("avg(%s) AS %s" % (c, c) for c in DETAIL)
+    counts = ", ".join("count(%s) AS n_%s" % (c, c) for c in PARTIAL)
+    row = con.execute(f"""
+      SELECT count(*) n, {aggs}, {counts}
+      FROM wide
+      WHERE champ = ? AND match_id IN (SELECT match_id FROM drafts WHERE {where})
+    """, [champ] + params).fetchone()
+    cols = ["n"] + DETAIL + ["n_" + c for c in PARTIAL]
+    in_games = _statrow(row, cols)
+    in_games["n"] = int(row[0])
+
+    bsql = f"SELECT count(*) n, {aggs} FROM wide WHERE champ = ?"
+    bp = [champ]
+    if patch:
+        bsql += " AND patch = ?"
+        bp.append(patch)
+    brow = con.execute(bsql, bp).fetchone()
+    baseline = _statrow(brow, ["n"] + DETAIL)
+    baseline["n"] = int(brow[0])
+
+    delta = {k: in_games[k] - baseline[k] for k in DETAIL
+             if in_games.get(k) is not None and baseline.get(k) is not None}
+    return {"riot": champ, "name": APP["names"].get(champ, str(champ)),
+            "in_games": in_games, "baseline": baseline, "delta": delta}
 
 
 # ----------------------------------------------------------------------- http
@@ -436,6 +715,7 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         qs = parse_qs(urlparse(self.path).query)
         con = APP["con"]
+        patch = qs.get("patch", [""])[0] or None
         try:
             if path == "/api/meta":
                 with _lock:
@@ -449,17 +729,33 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 with _lock:
                     out = api_matchup(con, champ[0], partner[0],
-                                      qs.get("mode", ["with"])[0],
-                                      qs.get("patch", [""])[0] or None,
+                                      qs.get("mode", ["with"])[0], patch,
                                       qs.get("role", [""])[0] or None)
                 self._send(200, out)
                 return
             if path == "/api/draft":
                 with _lock:
                     out = api_draft(con, self._ids(qs, "blue"),
-                                    self._ids(qs, "red"),
-                                    qs.get("patch", [""])[0] or None,
+                                    self._ids(qs, "red"), patch,
                                     qs.get("sides", ["any"])[0])
+                self._send(200, out)
+                return
+            if path == "/api/suggest":
+                with _lock:
+                    out = api_suggest(con, qs.get("side", ["blue"])[0],
+                                      self._ids(qs, "blue"),
+                                      self._ids(qs, "red"),
+                                      qs.get("metric", ["win"])[0], patch)
+                self._send(200, out)
+                return
+            if path == "/api/champion":
+                champ = self._ids(qs, "champ")
+                if not champ:
+                    self._send(400, {"error": "champ is required"})
+                    return
+                with _lock:
+                    out = api_champion(con, champ[0], self._ids(qs, "blue"),
+                                       self._ids(qs, "red"), patch)
                 self._send(200, out)
                 return
         except Exception as exc:  # noqa: BLE001 - surface the real message

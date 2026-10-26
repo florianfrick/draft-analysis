@@ -11,12 +11,6 @@
   <span id="corpus" class="muted">loading…</span>
   <div class="spacer"></div>
   <label class="ctl">patch <select id="patch"></select></label>
-  <label class="ctl">sides
-    <select id="sides">
-      <option value="any">either side</option>
-      <option value="fixed">as drawn</option>
-    </select>
-  </label>
 </header>
 
 <nav id="tabs">
@@ -43,9 +37,23 @@
       </div>
     </div>
 
-    <div class="results" id="draft-results">
-      <div class="empty">Pick a champion to start. The count below is how many
-        real games contain everything you have selected.</div>
+    <div class="draft-main">
+      <div class="toolbar hidden" id="toolbar">
+        <div class="viewtabs" id="viewtabs">
+          <button data-view="overall" class="active">Overall</button>
+          <button data-view="blue">Blue</button>
+          <button data-view="red">Red</button>
+        </div>
+        <span class="spacer"></span>
+        <label class="ctl"><span id="metric-label">metric</span> <select id="metric"></select></label>
+        <button class="toggle" id="btn-estimate" title="first-order estimate from the pair data">estimate</button>
+        <button class="toggle" id="btn-games" title="the actual games behind the count">games</button>
+      </div>
+
+      <div class="results" id="draft-results">
+        <div class="empty">Pick a champion to start. The count below is how many
+          real games contain everything you have selected.</div>
+      </div>
     </div>
   </section>
 
@@ -80,9 +88,10 @@
 
 <footer class="muted tiny">
   Every number is measured from the soloQ corpus; <b>n</b> is the number of games
-  behind it. Capability 1 (two champions) is read from a precomputed table;
-  capability 2 (a whole draft) is a live scan. When n is small the panel says so
-  and offers a first-order estimate built from the pair data instead.
+  behind it. Two champions come from a precomputed table; a whole draft is a live
+  scan. Games are matched <b>either way round</b> — the team you built may have
+  been blue or red in the real game, and per-side numbers are oriented to your
+  selection, not to the literal side.
 </footer>
 
 <script src="/app.js"></script>

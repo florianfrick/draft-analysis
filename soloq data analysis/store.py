@@ -258,7 +258,12 @@ def build_drafts(con):
         GROUP BY p.match_id, p.side
       )
       SELECT b.match_id, b.patch, b.queue_id, b.duration,
-             b.champs blue_champs, r.champs red_champs, b.win blue_win,
+             b.champs blue_champs, r.champs red_champs,
+             -- only claim a result when the two sides disagree. 81 games in the
+             -- corpus record win=false for BOTH teams (mean duration 17 min, so
+             -- not remakes); a win rate built from one side's flag would invent
+             -- a result for them.
+             CASE WHEN b.win IS DISTINCT FROM r.win THEN b.win END blue_win,
              b.m0 blue_m0, b.m1 blue_m1, b.m2 blue_m2,
              r.m0 red_m0, r.m1 red_m1, r.m2 red_m2,
              b.kills blue_kills, r.kills red_kills,
@@ -267,6 +272,8 @@ def build_drafts(con):
       WHERE b.side = 'blue' AND r.side = 'red'
     """)
     print("drafts:", con.execute("SELECT count(*) FROM drafts").fetchone()[0])
+    print("  no result recorded:", con.execute(
+        "SELECT count(*) FROM drafts WHERE blue_win IS NULL").fetchone()[0])
 
 
 def connect(outdir, read_only=True):
