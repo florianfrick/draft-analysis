@@ -342,3 +342,104 @@ def test_prefix_move_targets_real():
             1 for m in row["moves"][:mi] if m[0] == P.MOVE_BAN)
 
 
+
+
+# ---------------------------------------------------------------------------
+# Broadcast ground truth.
+#
+# The interleaving tests above prove the move order is *self-consistent* with
+# first_pick. This one proves it matches what viewers actually saw, which is a
+# different claim: a self-consistent but wrong convention (e.g. always letting
+# blue open the ban phase) would pass those tests and fail this one.
+#
+# LOLTMNT02_482606 - T1 vs Dplus Kia, 2026-10-24. Red (T1) held first pick, so
+# Red opens each phase. Entries are (champion, kind, team) with kind
+# 0=ban / 1=pick and team 0=blue / 1=red, i.e. the move tuple reordered so the
+# champion reads first. Transcribed from the official draft order.
+# ---------------------------------------------------------------------------
+BROADCAST_482606 = [
+    ("Syndra", 0, 1), ("Nocturne", 0, 0), ("Cassiopeia", 0, 1), ("Locke", 0, 0),
+    ("Qiyana", 0, 1), ("Rumble", 0, 0),
+    ("Vi", 1, 1), ("Kalista", 1, 0), ("Renata Glasc", 1, 0),
+    ("Neeko", 1, 1), ("Caitlyn", 1, 1), ("Jarvan IV", 1, 0),
+    ("Akali", 0, 0), ("Orianna", 0, 1), ("Taliyah", 0, 0), ("Olaf", 0, 1),
+    ("Viktor", 1, 0), ("Anivia", 1, 1), ("Jayce", 1, 1), ("K'Sante", 1, 0),
+]
+
+
+def _load_one_game(gameid, year=2026):
+    """Raw 12-row block for one gameid, without parsing the other ~117k."""
+    path = HERE / ("%d_LoL_esports_match_data_from_OraclesElixir.csv" % year)
+    if not path.exists():
+        pytest.skip("%d OE csv not present" % year)
+    blue = red = None
+    players = []
+    for row in P.iter_csv_rows(str(path)):
+        if row.get("gameid") != gameid:
+            continue
+        pid = row.get("participantid")
+        if pid == "100":
+            blue = row
+        elif pid == "200":
+            red = row
+        else:
+            players.append(row)
+    if blue is None or red is None:
+        pytest.skip("game %s not in the %d csv" % (gameid, year))
+    return {"gameid": gameid, "blue": blue, "red": red, "players": players}
+
+
+def test_move_order_matches_broadcast():
+    """Reconstructed order must equal the official draft order, move for move."""
+    name_to_idx, _ = P.load_name_to_idx()
+    draft, reason = P.game_to_draft(_load_one_game("LOLTMNT02_482606"), name_to_idx)
+    assert draft is not None, reason
+    idx_to_name = {v: k for k, v in name_to_idx.items()}
+    got = [(idx_to_name[m[2]], m[0], m[1]) for m in draft["moves"]]
+    assert got == BROADCAST_482606
+    # red held first pick in this game, and red opens both ban phases
+    assert draft["first_pick"] == 1
+    assert [m[1] for m in draft["moves"][:6]] == [1, 0] * 3
+    assert [m[1] for m in draft["moves"][12:16]] == [0, 1] * 2
+
+
+def test_move_order_first_pick_side_is_not_hardcoded():
+    """A blue-first game and a red-first game must not produce the same sides.
+
+    Guards the specific failure where the interleaver ignores first_pick and
+    always starts with blue: both games would then open with team 0.
+    """
+    name_to_idx, _ = P.load_name_to_idx()
+    games = P.group_games([str(HERE / "2026_LoL_esports_match_data_from_OraclesElixir.csv")])
+    seen = {}
+    for g in games:
+        d, _ = P.game_to_draft(g, name_to_idx)
+        if d is None:
+            continue
+        fp = d["first_pick"]
+        if fp not in seen:
+            seen[fp] = d
+        if len(seen) == 2:
+            break
+    if len(seen) < 2:
+        pytest.skip("corpus slice has only one first_pick orientation")
+    for fp, d in seen.items():
+        assert d["moves"][0][1] == fp, "ban phase 1 must open with the first-pick team"
+        assert d["moves"][0][0] == P.MOVE_BAN
+
+
+def test_cache_signature_detects_growth(tmp_path):
+    """A CSV that gains rows must invalidate the cache.
+
+    The current-season export is appended to during the split, so validating
+    on filename alone silently serves a truncated corpus: the cache held games
+    to 2026-10-12 while the 2026 CSV held games to 2026-10-24.
+    """
+    p = tmp_path / "x.csv"
+    p.write_text("a,b\n1,2\n")
+    before = P._csv_signature([p])
+    p.write_text("a,b\n1,2\n3,4\n")
+    after = P._csv_signature([p])
+    assert before != after
+    assert before[0][0] == "x.csv"
+    assert before[0][1] > 0 and before[0][2] > 0

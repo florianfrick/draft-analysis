@@ -417,7 +417,7 @@ class ProMaskedDraftDataset(Dataset):
         elif self.mask_prob > 0:
             cids, rids, rm, is_m, clab, rlab = _SQ.apply_masking(
                 champ, role, self.num_champs, self.mask_prob,
-                self.role_keep_prob, self._generator(idx, 1))
+                self.role_keep_prob, generator=self._generator(idx, 1))
             pad = torch.zeros(N_SLOTS, dtype=torch.bool)
         else:
             cids, rids = champ.clone(), role.clone()

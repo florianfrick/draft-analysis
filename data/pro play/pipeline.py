@@ -450,23 +450,45 @@ def scan_and_index(csv_paths, name_to_idx, limit=0):
             "csvs": [Path(p).name for p in csv_paths]}
 
 
+def _csv_signature(csv_paths):
+    """Cheap content signature for cache validation.
+
+    Names alone are not sufficient: the current-season export is appended to
+    during the split, so a cache built mid-season keeps serving a truncated
+    corpus. That is exactly what happened -- the cache held games to
+    2026-10-12 while the 2026 CSV had games to 2026-10-24, and nothing
+    noticed because the filename never changed.
+    """
+    sig = []
+    for p in csv_paths:
+        st = p.stat()
+        sig.append([p.name, int(st.st_size), int(st.st_mtime)])
+    return sig
+
+
 def build_rows(csv_glob=CSV_GLOB, rescan=False, limit=0):
     """Cached scan: loads pro_drafts.pt unless rescan/limit/missing."""
     csv_paths = list_csvs(csv_glob)
     names = [p.name for p in csv_paths]
+    sig = _csv_signature(csv_paths)
     if not rescan and not limit and CACHE_PATH.exists():
         payload = torch.load(str(CACHE_PATH), map_location="cpu",
                              weights_only=False)  # our own cache
         if payload.get("version") == CACHE_VERSION and \
-                payload.get("csvs") == names:
+                payload.get("csv_sig") == sig:
             print("loaded cache: %d drafts (%s)" %
                   (len(payload["rows"]), CACHE_PATH.name))
             return payload["rows"], payload["stats"]
+        if payload.get("csv_sig") is None:
+            print("cache predates content signatures; rescanning")
+        else:
+            print("csvs changed since the cache was built; rescanning")
     print("scanning %d CSVs: %s ..." % (len(csv_paths),
                                         ", ".join(names)))
     payload = scan_and_index(csv_paths, load_name_to_idx()[0], limit=limit)
     if not limit:
-        torch.save(dict(payload, version=CACHE_VERSION), str(CACHE_PATH))
+        torch.save(dict(payload, version=CACHE_VERSION, csv_sig=sig),
+                   str(CACHE_PATH))
         print("cached %d drafts -> %s" % (len(payload["rows"]),
                                           CACHE_PATH.name))
     print("kept %d / %d games (skipped %d: %s)" % (
