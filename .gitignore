@@ -85,3 +85,4 @@ Thumbs.db
 .idea/
 .workbuddy-ai/
 *.corrupt
+soloq data analysis/additive_model.json
