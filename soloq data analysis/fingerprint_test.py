@@ -60,6 +60,10 @@ def build_fp(df):
         cell = df.groupby(["ci", "oi"], observed=True)[met].agg(["mean", "count"])
         base = df.groupby("ci", observed=True)[met].mean()
         eff = (cell["mean"] - cell.index.get_level_values("ci").map(base))
+        # NaN cell means (no non-null observation) must not reach the
+        # standardisation: a single NaN makes v.mean() NaN and zeroes the
+        # whole dimension, which is how 4 of 6 dims silently died.
+        eff = eff.fillna(0.0)
         ci = cell.index.get_level_values("ci").to_numpy()
         oi = cell.index.get_level_values("oi").to_numpy()
         fp[ci, oi, k] = eff.to_numpy()
@@ -68,9 +72,12 @@ def build_fp(df):
     # standardise each dimension so theta is comparable across metrics
     for k in range(len(FP_METRICS)):
         v = fp[:, :, k]
-        fp[:, :, k] = (v - v.mean()) / (v.std() + 1e-9)
+        fp[:, :, k] = (v - np.nanmean(v)) / (np.nanstd(v) + 1e-9)
     # cells the metric never observed stay at the mean rather than NaN
     fp = np.nan_to_num(fp, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+    dead = [FP_METRICS[k] for k in range(len(FP_METRICS))
+            if float(fp[..., k].std()) < 1e-6]
+    assert not dead, "fingerprint dims collapsed to a constant: %s" % dead
     return fp, n
 
 

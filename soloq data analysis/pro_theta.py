@@ -65,6 +65,11 @@ def build_fp(shrink=150.0):
         base = df.groupby("ci", observed=True)[met].mean()
         cell = df.groupby(["ci", "oi"], observed=True)[met].agg(["mean", "count"])
         eff = cell["mean"] - cell.index.get_level_values("ci").map(base)
+        # A cell with no non-null observation has a NaN mean. Left alone it
+        # propagates: one NaN makes v.mean() NaN, which zeroes the entire
+        # dimension after standardisation. That silently killed 4 of the 6
+        # dims (162 all-null champion/role cells for the lane metrics).
+        eff = eff.fillna(0.0)
         ci = cell.index.get_level_values("ci").to_numpy()
         oi = cell.index.get_level_values("oi").to_numpy()
         pooled[ci, oi, k] = eff.to_numpy()
@@ -72,6 +77,7 @@ def build_fp(shrink=150.0):
             pn[ci, oi] = cell["count"].to_numpy()
         cellr = df.groupby(["ri", "ci", "oi"], observed=True)[met].agg(["mean", "count"])
         effr = cellr["mean"] - cellr.index.get_level_values("ci").map(base)
+        effr = effr.fillna(0.0)
         ri = cellr.index.get_level_values("ri").to_numpy()
         per_role[ri, cellr.index.get_level_values("ci").to_numpy(),
                  cellr.index.get_level_values("oi").to_numpy(), k] = effr.to_numpy()
@@ -84,8 +90,10 @@ def build_fp(shrink=150.0):
     fp = w * per_role + (1 - w) * pooled[None, :, :, :]
     for k in range(K):
         v = fp[:, :, :, k]
-        fp[:, :, :, k] = (v - v.mean()) / (v.std() + 1e-9)
-    fp = np.nan_to_num(fp, nan=0.0).astype(np.float32)
+        fp[:, :, :, k] = (v - np.nanmean(v)) / (np.nanstd(v) + 1e-9)
+    fp = np.nan_to_num(fp, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+    dead = [FP_METRICS[k] for k in range(K) if float(fp[..., k].std()) < 1e-6]
+    assert not dead, "fingerprint dims collapsed to a constant: %s" % dead
     print("fp: %d role-cells with n>=100, %d pooled cells"
           % (int((rn >= 100).sum()), int((pn >= 100).sum())))
     return fp
