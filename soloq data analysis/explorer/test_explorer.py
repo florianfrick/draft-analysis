@@ -196,81 +196,105 @@ fails += not check("games have 5+5 champs", all(len(g["blue"]) == 5 and len(g["r
 fails += not check("empty has no team block", d["team"] is None)
 fails += not check("empty has no pairs", d["pairs"] == [])
 
-print("\nsuggest (synergies / counters)")
-s, ms = get("/api/suggest?side=blue&blue=8,53,64&red=113,126,145&metric=win&patch=16.20")
-fails += not check("synergy list", len(s["synergy"]) > 100, f"{len(s['synergy'])}")
-fails += not check("counter list", len(s["counter"]) > 100, f"{len(s['counter'])}")
-fails += not check("fast", ms < 60, f"{ms:.0f} ms")
-excl = set(s["mine"]) | set(s["theirs"])
+print("\nsuggest (synergies / counters, both sides in one call)")
+# one call returns blue and red together: the card shows them side by side, and a
+# single response is what stops the two columns disagreeing about the draft.
+s, ms = get("/api/suggest?blue=8,53,64&red=113,126,145&metric=win&patch=16.20")
+fails += not check("both sides returned", set(s["sides"]) == {"blue", "red"})
+sb, sr = s["sides"]["blue"], s["sides"]["red"]
+fails += not check("each side knows its own champions",
+                   sb["mine"] == [8, 53, 64] and sr["mine"] == [113, 126, 145])
+fails += not check("top five per list",
+                   all(len(x) == 5 for x in (sb["synergy"], sb["counter"],
+                                             sr["synergy"], sr["counter"])),
+                   " ".join(str(len(x)) for x in (sb["synergy"], sb["counter"],
+                                                  sr["synergy"], sr["counter"])))
+fails += not check("fast", ms < 400, f"{ms:.0f} ms")
+excl = set(sb["mine"]) | set(sr["mine"])
 fails += not check("selected champions excluded",
-                   not any(x["riot"] in excl for x in s["synergy"] + s["counter"]))
+                   not any(x["riot"] in excl
+                           for x in sb["synergy"] + sb["counter"]
+                           + sr["synergy"] + sr["counter"]))
 fails += not check("ranked by the metric",
-                   all(s["synergy"][i]["specific"] >= s["synergy"][i + 1]["specific"]
-                       for i in range(len(s["synergy"]) - 1)))
+                   all(sb["synergy"][i]["specific"] >= sb["synergy"][i + 1]["specific"]
+                       for i in range(4)))
 fails += not check("delta == specific - general",
                    all(abs(x["delta"] - (x["specific"] - x["general"])) < 1e-9
-                       for x in s["synergy"]))
-fails += not check("terms <= my champions", all(x["terms"] <= len(s["mine"]) for x in s["synergy"]))
-fails += not check("n >= terms", all(x["n_specific"] >= x["terms"] for x in s["synergy"]))
+                       for x in sb["synergy"] + sb["counter"]))
+fails += not check("every row carries a game count",
+                   all(x["n"] > 0 for x in sb["synergy"] + sb["counter"]))
 
-sg, _ = get("/api/suggest?side=blue&blue=8,53,64&red=113,126,145"
+sg, _ = get("/api/suggest?blue=8,53,64&red=113,126,145"
             "&metric=goldPerMinute&patch=16.20")
 fails += not check("metric switch changes the ranking",
-                   sg["synergy"][0]["riot"] != s["synergy"][0]["riot"],
-                   f"{sg['synergy'][0]['name']} vs {s['synergy'][0]['name']}")
+                   sg["sides"]["blue"]["synergy"][0]["riot"]
+                   != sb["synergy"][0]["riot"],
+                   f"{sg['sides']['blue']['synergy'][0]['name']} vs {sb['synergy'][0]['name']}")
 fails += not check("rate metric has a different unit",
-                   sg["synergy"][0]["specific"] > 100, f"{sg['synergy'][0]['specific']:.0f}")
+                   sg["sides"]["blue"]["synergy"][0]["specific"] > 100,
+                   f"{sg['sides']['blue']['synergy'][0]['specific']:.0f}")
 
-# Every number in a suggest row must describe the CANDIDATE. With one champion
-# on my side each row is a single cube cell, so it has to equal that cell
-# exactly - the check that catches reading the row off my own champion instead.
-one, _ = get("/api/suggest?side=blue&blue=8&metric=goldPerMinute&patch=16.20")
-top = one["synergy"][0]
+# Every number in a row must describe the CANDIDATE. With one champion on my side
+# each row is a single cube cell, so the exact game-counted value has to equal that
+# cell - the check that catches reading the row off my own champion instead.
+one, _ = get("/api/suggest?blue=8&metric=goldPerMinute&patch=16.20")
+top = one["sides"]["blue"]["synergy"][0]
 cell, _ = get("/api/matchup?champ=%d&partner=8&mode=with&patch=16.20" % top["riot"])
 fails += not check("synergy measures the candidate, not my champion",
                    abs(top["specific"] - cell["stats"]["goldPerMinute"]) < 1e-6,
                    f"{top['name']} {top['specific']:.1f} vs cell "
                    f"{cell['stats']['goldPerMinute']:.1f}")
-topc = one["counter"][0]
+topc = one["sides"]["blue"]["counter"][0]
 ccell, _ = get("/api/matchup?champ=%d&partner=8&mode=vs&patch=16.20" % topc["riot"])
 fails += not check("counter measures the candidate",
                    abs(topc["specific"] - ccell["stats"]["goldPerMinute"]) < 1e-6,
                    f"{topc['name']} {topc['specific']:.1f} vs cell "
                    f"{ccell['stats']['goldPerMinute']:.1f}")
-fails += not check("terms counts my champions, not rows",
-                   top["terms"] == 1 and top["n_specific"] == cell["n"],
-                   f"terms={top['terms']} n={top['n_specific']} cell n={cell['n']}")
+# n is a count of games, not the sum of cube cells: with one champion on my side
+# the two must agree exactly, and with three they may not (a game with two of my
+# champions is one game, not two).
+fails += not check("n is a game count, not a cell sum",
+                   top["n"] == cell["n"], f"{top['n']} vs cell {cell['n']}")
+three, _ = get("/api/suggest?blue=8,53,64&metric=goldPerMinute&patch=16.20")
+t3 = three["sides"]["blue"]["synergy"][0]
+cells = [get("/api/matchup?champ=%d&partner=%d&mode=with&patch=16.20"
+             % (t3["riot"], x))[0]["n"] for x in (8, 53, 64)]
+fails += not check("union of games <= sum of the cells",
+                   t3["n"] <= sum(cells), f"{t3['n']} <= {sum(cells)} (cells)")
 
-sh, _ = get("/api/suggest?side=blue&blue=8,53,64&metric=not_a_stat&patch=16.20")
+sh, _ = get("/api/suggest?blue=8,53,64&metric=not_a_stat&patch=16.20")
 fails += not check("unknown metric falls back to win rate", sh["metric"] == "win", sh["metric"])
 # the 0/1 laning flag is a legitimate metric now, just labelled as a flag
-lf, _ = get("/api/suggest?side=blue&blue=8,53,64"
+lf, _ = get("/api/suggest?blue=8,53,64"
             "&metric=laningPhaseGoldExpAdvantage&patch=16.20")
 fails += not check("0/1 flag is rankable",
                    lf["metric"] == "laningPhaseGoldExpAdvantage"
-                   and 0 <= lf["synergy"][0]["specific"] <= 1,
-                   f"{lf['synergy'][0]['name']} {lf['synergy'][0]['specific']:.3f}")
+                   and 0 <= lf["sides"]["blue"]["synergy"][0]["specific"] <= 1,
+                   f"{lf['sides']['blue']['synergy'][0]['specific']:.3f}")
 
-# Across patches each (champ, partner) pair appears twice, so "how many of my
-# champions have a measured cell" must count distinct champions, not rows.
-sa, _ = get("/api/suggest?side=blue&blue=8,53,64&metric=win&patch=")
-fails += not check("all-patch terms still <= my champions",
-                   all(x["terms"] <= 3 for x in sa["synergy"] + sa["counter"]),
-                   f"max {max(x['terms'] for x in sa['synergy'])}")
-s20, _ = get("/api/suggest?side=blue&blue=8,53,64&metric=win&patch=16.20")
-s19, _ = get("/api/suggest?side=blue&blue=8,53,64&metric=win&patch=16.19")
-g20 = {x["riot"]: x["general"] for x in s20["synergy"]}
-g19 = {x["riot"]: x["general"] for x in s19["synergy"]}
-inside = [x for x in sa["synergy"] if x["riot"] in g19 and x["riot"] in g20]
-fails += not check("all-patch general sits between the patches",
-                   all(min(g19[x["riot"]], g20[x["riot"]]) - 1e-9 <= x["general"]
-                       <= max(g19[x["riot"]], g20[x["riot"]]) + 1e-9 for x in inside),
-                   f"{len(inside)} candidates compared")
+# Across patches each (champ, partner) pair appears twice; the exact count is
+# taken from `wide`, so it can never exceed the games the champion actually played.
+sa, _ = get("/api/suggest?blue=8,53,64&metric=win&patch=")
+fails += not check("all-patch counts stay sane",
+                   all(x["n"] <= x["n_general"] for x in sa["sides"]["blue"]["synergy"]),
+                   f"max {max(x['n'] for x in sa['sides']['blue']['synergy'])}")
+s20, _ = get("/api/suggest?blue=8,53,64&metric=win&patch=16.20")
+row = s20["sides"]["blue"]["synergy"][0]
+mt, _ = get("/api/matchup?champ=%d&partner=8&mode=with&patch=16.20" % row["riot"])
+fails += not check("general is the champion's own patch average",
+                   abs(row["general"] - mt["baseline"]["win"]) < 1e-6,
+                   f"{row['general']:.4f} vs {mt['baseline']['win']:.4f}")
+fails += not check("n_general is that champion's patch games",
+                   row["n_general"] == mt["baseline"]["n"],
+                   f"{row['n_general']} vs {mt['baseline']['n']}")
 
-sr, _ = get("/api/suggest?side=red&blue=8&red=113,126,145&metric=win&patch=16.20")
-fails += not check("red side works", sr["side"] == "red" and len(sr["synergy"]) > 100)
+# An empty side has nothing to synergise with, and its "answers" list belongs to
+# the other column - so both lists must come back empty rather than guessed at.
 fails += not check("empty side returns nothing",
-                   get("/api/suggest?side=red&blue=8&patch=16.20")[0]["synergy"] == [])
+                   get("/api/suggest?blue=8&patch=16.20")[0]["sides"]["red"]["synergy"] == [])
+fails += not check("one side alone still gets both lists",
+                   len(get("/api/suggest?red=113,126,145&patch=16.20")[0]
+                       ["sides"]["red"]["synergy"]) == 5)
 
 print("\nchampion detail")
 c, ms = get("/api/champion?champ=8&blue=8,53,64&patch=16.20")

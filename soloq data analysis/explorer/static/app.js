@@ -1,13 +1,13 @@
 const S = {
   meta: null, champs: [], byRiot: {}, metrics: [], byKey: {},
-  patch: "", tab: "draft", view: "overall", metric: "win", rank: "specific",
+  patch: "", tab: "draft", metric: "win",
   showEstimate: false, showGames: false,
   blue: [null, null, null, null, null],
   red: [null, null, null, null, null],
   m: { x: null, y: null, mode: "with", role: "" },
   pickTarget: null,
   draft: null, openChamp: null, stat: null,
-  req: 0, sugReq: 0, detail: {},
+  req: 0, sugReq: 0, detail: {}, sugCache: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -122,17 +122,12 @@ async function init() {
 
 /* A draft is shareable: #103,64,84/113,126
    A matchup is shareable: #m=103,64,vs
-   A view is shareable with ?v=blue */
+   Revealed cards: ?est=1&games=1 */
 function readHash() {
   const h = decodeURIComponent(location.hash.replace(/^#/, ""));
   const q = new URLSearchParams(location.search);
-  const v = q.get("v");
-  if (v === "blue" || v === "red" || v === "overall") S.view = v;
   if (q.get("est") === "1") { S.showEstimate = true; $("btn-estimate").classList.add("on"); }
   if (q.get("games") === "1") { S.showGames = true; $("btn-games").classList.add("on"); }
-  document.querySelectorAll("#viewtabs button").forEach((x) => {
-    x.classList.toggle("active", x.dataset.view === S.view);
-  });
   if (!h) return;
   if (h.startsWith("m=")) {
     const [a, b, mode] = h.slice(2).split(",");
@@ -186,16 +181,6 @@ function wire() {
     b.onclick = () => {
       showTab(b.dataset.tab);
       if (S.tab === "matchup") loadMatchup();
-    };
-  });
-
-  document.querySelectorAll("#viewtabs button").forEach((b) => {
-    b.onclick = () => {
-      S.view = b.dataset.view;
-      document.querySelectorAll("#viewtabs button").forEach((x) => {
-        x.classList.toggle("active", x.dataset.view === S.view);
-      });
-      if (S.draft) renderDraft(S.draft);
     };
   });
 
@@ -352,13 +337,7 @@ function renderDraftEmpty() {
 
 function renderDraft(d) {
   $("toolbar").classList.remove("hidden");
-  /* the two reveal buttons only control cards in the overall view */
-  const side = S.view !== "overall";
-  $("btn-estimate").classList.toggle("hidden", side);
-  $("btn-games").classList.toggle("hidden", side);
-  $("metric-label").textContent = side ? "rank by" : "metric";
-  if (side) renderSide(d, S.view);
-  else renderOverall(d);
+  renderOverall(d);
 }
 
 /* ------------------------------------------------------------------ overall */
@@ -371,6 +350,7 @@ function renderOverall(d) {
   if (d.team) host.appendChild(teamCard(d));
   if (d.champ_stats && d.champ_stats.length && d.n > 0) host.appendChild(champCard(d));
   if (d.pairs && d.pairs.length && d.selected > 1) host.appendChild(matrixCard(d));
+  if (d.selected) host.appendChild(suggestHost(d));
   if (d.drop_one && d.drop_one.length > 1 && d.n < t.ok) host.appendChild(dropCard(d));
   if (S.showEstimate && d.estimate && d.estimate.length) host.appendChild(estimateCard(d));
   if (S.showGames && d.games && d.games.length) host.appendChild(gamesCard(d));
@@ -603,9 +583,19 @@ function matrixCard(d) {
   const key = S.metric;
   const card = el("div", "card");
   const m = S.byKey[key];
-  card.appendChild(el("h3", null, `Pairwise ${m.label} — delta vs each champion's own average`));
+  card.appendChild(el("h3", null,
+    `Pairwise ${m.label} — row champion against column champion`));
+  card.appendChild(el("div", "hint tiny muted",
+    `Each <b>row</b> is the champion being measured; each <b>column</b> is who it
+     played <b>with</b> (same team) or <b>against</b> (other team). The two diagonal
+     blocks — blue×blue and red×red — are teammate pairs; the off-diagonal blocks are
+     opponents. Green means the row champion does better than its own average in this
+     patch, red worse; the number is that difference, not a win rate.`));
 
   const order = [...d.blue, ...d.red];
+  /* where the red block starts; -1 when only one side has champions, so no
+     divider is drawn for a "block" that is the whole table */
+  const nb = d.blue.length && d.red.length ? d.blue.length : -1;
   const sideOf = {};
   d.blue.forEach((r) => { sideOf[r] = "blue"; });
   d.red.forEach((r) => { sideOf[r] = "red"; });
@@ -622,18 +612,23 @@ function matrixCard(d) {
     }
   }));
 
-  let html = `<div class="matrix-wrap"><table class="matrix"><thead><tr><th></th>`;
-  order.forEach((r) => {
-    html += `<th title="${S.byRiot[r].name}">${img(S.byRiot[r])}</th>`;
+  let html = `<div class="matrix-wrap"><table class="matrix"><thead><tr>
+    <th class="corner"><span class="ax">row ↓</span><span class="ax">col →</span></th>`;
+  order.forEach((r, j) => {
+    html += `<th class="${j === nb ? "split" : ""}" title="${S.byRiot[r].name}">${img(S.byRiot[r])}</th>`;
   });
   html += "</tr></thead><tbody>";
-  order.forEach((row) => {
-    html += `<tr><th class="rowhead" title="${S.byRiot[row].name}">${img(S.byRiot[row])}</th>`;
-    order.forEach((col) => {
-      if (row === col) { html += `<td class="self">·</td>`; return; }
+  order.forEach((row, i) => {
+    html += `<tr><th class="rowhead ${i === nb ? "split" : ""}"
+      title="${S.byRiot[row].name}">${img(S.byRiot[row])}</th>`;
+    order.forEach((col, j) => {
+      if (row === col) { html += `<td class="self ${j === nb ? "split" : ""}">·</td>`; return; }
       const kind = sideOf[row] === sideOf[col] ? "with" : "vs";
       const p = lookup[`${row}:${col}:${kind}`];
-      if (!p || p.deltas[key] === undefined) { html += `<td>—</td>`; return; }
+      if (!p || p.deltas[key] === undefined) {
+        html += `<td class="${j === nb ? "split" : ""}">—</td>`;
+        return;
+      }
       const dv = p.deltas[key];
       const shown = m.fmt === "pct" ? dv * 100 : dv;
       const a = Math.min(0.62, 0.10 + 0.52 * (maxAbs ? Math.abs(shown) / maxAbs : 0));
@@ -642,15 +637,15 @@ function matrixCard(d) {
       let txt = m.fmt === "pct" ? shown.toFixed(1)
         : Math.abs(shown) >= 100 ? String(Math.round(shown)) : shown.toFixed(1);
       if (/^-0(\.0)?$/.test(txt)) txt = txt.slice(1);          /* no "-0.0" */
-      html += `<td style="background:${bg}"
-        title="${S.byRiot[row].name} ${kind} ${S.byRiot[col].name}: ${fmtMetric(key, p.vals[key])} · ${fmtDelta(key, dv)} · n=${p.n}">
+      html += `<td class="${j === nb ? "split" : ""}" style="background:${bg}"
+        title="${S.byRiot[row].name} ${kind === "with" ? "with" : "against"} ${S.byRiot[col].name}: ${fmtMetric(key, p.vals[key])} · ${fmtDelta(key, dv)} · n=${p.n}">
         ${shown > 0 ? "+" : ""}${txt}</td>`;
     });
     html += "</tr>";
   });
   html += `</tbody></table></div>
     <div class="legend">
-      <span><i style="background:rgba(79,184,106,.6)"></i>better than the champion's own average</span>
+      <span><i style="background:rgba(79,184,106,.6)"></i>better than the row champion's own average</span>
       <span><i style="background:rgba(217,92,72,.6)"></i>worse</span>
       <span>${m.fmt === "pct" ? "percentage points" : "units"} · hover a cell for the raw value and n
         ${m.partial ? `· recorded for ${(m.cov * 100).toFixed(0)}% of player-rows, so the cells cover fewer games` : ""}</span>
@@ -726,109 +721,142 @@ function gamesCard(d) {
   return card;
 }
 
-/* -------------------------------------------------------------- side views */
-async function renderSide(d, side) {
-  const host = $("draft-results");
-  const mine = S[side].filter(Boolean);
-  const theirs = S[side === "blue" ? "red" : "blue"].filter(Boolean);
-  if (!mine.length) {
-    host.innerHTML = `<div class="empty">Nothing on the ${side} side yet —
-      add a champion to see what fits and what beats it.</div>`;
-    return;
-  }
-  const myReq = ++S.sugReq;
-  host.innerHTML = `<div class="empty">loading…</div>`;
-  const qs = `side=${side}&blue=${d.blue.join(",")}&red=${d.red.join(",")}` +
-    `&metric=${S.metric}&patch=${encodeURIComponent(S.patch)}`;
-  const sug = await (await fetch("/api/suggest?" + qs)).json();
-  if (myReq !== S.sugReq || !S.draft) return;
-
-  host.innerHTML = "";
-  host.appendChild(sideHeader(d, side, mine, theirs));
-  const m = S.byKey[S.metric];
-  host.appendChild(suggestCard(
-    `Synergies — best allies to add to ${side}`,
-    `Candidates ranked by their ${m.label} together with your ${mine.length === 1 ? "champion" : `${mine.length} champions`}.`,
-    sug.synergy, mine.length));
-  host.appendChild(suggestCard(
-    `Counters — best answers to ${side}`,
-    `Candidates ranked by their ${m.label} when facing your ${mine.length === 1 ? "champion" : `${mine.length} champions`}.`,
-    sug.counter, mine.length));
-  host.appendChild(el("p", "tiny muted",
-    `“This draft” averages the candidate's 2-way cells against only your champions
-     (fewer games, but specific to this draft); “overall” is the candidate's whole
-     patch (many games, no idea what it is facing).
-     ${m.partial ? "This stat is only recorded for newer games, so its averages cover a subset." : ""}`));
-}
-
-function sideHeader(d, side, mine, theirs) {
+/* ------------------------------------------------- suggestions (both sides) */
+/* One card, two columns. Each column answers both questions for its side:
+   what to add to it, and what to add to the other side to beat it. The lists
+   are fetched together so the two columns can never disagree about the draft. */
+function suggestHost(d) {
   const card = el("div", "card");
-  const st = d.side_stats && d.side_stats[side];
-  card.innerHTML = `<div class="sidehead">
-    <div class="vname"><span class="dot ${side}"></span>${side} side</div>
-    <div class="sidechamps">${mine.map((c) => `<span class="mini">${img(c)}${c.name}</span>`).join("")}</div>
-    <div class="spacer"></div>
-    ${!st || st.sel_win_rate === null ? "" : `<div class="siderate">
-      <b>${pct(st.sel_win_rate)}</b>
-      <span class="tiny muted">over ${plural(st.n, "game")} with these
-        ${mine.length === 1 ? "champion" : `${mine.length} champions`} together</span>
-    </div>`}
-  </div>`;
-  return card;
-}
-
-function suggestCard(title, sub, items, denom) {
-  const card = el("div", "card");
-  const m = S.byKey[S.metric];
-  card.appendChild(el("h3", null, title));
-  card.appendChild(el("div", "hint tiny muted", sub));
-  if (!items || !items.length) {
-    card.appendChild(el("p", "muted", "No candidate with a measured cell."));
+  const key = `${d.blue.join(",")}/${d.red.join(",")}/${S.metric}/${S.patch}`;
+  if (S.sugCache && S.sugCache.key === key) {
+    paintSuggest(card, d, S.sugCache.val);      /* toggles must not re-fetch */
     return card;
   }
-  const rankKey = S.rank === "general" ? "general" : "specific";
-  const sorted = items.slice().sort((a, b) => {
-    const va = a[rankKey] * signOf(S.metric);
-    const vb = b[rankKey] * signOf(S.metric);
-    if (vb !== va) return vb - va;
-    return b.n_specific - a.n_specific;
-  }).slice(0, 12);
-
-  const maxAbs = Math.max(...items.map((x) => Math.abs(x.delta)), 1e-9);
-  let html = `<div class="rankbar tiny">
-    <span class="muted">rank by</span>
-    <button class="mini-btn ${S.rank === "specific" ? "on" : ""}" data-rank="specific">this draft</button>
-    <button class="mini-btn ${S.rank === "general" ? "on" : ""}" data-rank="general">overall</button>
-  </div>
-  <table class="stats"><thead><tr>
-    <th>champion</th>
-    <th>${m.label} vs this draft</th><th>n</th>
-    <th>${m.label} overall</th><th>n</th>
-    <th>delta</th><th></th>
-  </tr></thead><tbody>`;
-  sorted.forEach((x) => {
-    const c = S.byRiot[x.riot];
-    const w = Math.min(100, Math.abs(x.delta) / maxAbs * 100);
-    html += `<tr>
-      <td class="champ">${img(c)}${x.name}</td>
-      <td class="${rankKey === "specific" ? "selcol" : ""}">${fmtMetric(S.metric, x.specific)}</td>
-      <td class="flat" title="${x.terms} of your champions have a measured cell">${x.n_specific.toLocaleString()}
-        <span class="tiny"> ${x.terms}/${denom}</span></td>
-      <td class="${rankKey === "general" ? "selcol" : ""}">${fmtMetric(S.metric, x.general)}</td>
-      <td class="flat">${x.n_general.toLocaleString()}</td>
-      <td class="${dclsOf(S.metric, x.delta)}">${fmtDelta(S.metric, x.delta)}</td>
-      <td class="bar-cell"><div class="minibar"><i class="${dclsOf(S.metric, x.delta)}"
-        style="width:${w}%"></i></div></td>
-    </tr>`;
-  });
-  html += `</tbody></table>`;
-  card.innerHTML += html;
-  card.querySelectorAll(".mini-btn").forEach((b) => {
-    b.onclick = () => { S.rank = b.dataset.rank; renderDraft(S.draft); };
-  });
-  card.querySelectorAll("tr").forEach(() => {});
+  card.innerHTML = `<h3>What to add next</h3>
+    <div class="tiny muted">loading suggestions…</div>`;
+  fillSuggest(card, d, key);
   return card;
 }
+
+async function fillSuggest(card, d, key) {
+  const req = ++S.sugReq;
+  const qs = `blue=${d.blue.join(",")}&red=${d.red.join(",")}` +
+    `&metric=${S.metric}&patch=${encodeURIComponent(S.patch)}`;
+  let sug;
+  try {
+    sug = await (await fetch("/api/suggest?" + qs)).json();
+  } catch (e) {
+    card.innerHTML = `<h3>What to add next</h3>
+      <div class="muted">Suggestions could not be loaded.</div>`;
+    return;
+  }
+  if (req !== S.sugReq || S.draft !== d) return;   /* a newer draft already won */
+  S.sugCache = { key, val: sug };
+  paintSuggest(card, d, sug);
+}
+
+function paintSuggest(card, d, sug) {
+  card.innerHTML = suggestHtml(d, sug);
+  card.querySelectorAll("tr.addable").forEach((tr) => {
+    tr.onclick = () => {
+      if (tr.classList.contains("full")) return;
+      addChamp(tr.dataset.side, S.byRiot[Number(tr.dataset.riot)]);
+    };
+  });
+}
+
+/* clicking a suggestion fills the next empty slot on that side */
+function addChamp(side, c) {
+  if (!c) return;
+  if ([...S.blue, ...S.red].some((x) => x && x.riot === c.riot)) return;
+  const slot = S[side].findIndex((x) => !x);
+  if (slot < 0) return;                  /* team already has five */
+  S[side][slot] = c;
+  renderSlots();
+  loadDraft();
+}
+
+function suggestHtml(d, sug) {
+  const m = S.byKey[S.metric];
+  const col = (side) => {
+    const s = sug.sides[side];
+    const other = side === "blue" ? "red" : "blue";
+    const st = d.side_stats && d.side_stats[side];
+    const rate = st && st.sel_win_rate !== null && st.n
+      ? ` · ${pct(st.sel_win_rate)} over ${plural(st.n, "game")}` : "";
+    const head = `<div class="sughead">
+      <span class="dot ${side}"></span><b>${side}</b>
+      <span class="tiny muted">${s.mine.length
+        ? `${s.mine.length} of 5 picked${rate}` : "no champions yet"}</span>
+    </div>`;
+    if (!s.mine.length) {
+      return `<div class="sugcol ${side}">${head}
+        <p class="muted tiny">Add a champion to ${side} to see what fits alongside it.
+        Until then, the “answers to ${other}” list in the ${other} column is exactly
+        what to pick here.</p></div>`;
+    }
+    return `<div class="sugcol ${side}">${head}
+      <div class="sugblock">
+        <div class="sugtitle">best allies
+          <span class="tiny muted">— would join ${side}</span></div>
+        ${sugTable(s.synergy, side, S[side].every(Boolean))}
+      </div>
+      <div class="sugblock">
+        <div class="sugtitle">best answers to ${side}
+          <span class="tiny muted">— would join ${other}</span></div>
+        ${sugTable(s.counter, other, S[other].every(Boolean))}
+      </div>
+    </div>`;
+  };
+  return `<h3>What to add next</h3>
+    <div class="hint tiny muted">Top five per list, ranked by <b>${m.label}</b> in
+      games against the champions already on that side. Click a row to add it.</div>
+    <div class="sugcols">${col("blue")}${col("red")}</div>
+    <details class="methods">
+      <summary class="tiny">how these five are chosen</summary>
+      <div class="tiny muted">
+        <p>Every champion not already in the draft is scored against one side at a time,
+        using only its 2-way cells with those champions: <b>allies</b> are the games where
+        it shared a team with at least one of them, <b>answers</b> are the games where it
+        faced at least one. The value is that champion's own ${m.label} in those games, so
+        the list answers “how does it do next to these champions”, not “how good is it”.</p>
+        <p><b>games</b> is the number of distinct games behind the value: a game where the
+        candidate played alongside two of yours counts once. <b>vs own avg</b> is the gap
+        to that champion's average across the whole patch — a big positive gap on a small
+        game count is the interesting case, and also the one most likely to be noise.</p>
+        <p>${m.partial
+          ? `This stat is recorded for ${(m.cov * 100).toFixed(0)}% of player-rows, so games without it are skipped and the count is lower than the games played.`
+          : "Every matching game carries this stat."}</p>
+      </div>
+    </details>`;
+}
+
+function sugTable(items, addSide, full) {
+  if (!items || !items.length) {
+    return `<p class="muted tiny">No champion has a measured game here.</p>`;
+  }
+  const maxAbs = Math.max(...items.map((x) => Math.abs(x.delta)), 1e-9);
+  let html = `<table class="stats sug"><thead><tr>
+    <th>champion</th><th>${S.byKey[S.metric].label}</th>
+    <th>games</th><th>vs own avg</th>
+  </tr></thead><tbody>`;
+  items.forEach((x) => {
+    const c = S.byRiot[x.riot];
+    const dcls = dclsOf(S.metric, x.delta);
+    const w = Math.min(100, Math.abs(x.delta) / maxAbs * 100);
+    html += `<tr class="addable ${full ? "full" : ""}" data-riot="${x.riot}"
+        data-side="${addSide}"
+        title="${full ? `${addSide} is full` : `add ${x.name} to ${addSide}`}">
+      <td class="champ">${img(c)}<span>${x.name}</span><i class="addmark">+</i></td>
+      <td>${fmtMetric(S.metric, x.specific)}</td>
+      <td class="flat">${x.n.toLocaleString()}</td>
+      <td class="${dcls}">${fmtDelta(S.metric, x.delta)}
+        <div class="minibar"><i class="${dcls}" style="width:${w}%"></i></div></td>
+    </tr>`;
+  });
+  return html + `</tbody></table>`;
+}
+
 
 /* ------------------------------------------------------------------ matchup */
 function renderMatchupPicks() {

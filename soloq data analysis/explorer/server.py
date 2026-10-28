@@ -634,90 +634,119 @@ def _sample_games(con, names, patch, limit=12):
              "mine": None} for g in rows]
 
 
-def api_suggest(con, side, blue, red, metric, patch):
-    """Best allies to add to a team, and best enemies to play into it.
+def api_suggest(con, blue, red, metric, patch, top=5, pool=14):
+    """Best allies to add to each side, and best answers to each side.
 
-    Both questions are answered from the 2-way cube, which is dense (median
-    370-495 games per cell), rather than from the matching games, which are not.
+    The two lists answer different questions and are read from different
+    places on purpose:
 
-      synergy  candidate C with each of my champions     cube2(champ=C, partner=X, 'with')
-      counter  candidate C against each of my champions  cube2(champ=C, partner=X, 'vs')
+      pool    every candidate is ranked cheaply from the 2-way cube, which is
+              dense (median 370-495 games per cell) and covers all 173 champs
+      final   the top `pool` are then re-measured on `wide`, where the number
+              is a count of *distinct games*: "champion C in a game where at
+              least one of my champions was on C's team". Summing cube cells
+              would count a game twice whenever two of my champions were in it
+              (2,685 vs 2,632 real games for one candidate here), so the cube
+              is used to choose the shortlist and the table to report the
+              number that is actually shown.
 
-    Both read the candidate out of `champ`, because that is the row the metrics
-    belong to. `with` is symmetric in the data, so (C, X, 'with') and
-    (X, C, 'with') describe the same games from the two sides - taking the
-    first keeps every number attached to the champion being ranked.
-
-    Each candidate comes back with two numbers:
-      general   the candidate's own average over the patch (large n)
-      specific  the same metric aggregated over *my* champions only (small n)
-    and their difference, which is what separates "strong champion" from
-    "strong against this draft".
+    `delta` compares the candidate with its own average over the patch, which
+    is what separates "a strong champion" from "a strong champion into this
+    draft". A side with no champions gets empty lists - there is nothing to
+    synergise with or to answer.
     """
-    mine = blue if side == "blue" else red
-    other = red if side == "blue" else blue
     m = metric if metric in METRIC_BY_KEY and not METRIC_BY_KEY[metric].get("hidden") else "win"
-    out = {"side": side, "metric": m, "mine": mine, "theirs": other,
-           "synergy": [], "counter": []}
-    if not mine:
-        return out
-
+    sign = METRIC_BY_KEY[m]["better"]
     names = APP["names"]
-    excl = set(mine) | set(other)
-    ph = ",".join("?" * len(mine))
+    out = {"metric": m, "sides": {}}
+
+    # the candidate's own average over the patch, for the delta column
+    if patch:
+        grow = con.execute(
+            "SELECT champ, n, %s FROM champ_base WHERE patch = ?" % m, [patch]).fetchall()
+    else:
+        grow = con.execute("""
+          SELECT champ, sum(n), sum(%s * n) / nullif(sum(CASE WHEN %s IS NOT NULL THEN n END), 0)
+          FROM champ_base GROUP BY 1""" % (m, m)).fetchall()
+    general = {int(c): (int(n), _num(v)) for c, n, v in grow}
+
     pat = " AND patch = ?" if patch else ""
     pp = [patch] if patch else []
 
-    # candidate -> (games, weighted mean of the metric, how many of my champs)
-    # A cube row always describes `champ`; `partner` is only the other side of
-    # the relation. So both questions have to keep the CANDIDATE in `champ`:
-    # reading synergy off (champ=my champ, partner=candidate) would average my
-    # own champions' stats and call it the candidate's. `with` is symmetric, so
-    # (candidate, my champ, 'with') carries the same n and win.
-    wavg = ("sum(%s * n) / nullif(sum(CASE WHEN %s IS NOT NULL THEN n END), 0)"
-            % (m, m))
-
-    def candidates(kind):
-        return con.execute(f"""
-          SELECT champ, sum(n), {wavg}, count(DISTINCT partner)
+    def shortlist(kind, mine, excl):
+        """Cube-ranked candidates for one question (cheap, all 173 champs)."""
+        ph = ",".join("?" * len(mine))
+        wavg = ("sum(%s * n) / nullif(sum(CASE WHEN %s IS NOT NULL THEN n END), 0)"
+                % (m, m))
+        rows = con.execute(f"""
+          SELECT champ, sum(n), {wavg}
           FROM cube2 WHERE kind = '{kind}' AND partner IN ({ph}){pat}
           GROUP BY 1""", mine + pp).fetchall()
+        items = [(int(c), _num(v)) for c, n, v in rows
+                 if int(c) not in excl and _num(v) is not None]
+        items.sort(key=lambda x: sign * x[1], reverse=True)
+        return [c for c, _ in items[:pool]]
 
-    syn = candidates("with")
-    ctr = candidates("vs")
+    def measure(ids, mine):
+        """Exact per-game numbers for a shortlist, one scan of `wide`.
 
-    if patch:
-        base_sql = "SELECT champ, n, %s FROM champ_base WHERE patch = ?" % m
-        grow = con.execute(base_sql, pp).fetchall()
-    else:
-        grow = con.execute(
-            "SELECT champ, sum(n), %s FROM champ_base GROUP BY 1" % wavg).fetchall()
-    general = {int(c): (int(n), _num(v)) for c, n, v in grow}
+        The two membership tests are computed once per row in the inner select
+        and then filtered twice, so each `?` appears exactly once and one
+        champion's games are never counted twice.
+        """
+        if not ids:
+            return {}
+        ally = " OR ".join("list_contains(ally_champs, ?)" for _ in mine)
+        enemy = " OR ".join("list_contains(enemy_champs, ?)" for _ in mine)
+        rows = con.execute(f"""
+          WITH t AS (
+            SELECT champ, {m} AS v, ({ally}) AS on_my_team, ({enemy}) AS vs_my_team
+            FROM wide
+            WHERE champ IN ({",".join("?" * len(ids))}){pat}
+          )
+          SELECT champ,
+                 count(*) FILTER (WHERE on_my_team) n_syn,
+                 avg(v) FILTER (WHERE on_my_team) v_syn,
+                 count(*) FILTER (WHERE vs_my_team) n_ctr,
+                 avg(v) FILTER (WHERE vs_my_team) v_ctr
+          FROM t GROUP BY 1""", mine + mine + ids + pp).fetchall()
+        return {int(r[0]): (int(r[1]), _num(r[2]), int(r[3]), _num(r[4]))
+                for r in rows}
 
-    def build(rows):
-        items = []
-        for cand, n, val, terms in rows:
-            cand = int(cand)
-            if cand in excl:
-                continue
-            g = general.get(cand)
-            if not g or g[1] is None or val is None:
-                continue
-            items.append({
-                "riot": cand, "name": names.get(cand, str(cand)),
-                "specific": _num(val), "n_specific": int(n), "terms": int(terms),
-                "general": g[1], "n_general": g[0],
-                "delta": _num(val) - g[1],
-            })
-        # direction-aware: for 'deaths', lower is better
-        sign = METRIC_BY_KEY[m]["better"]
-        items.sort(key=lambda x: (sign * x["specific"], -x["n_specific"]),
-                   reverse=True)
-        return items
+    for side, mine, other in (("blue", blue, red), ("red", red, blue)):
+        side_out = {"mine": mine, "synergy": [], "counter": []}
+        out["sides"][side] = side_out
+        if not mine:
+            continue
+        excl = set(mine) | set(other)
+        syn_ids = shortlist("with", mine, excl)
+        ctr_ids = shortlist("vs", mine, excl)
+        exact = measure(sorted(set(syn_ids) | set(ctr_ids)), mine)
 
-    out["synergy"] = build(syn)
-    out["counter"] = build(ctr)
+        def build(ids, idx):
+            items = []
+            for cand in ids:
+                row = exact.get(cand)
+                if not row:
+                    continue
+                n, val = row[idx], row[idx + 1]
+                g = general.get(cand)
+                if not n or val is None or not g or g[1] is None:
+                    continue
+                items.append({
+                    "riot": cand, "name": names.get(cand, str(cand)),
+                    "specific": val, "n": int(n),
+                    "general": g[1], "n_general": g[0],
+                    "delta": val - g[1],
+                })
+            items.sort(key=lambda x: (sign * x["specific"], -x["n"]), reverse=True)
+            return items[:top]
+
+        side_out["synergy"] = build(syn_ids, 0)
+        side_out["counter"] = build(ctr_ids, 2)
+
     out["partial"] = bool(METRIC_BY_KEY[m].get("partial"))
+    out["cov"] = METRIC_BY_KEY[m].get("cov")
     return out
 
 
@@ -812,8 +841,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/suggest":
                 with _lock:
-                    out = api_suggest(con, qs.get("side", ["blue"])[0],
-                                      self._ids(qs, "blue"),
+                    out = api_suggest(con, self._ids(qs, "blue"),
                                       self._ids(qs, "red"),
                                       qs.get("metric", ["win"])[0], patch)
                 self._send(200, out)

@@ -123,12 +123,6 @@ main { padding: 18px; }
 .viewtabs button.active { background: #2f3a4d; color: var(--text); font-weight: 600; }
 .toggle { font-size: 12px; padding: 4px 10px; color: var(--muted); background: #171b21; }
 .toggle.on { color: var(--text); border-color: #46536e; background: #2f3a4d; }
-.mini-btn {
-  font-size: 11px; padding: 2px 8px; background: #171b21; color: var(--muted);
-  border-radius: 12px;
-}
-.mini-btn.on { color: var(--text); background: #2f3a4d; border-color: #46536e; }
-.rankbar { display: flex; align-items: center; gap: 6px; margin: 8px 0 6px; }
 .hint { margin: -4px 0 8px; }
 
 /* team vs team */
@@ -236,8 +230,7 @@ table.stats td.champ img { width: 22px; height: 22px; border-radius: 3px; }
   transform: translateX(-1px);
 }
 
-/* minibar in suggest tables */
-.bar-cell { width: 70px; }
+/* minibar in the suggestion tables */
 .minibar { height: 8px; background: #171b21; border-radius: 3px; overflow: hidden; }
 .minibar i { display: block; height: 100%; border-radius: 3px; }
 .minibar i.up { background: var(--good); }
@@ -267,8 +260,53 @@ table.matrix td {
   border: 1px solid #232935; border-radius: 3px; color: var(--text);
 }
 table.matrix td.self { background: #171b21; color: #4a5468; }
+/* the blue block and the red block are different questions: inside a block the
+   pair were teammates, across it they were opponents */
+table.matrix .split { border-left: 2px solid #55627a; }
+table.matrix th.corner {
+  width: 52px; min-width: 52px; display: table-cell; vertical-align: bottom;
+  font-size: 10px; line-height: 1.3; color: #6b7a92; text-align: left;
+}
+table.matrix th.corner .ax { display: block; white-space: nowrap; }
 .legend { display: flex; gap: 12px; font-size: 11px; color: var(--muted); margin-top: 8px; }
 .legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; margin-right: 4px; }
+
+/* suggestions: two side columns, each with allies and answers */
+.sugcols {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 12px;
+}
+.sugcol { min-width: 0; }
+.sughead {
+  display: flex; align-items: baseline; gap: 7px; padding-bottom: 6px;
+  border-bottom: 1px solid var(--line); margin-bottom: 8px;
+}
+.sughead b { text-transform: capitalize; font-weight: 600; }
+.sugblock { margin-bottom: 14px; }
+.sugtitle {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .6px;
+  color: var(--muted); margin-bottom: 4px;
+}
+table.sug { font-size: 12px; }
+table.sug td { padding: 4px 5px; }
+table.sug td.champ span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+table.sug td .minibar { height: 2px; margin-top: 3px; }
+table.sug tr.addable { cursor: pointer; }
+table.sug tr.addable:hover { background: #1c222c; }
+table.sug tr.addable .addmark {
+  margin-left: auto; font-style: normal; color: #5c6a80; opacity: 0;
+  font-size: 13px; line-height: 1;
+}
+table.sug tr.addable:hover .addmark { opacity: 1; }
+table.sug tr.full { cursor: default; opacity: .45; }
+table.sug tr.full:hover { background: none; }
+table.sug tr.full:hover .addmark { opacity: 0; }
+details.methods { margin-top: 4px; }
+details.methods summary {
+  cursor: pointer; color: var(--muted); text-transform: uppercase;
+  letter-spacing: .6px; font-size: 10px;
+}
+details.methods p { margin: 6px 0 0; line-height: 1.5; }
+@media (max-width: 900px) { .sugcols { grid-template-columns: 1fr; } }
 
 /* games */
 .games { display: flex; flex-direction: column; gap: 6px; }

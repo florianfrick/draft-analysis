@@ -54,30 +54,46 @@ over 415,000 games (the 423k build moves these by ~2%):
 | 5 | 240.7M | 1 | 21 | 0% |
 
 So the UI never leads with an average from a 3-game sample. It leads with
-`n` and a confidence badge, and then splits into three views.
+`n` and a confidence badge, then shows the draft itself, then what to add.
 
-## The three views
+## The page
 
-**Overall** answers "how does this draft play out". The win rate is read
-between the two selections (orientation-corrected: in half the matching
-games your team was the red one), each champion's line inside those games is
-clickable for its full stat breakdown, clicking a column header ranks the
-champions by that stat, and the whole selection gets a pairwise delta matrix
-against each champion's own patch average.
+**How the draft plays out.** The win rate is read between the two
+selections (orientation-corrected: in half the matching games your team was
+the red one), each champion's line inside those games is clickable for its
+full stat breakdown, clicking a column header ranks the champions by that
+stat, and the whole selection gets a pairwise delta matrix.
 
-**Blue** and **Red** answer "what should I pick next, and what beats me".
-Both lists come from the dense 2-way cube rather than the sparse draft
-sample, and each candidate carries two numbers:
+The matrix reads row = the champion being measured, column = who it played
+with or against; the two diagonal blocks are teammate pairs and the
+off-diagonal blocks are opponents, with a divider between the blue and red
+blocks. A cell is that champion's deviation from its own patch average, not
+a win rate, so the sign is the direction.
 
-| | what it is | typical n |
+**What to add next** is one card with a column per side. Each column carries
+the top five allies for that side and the top five answers to it — the
+latter are champions you would add to the *other* side. Clicking a row fills
+the next empty slot on the team it belongs to, which is how the builder is
+meant to be driven: read the list, click, watch the draft update.
+
+Every suggestion is scored on the candidate's 2-way cells against the
+champions already on that side — allies are games it shared a team with at
+least one of them, answers are games it faced at least one. Two numbers
+matter:
+
+| | what it is | typical games |
 |---|---|---|
-| vs this draft | the candidate's 2-way cells against only *your* champions | 1–7k |
-| overall | the candidate's whole patch | 10–75k |
+| the value | the candidate's own metric in those games | 300–5,000 |
+| vs own avg | the gap to its average across the whole patch | — |
 
-The gap between them is the difference between "a strong champion" and "a
-strong champion into this draft". A `rank by` toggle sorts on either, and
-the metric selector can sort on any registered stat — win rate, gold, gold
-per minute, CS lead over the laner, kill participation.
+`games` is a count of **distinct games**, taken from the player table rather
+than summed across cube cells: a game where the candidate played alongside
+two of your champions counts once, not twice. The cube is still what picks
+the shortlist (it covers all 173 champions cheaply), and the top 14 are then
+re-measured exactly before the best five are kept.
+
+The metric selector re-ranks both columns on any registered stat, and the
+method is spelled out in a collapsible note under the card.
 
 ## Metrics
 
@@ -125,12 +141,13 @@ request per match. The single-endpoint substitutes that are collected —
 - `GET /api/meta` — corpus size, patches, queues, champions with icons, metrics
 - `GET /api/matchup?champ=&partner=&mode=with|vs&patch=&role=`
 - `GET /api/draft?blue=1,2&red=6,7&patch=&sides=any|fixed`
-- `GET /api/suggest?side=blue&blue=&red=&metric=&patch=` — synergies + counters
+- `GET /api/suggest?blue=&red=&metric=&patch=` — both sides, top 5 allies + answers each
 - `GET /api/champion?champ=&blue=&red=&patch=` — one champion's full line
 
 `sides=any` treats a draft as two unordered teams (blue in the UI may have
 been red in the actual game); `fixed` requires the orientation as drawn.
-`suggest` and `champion` are always orientation-free.
+`suggest` and `champion` are always orientation-free, and `suggest` returns both
+sides in one call so the two columns can never disagree about the draft.
 
 ## Sharing a state
 
@@ -138,7 +155,7 @@ The URL carries the state, so a draft or matchup can be linked:
 
 ```
 #8,53,64,84,523/113,126,145,518,711     blue/red picks
-?v=blue&est=1&games=1                   view + revealed cards
+?est=1&games=1                          revealed cards
 #m=103,64,vs                            Ahri against Lee Sin
 ```
 
