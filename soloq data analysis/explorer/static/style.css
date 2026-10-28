@@ -199,7 +199,12 @@ table.stats td.champ img { width: 22px; height: 22px; border-radius: 3px; }
 .champ-table tr.detail td { background: #191e26; padding: 0; }
 .dbody { padding: 12px 14px 10px; }
 
-.dgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; }
+/* 44 fields do not fit in a row of equal cards: the objectives group alone has
+   eleven rows, so a grid leaves one column three times taller than the rest.
+   Multi-column flow balances the total height instead, and `break-inside`
+   keeps each group's label attached to its own rows. */
+.dgrid { columns: 3 230px; column-gap: 20px; }
+.dgroup { break-inside: avoid; margin: 0 0 16px; }
 .dgt {
   font-size: 10px; text-transform: uppercase; letter-spacing: .7px;
   color: var(--muted); margin-bottom: 6px;

@@ -48,65 +48,127 @@ CDN = "https://ddragon.leagueoflegends.com/cdn/"
 VER = "16.20.1"
 
 ROLES = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"]
+# team-level objective columns carried by `drafts`, as (key, blue_col, red_col)
+TEAM_OBJ = [("dragon", "blue_dragon", "red_dragon"),
+            ("baron", "blue_baron", "red_baron"),
+            ("tower", "blue_tower", "red_tower"),
+            ("inhib", "blue_inhib", "red_inhib"),
+            ("herald", "blue_herald", "red_herald"),
+            ("horde", "blue_horde", "red_horde")]
 
 # ---------------------------------------------------------------- metric registry
-# better: +1 = higher is better, -1 = lower is better. The UI colours deltas and
-# sorts by it, so a metric only has to be declared once.
-# hidden: kept for the per-champion detail panel but not offered in the metric
-#         selector, because the cube's cell `n` would overstate its coverage.
-# partial: only recorded by the newer collector schema (~1% of rows so far), so
-#         its averages cover a subset and the panel must show the real count.
+# Every per-player field the collector writes is registered here exactly once:
+# the eight box-score columns, the four first-blood/first-tower flags and all 32
+# challenge keys. The registry is the only place that knows about a stat - the
+# cubes aggregate whatever it lists, the matrix/champion table/detail panel all
+# iterate it, and /api/suggest ranks by it - so adding a field to the collector
+# plus one entry here is enough to make it selectable everywhere.
 #
-# Checked against the corpus on 2026-10-25: the core eight and the four rate
-# stats are present on ~98-100% of rows. The objectives block is present on
-# ~44.7k rows (the live crawl) and absent from the archive snapshot. Note that
-# `laningPhaseGoldExpAdvantage` is a 0/1 flag, not a lead magnitude, so it is
-# deliberately not exposed as a metric - the real gold-lead-at-10 stat will slot
-# into the "lane" group once the collector carries it.
+# better: +1 = higher is better, -1 = lower is better. The UI colours deltas and
+#         sorts by it, so a metric only has to be declared once.
+# fmt:    pct | int | num1 | num2 | sec (seconds shown as m:ss)
+# cov:    filled in at startup from the store (share of rows that carry the
+#         field). A metric below 99% is flagged `partial` and the panel shows
+#         the real n instead of pretending the average covers every game.
+#
+# Notes from profiling the corpus: `laningPhaseGoldExpAdvantage` and
+# `earlyLaningPhaseGoldExpAdvantage` are 0/1 flags in this data, not lead
+# magnitudes, so they are registered as rates and labelled as flags. The
+# `earliestBaron` / `firstTurretKilledTime` keys are timestamps in seconds and
+# lower is better. Everything else is a count, a rate or a lead.
 METRICS = [
-    # core box score (every row has these, archive included)
+    # --- box score (present on every row, archive included)
     {"key": "win", "label": "win rate", "better": 1, "fmt": "pct", "group": "core"},
-    {"key": "gold", "label": "gold", "better": 1, "fmt": "int", "group": "core"},
-    {"key": "dmg", "label": "damage", "better": 1, "fmt": "int", "group": "core"},
-    {"key": "cs", "label": "CS", "better": 1, "fmt": "num1", "group": "core"},
-    {"key": "vision", "label": "vision", "better": 1, "fmt": "num1", "group": "core"},
     {"key": "kills", "label": "kills", "better": 1, "fmt": "num2", "group": "core"},
     {"key": "deaths", "label": "deaths", "better": -1, "fmt": "num2", "group": "core"},
     {"key": "assists", "label": "assists", "better": 1, "fmt": "num2", "group": "core"},
-    # rates and lane leads (present on ~98% of rows)
-    {"key": "goldPerMinute", "label": "gold / min", "better": 1, "fmt": "num1", "group": "lane"},
-    {"key": "damagePerMinute", "label": "damage / min", "better": 1, "fmt": "num1", "group": "lane"},
-    {"key": "maxCsAdvantageOnLaneOpponent", "label": "max CS lead vs laner",
+    {"key": "gold", "label": "gold", "better": 1, "fmt": "int", "group": "core"},
+    {"key": "dmg", "label": "damage to champions", "better": 1, "fmt": "int", "group": "core"},
+    {"key": "cs", "label": "CS", "better": 1, "fmt": "num1", "group": "core"},
+    {"key": "vision", "label": "vision score", "better": 1, "fmt": "num1", "group": "core"},
+    # --- per-minute rates
+    {"key": "goldPerMinute", "label": "gold / min", "better": 1, "fmt": "num1", "group": "rate"},
+    {"key": "damagePerMinute", "label": "damage / min", "better": 1, "fmt": "num1", "group": "rate"},
+    {"key": "visionScorePerMinute", "label": "vision / min", "better": 1, "fmt": "num2", "group": "rate"},
+    # --- lane phase
+    {"key": "maxCsAdvantageOnLaneOpponent", "label": "peak CS lead vs laner",
      "better": 1, "fmt": "num1", "group": "lane"},
-    {"key": "maxLevelLeadLaneOpponent", "label": "max level lead vs laner",
+    {"key": "maxLevelLeadLaneOpponent", "label": "peak level lead vs laner",
      "better": 1, "fmt": "num1", "group": "lane"},
+    {"key": "visionScoreAdvantageLaneOpponent", "label": "vision lead vs laner",
+     "better": 1, "fmt": "num1", "group": "lane"},
+    {"key": "laningPhaseGoldExpAdvantage", "label": "laning gold/XP lead (0/1 flag)",
+     "better": 1, "fmt": "pct", "group": "lane"},
+    {"key": "earlyLaningPhaseGoldExpAdvantage", "label": "early laning lead (0/1 flag)",
+     "better": 1, "fmt": "pct", "group": "lane"},
+    {"key": "laneMinionsFirst10Minutes", "label": "lane minions @10",
+     "better": 1, "fmt": "num1", "group": "lane"},
+    {"key": "jungleCsBefore10Minutes", "label": "jungle camps @10",
+     "better": 1, "fmt": "num1", "group": "lane"},
+    # --- tempo and firsts
+    {"key": "takedownsFirstXMinutes", "label": "takedowns @10",
+     "better": 1, "fmt": "num1", "group": "tempo"},
+    {"key": "earliestBaron", "label": "first baron (time)",
+     "better": -1, "fmt": "sec", "group": "tempo"},
+    {"key": "firstTurretKilledTime", "label": "first turret (time)",
+     "better": -1, "fmt": "sec", "group": "tempo"},
+    {"key": "fb_kill", "label": "first blood (kill)", "better": 1, "fmt": "pct",
+     "group": "tempo"},
+    {"key": "fb_assist", "label": "first blood (assist)", "better": 1, "fmt": "pct",
+     "group": "tempo"},
+    {"key": "ft_kill", "label": "first turret (kill)", "better": 1, "fmt": "pct",
+     "group": "tempo"},
+    {"key": "ft_assist", "label": "first turret (assist)", "better": 1, "fmt": "pct",
+     "group": "tempo"},
+    # --- team and objectives
     {"key": "killParticipation", "label": "kill participation",
      "better": 1, "fmt": "pct", "group": "team"},
     {"key": "teamDamagePercentage", "label": "share of team damage",
      "better": 1, "fmt": "pct", "group": "team"},
-    # newer-schema only - detail panel, not the selector
-    {"key": "laneMinionsFirst10Minutes", "label": "lane minions @10",
-     "better": 1, "fmt": "num1", "group": "lane", "hidden": 1, "partial": 1},
-    {"key": "visionScoreAdvantageLaneOpponent", "label": "vision lead vs laner",
-     "better": 1, "fmt": "num1", "group": "lane", "hidden": 1, "partial": 1},
+    {"key": "damageTakenOnTeamPercentage", "label": "share of damage taken",
+     "better": 1, "fmt": "pct", "group": "team"},
     {"key": "turretPlatesTaken", "label": "plates taken",
-     "better": 1, "fmt": "num1", "group": "team", "hidden": 1, "partial": 1},
-    {"key": "soloKills", "label": "solo kills",
-     "better": 1, "fmt": "num1", "group": "team", "hidden": 1, "partial": 1},
+     "better": 1, "fmt": "num1", "group": "team"},
+    {"key": "turretTakedowns", "label": "turrets",
+     "better": 1, "fmt": "num1", "group": "team"},
     {"key": "dragonTakedowns", "label": "dragons",
-     "better": 1, "fmt": "num1", "group": "team", "hidden": 1, "partial": 1},
+     "better": 1, "fmt": "num1", "group": "team"},
     {"key": "baronTakedowns", "label": "barons",
-     "better": 1, "fmt": "num1", "group": "team", "hidden": 1, "partial": 1},
+     "better": 1, "fmt": "num1", "group": "team"},
+    {"key": "riftHeraldTakedowns", "label": "heralds",
+     "better": 1, "fmt": "num1", "group": "team"},
+    {"key": "teamBaronKills", "label": "team barons",
+     "better": 1, "fmt": "num1", "group": "team"},
+    {"key": "teamRiftHeraldKills", "label": "team heralds",
+     "better": 1, "fmt": "num1", "group": "team"},
+    {"key": "teamElderDragonKills", "label": "team elder dragons",
+     "better": 1, "fmt": "num1", "group": "team"},
+    # --- combat profile
+    {"key": "soloKills", "label": "solo kills", "better": 1, "fmt": "num1",
+     "group": "combat"},
+    {"key": "deathsByEnemyChamps", "label": "deaths to champions", "better": -1,
+     "fmt": "num1", "group": "combat"},
+    {"key": "enemyChampionImmobilizations", "label": "CC applied (s)",
+     "better": 1, "fmt": "num1", "group": "combat"},
+    {"key": "effectiveHealAndShielding", "label": "healing + shielding",
+     "better": 1, "fmt": "int", "group": "combat"},
+    {"key": "killsNearEnemyTurret", "label": "kills near enemy turret",
+     "better": 1, "fmt": "num1", "group": "combat"},
+    {"key": "maxKillDeficit", "label": "worst kill deficit", "better": -1,
+     "fmt": "num1", "group": "combat"},
+    {"key": "bountyGold", "label": "bounty gold", "better": 1, "fmt": "int",
+     "group": "combat"},
+    {"key": "outnumberedKills", "label": "outnumbered kills", "better": 1,
+     "fmt": "num1", "group": "combat"},
 ]
 METRIC_BY_KEY = {m["key"]: m for m in METRICS}
-PARTIAL = [m["key"] for m in METRICS if m.get("partial")]
-# every registered metric, in registry order. The cubes carry all of them (plus
-# the unregistered challenge keys), so the pair matrix, the per-champion table
-# and the matchup card all iterate this: adding an entry to METRICS is enough
-# to make a stat selectable everywhere.
+# every registered metric, in registry order. The cubes carry all of them, so the
+# pair matrix, the per-champion table and the matchup card all iterate this.
 STATS = [m["key"] for m in METRICS]
-# every column we can aggregate for a single champion's detail view
 DETAIL = STATS
+# filled by probe_coverage() at startup; a metric below FULL_COVER is `partial`
+PARTIAL = []
+FULL_COVER = 0.99
 
 _lock = threading.Lock()
 APP = {}
@@ -371,18 +433,24 @@ def team_block(con, blue, red, patch):
     else:
         drawn, dp = s_sql, s_p
     any_where, any_p = draft_filter(blue, red, patch, "any")
+    obj_sql = "".join(
+        ", sum(CASE WHEN drawn THEN %s - %s ELSE %s - %s END) d_%s"
+        % (bc, rc, rc, bc, k) for k, bc, rc in TEAM_OBJ)
     sql = """
       SELECT count(blue_win) n, count(*) games,
              sum(CASE WHEN drawn THEN blue_win ELSE 1 - blue_win END) sel_wins,
              sum(CASE WHEN drawn THEN blue_gold - red_gold
                       ELSE red_gold - blue_gold END) gold_diff,
              sum(CASE WHEN drawn THEN blue_kills - red_kills
-                      ELSE red_kills - blue_kills END) kill_diff
+                      ELSE red_kills - blue_kills END) kill_diff%s
       FROM (SELECT blue_win, blue_gold, red_gold, blue_kills, red_kills,
-                   %s AS drawn
+                   %s AS drawn, %s
             FROM drafts WHERE %s) t
-    """ % (drawn, any_where)
-    n, games, wins, gd, kd = con.execute(sql, dp + any_p).fetchone()
+    """ % (obj_sql, drawn,
+           ", ".join("%s, %s" % (bc, rc) for _, bc, rc in TEAM_OBJ),
+           any_where)
+    row = con.execute(sql, dp + any_p).fetchone()
+    n, games, wins, gd, kd = row[:5]
     n = int(n or 0)
     wins = int(wins or 0)
     return {
@@ -391,6 +459,8 @@ def team_block(con, blue, red, patch):
         "sel_win_rate": (wins / n) if n else None,
         "gold_diff": (float(gd) / n) if n and gd is not None else None,
         "kill_diff": (float(kd) / n) if n and kd is not None else None,
+        "obj_diff": {k: (float(v) / n) if n and v is not None else None
+                     for (k, _, _), v in zip(TEAM_OBJ, row[5:])},
     }
 
 
@@ -774,6 +844,34 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, fpath.read_bytes(), ctype)
 
 
+def probe_coverage(con):
+    """One scan: what share of rows actually carries each registered field.
+
+    The archive snapshot predates the expanded challenge whitelist, so a stat
+    can be perfectly aggregated in the cube and still describe a fraction of
+    the corpus. Measuring it beats hardcoding a list: when the next backfill
+    lands the flags clear themselves.
+    """
+    cols = ", ".join(
+        "avg(CASE WHEN %s IS NOT NULL THEN 1 ELSE 0 END) c%d" % (k, i)
+        for i, k in enumerate(STATS))
+    row = con.execute("SELECT %s FROM wide" % cols).fetchone()
+    global PARTIAL
+    PARTIAL = []
+    for i, m in enumerate(METRICS):
+        cov = float(row[i] or 0.0)
+        m["cov"] = round(cov, 4)
+        m.pop("partial", None)
+        if cov < FULL_COVER:
+            m["partial"] = 1
+            PARTIAL.append(m["key"])
+    thin = [(m["key"], m["cov"]) for m in METRICS if m.get("partial")]
+    print("coverage: %d/%d fields on %.0f%%+ of rows%s"
+          % (len(METRICS) - len(thin), len(METRICS), FULL_COVER * 100,
+             ("; thin: " + ", ".join("%s %.0f%%" % (k, c * 100)
+                                     for k, c in thin[:6])) if thin else ""))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=8778)
@@ -792,6 +890,7 @@ def main():
     print("store   : %s" % a.db)
     print("games   : %d" % con.execute("SELECT count(*) FROM drafts").fetchone()[0])
     print("champions: %d" % len(champs))
+    probe_coverage(con)
     print("serving : http://127.0.0.1:%d  (local only)" % a.port)
     ThreadingHTTPServer(("127.0.0.1", a.port), Handler).serve_forever()
 

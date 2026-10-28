@@ -62,7 +62,14 @@ CH_KEYS = [
 ]
 
 BASE_STATS = ["kills", "deaths", "assists", "gold", "dmg", "cs", "vision"]
-AGG_STATS = ["win"] + BASE_STATS + CH_KEYS   # every column the cubes aggregate
+# team-level objective counts, recorded once per side but repeated onto each
+# player row so that `drafts` can be rebuilt from `players` alone (the raw
+# `teams[side].obj` dict is otherwise thrown away at download time)
+TEAM_OBJ = {"t_dragon": "dragon", "t_baron": "baron", "t_tower": "tower",
+            "t_inhib": "inhibitor", "t_herald": "riftHerald",
+            "t_horde": "horde", "t_voidgator": "voidGator"}
+AGG_STATS = ["win"] + BASE_STATS + ["fb_kill", "fb_assist", "ft_kill",
+                                    "ft_assist"] + CH_KEYS   # every cube column
 
 SCHEMA = pa.schema(
     [("match_id", pa.string()), ("src", pa.string()), ("schema_ver", pa.int8()),
@@ -72,8 +79,20 @@ SCHEMA = pa.schema(
     + [(k, pa.int32()) for k in ["kills", "deaths", "assists", "gold", "dmg",
                                  "cs", "vision"]]
     + [(k, pa.int8()) for k in ["fb_kill", "fb_assist", "ft_kill", "ft_assist"]]
+    + [(k, pa.int8()) for k in TEAM_OBJ]
     + [(k, pa.float32()) for k in CH_KEYS]
 )
+
+
+def _count(v):
+    """`teams[side].obj` entries are [count, first_flag] pairs."""
+    if isinstance(v, (list, tuple)):
+        v = v[0] if v else 0
+    try:
+        return int(v or 0)
+    except (TypeError, ValueError):
+        return 0
+
 
 
 def patch_of(ver):
@@ -84,12 +103,20 @@ def patch_of(ver):
 
 
 def iter_records(limit=None):
-    """Stream every shard, archive first, then the live crawl."""
+    """Stream every shard, archive first, then the live crawl.
+
+    The live crawl gzips every closed shard and only leaves the shard currently
+    being appended to as plain text, so globbing `shard_*.jsonl` reads exactly
+    one 5k-game file per region and drops the rest. That is the difference
+    between 6k games with the expanded challenge whitelist and 423k: the
+    archive snapshot and the live re-fetch cover the same matches, and the
+    archive copy is the one with the old 7-key schema.
+    """
     files = []
     for f in sorted(glob.glob(os.path.join(MATCHDATA, "archive_pre_snapshots", "*", "*.jsonl.gz"))):
         files.append((f, "archive", True))
-    for f in sorted(glob.glob(os.path.join(MATCHDATA, "*", "shard_*.jsonl"))):
-        files.append((f, "live", False))
+    for f in sorted(glob.glob(os.path.join(MATCHDATA, "*", "shard_*.jsonl*"))):
+        files.append((f, "live", f.endswith(".gz")))
     n = 0
     for path, src, gz in files:
         op = gzip.open if gz else open
@@ -116,6 +143,7 @@ def rows_of(rec, src):
     for p in rec["players"]:
         side = "blue" if p.get("team") == 100 else "red"
         tw = (teams.get(side) or {}).get("win")
+        obj = (teams.get(side) or {}).get("obj") or {}
         row = {
             "match_id": rec.get("match_id"), "src": src,
             "schema_ver": 2 if src == "live" else 1,
@@ -128,6 +156,8 @@ def rows_of(rec, src):
             row[k] = p.get(k)
         for k in ["fb_kill", "fb_assist", "ft_kill", "ft_assist"]:
             row[k] = p.get(k)
+        for k, raw in TEAM_OBJ.items():
+            row[k] = _count(obj.get(raw))
         ch = p.get("ch") or {}
         for k in CH_KEYS:
             row[k] = ch.get(k)
@@ -250,6 +280,10 @@ def build_drafts(con):
                list(p.champ ORDER BY p.champ) champs,
                any_value(p.win) win,
                sum(p.kills) kills, sum(p.deaths) deaths, sum(p.gold) gold,
+               any_value(p.t_dragon) t_dragon, any_value(p.t_baron) t_baron,
+               any_value(p.t_tower) t_tower, any_value(p.t_inhib) t_inhib,
+               any_value(p.t_herald) t_herald, any_value(p.t_horde) t_horde,
+               any_value(p.t_voidgator) t_voidgator,
                sum(CASE WHEN m.part = 0 THEN m.bit ELSE 0 END)::UBIGINT m0,
                sum(CASE WHEN m.part = 1 THEN m.bit ELSE 0 END)::UBIGINT m1,
                sum(CASE WHEN m.part = 2 THEN m.bit ELSE 0 END)::UBIGINT m2
@@ -267,7 +301,14 @@ def build_drafts(con):
              b.m0 blue_m0, b.m1 blue_m1, b.m2 blue_m2,
              r.m0 red_m0, r.m1 red_m1, r.m2 red_m2,
              b.kills blue_kills, r.kills red_kills,
-             b.gold blue_gold, r.gold red_gold
+             b.gold blue_gold, r.gold red_gold,
+             b.t_dragon blue_dragon, r.t_dragon red_dragon,
+             b.t_baron blue_baron, r.t_baron red_baron,
+             b.t_tower blue_tower, r.t_tower red_tower,
+             b.t_inhib blue_inhib, r.t_inhib red_inhib,
+             b.t_herald blue_herald, r.t_herald red_herald,
+             b.t_horde blue_horde, r.t_horde red_horde,
+             b.t_voidgator blue_voidgator, r.t_voidgator red_voidgator
       FROM t b JOIN t r ON b.match_id = r.match_id
       WHERE b.side = 'blue' AND r.side = 'red'
     """)

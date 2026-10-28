@@ -27,6 +27,22 @@ const kfmt = (v) => v === null || v === undefined ? "—"
   : Math.abs(v) >= 1000 ? Math.round(v).toLocaleString() : Number(v).toFixed(1);
 const plural = (n, w) => `${n.toLocaleString()} ${w}${n === 1 ? "" : "s"}`;
 
+const OBJ_LABEL = {
+  dragon: "dragons", baron: "barons", tower: "towers",
+  inhib: "inhibitors", herald: "heralds", horde: "grubs",
+};
+
+/* the server tags every metric with a group; this is the only place that
+   decides how those groups are labelled and ordered */
+const GROUPS = {
+  core: "box score", rate: "per minute", lane: "lane phase",
+  tempo: "tempo & firsts", team: "team & objectives", combat: "combat profile",
+};
+const secs = (v) => {
+  const s = Math.round(v);
+  return Math.floor(s / 60) + ":" + String(Math.abs(s) % 60).padStart(2, "0");
+};
+
 /* metric formatting, driven entirely by the server's registry */
 function fmtMetric(key, v) {
   const m = S.byKey[key];
@@ -35,6 +51,7 @@ function fmtMetric(key, v) {
   if (m.fmt === "pct") return (v * 100).toFixed(1) + "%";
   if (m.fmt === "int") return Math.round(v).toLocaleString();
   if (m.fmt === "num2") return Number(v).toFixed(2);
+  if (m.fmt === "sec") return secs(v);
   return Number(v).toFixed(1);
 }
 function fmtDelta(key, d) {
@@ -43,6 +60,7 @@ function fmtDelta(key, d) {
   if (!m) return (d > 0 ? "+" : "") + d.toFixed(1);
   if (m.fmt === "pct") return (d > 0 ? "+" : "") + (d * 100).toFixed(1) + " pts";
   if (m.fmt === "int") return (d > 0 ? "+" : "") + Math.round(d).toLocaleString();
+  if (m.fmt === "sec") return (d > 0 ? "+" : "") + Math.round(d) + "s";
   return (d > 0 ? "+" : "") + d.toFixed(1);
 }
 const signOf = (key) => (S.byKey[key] && S.byKey[key].better < 0 ? -1 : 1);
@@ -85,7 +103,7 @@ async function init() {
     .join("") + `<option value="">all patches</option>`;
   $("patch").value = S.patch;
 
-  const groups = { core: "box score", lane: "lane phase", team: "team & objectives" };
+  const groups = GROUPS;
   $("metric").innerHTML = Object.keys(groups).map((g) => {
     const opts = S.metrics.filter((m) => m.group === g && !m.hidden)
       .map((m) => `<option value="${m.key}">${m.label}</option>`).join("");
@@ -394,6 +412,11 @@ function teamCard(d) {
   const other = tm.subject === "blue" ? "red" : "blue";
   const gd = tm.gold_diff === null ? "" : `${tm.gold_diff > 0 ? "+" : ""}${Math.round(tm.gold_diff).toLocaleString()} gold`;
   const kd = tm.kill_diff === null ? "" : `${tm.kill_diff > 0 ? "+" : ""}${tm.kill_diff.toFixed(1)} kills`;
+  const obj = tm.obj_diff || {};
+  const objBits = Object.keys(OBJ_LABEL)
+    .filter((k) => obj[k] !== null && obj[k] !== undefined)
+    .map((k) => `${obj[k] > 0 ? "+" : ""}${obj[k].toFixed(2)} ${OBJ_LABEL[k]}`)
+    .join(", ");
   const both = d.blue.length && d.red.length;
 
   let html = `<div class="versus ${both ? "" : "solo"}">
@@ -419,8 +442,13 @@ function teamCard(d) {
     html += `<div class="vmid"><div class="tiny muted">
       ${[gd, kd].filter(Boolean).join(", ") || "—"} per game</div></div>`;
   }
-  html += `</div>
-    <p class="tiny muted" style="margin:12px 0 0">
+  html += `</div>`;
+  if (objBits) {
+    html += `<p class="tiny muted objline" style="margin:10px 0 0">
+      Objectives per game for the ${sideName(tm.subject)}: ${objBits}
+      <span class="muted">— from the team block of every matching game</span></p>`;
+  }
+  html += `<p class="tiny muted" style="margin:12px 0 0">
       Games are matched either way round: this selection was blue in roughly half
       of them and red in the other half, and the win rate is always read for
       <em>your</em> team. ${both ? "" : "Add champions to the other side to get a head-to-head."}</p>`;
@@ -528,7 +556,7 @@ function statStrip(d, key, rows) {
 function detailBody(riot) {
   const cd = S.detail[riot];
   if (!cd) return `<div class="tiny muted">loading…</div>`;
-  const groups = { core: "box score", lane: "lane phase", team: "team & objectives" };
+  const groups = GROUPS;
   let html = `<div class="dgrid">`;
   Object.keys(groups).forEach((g) => {
     /* a partial stat with no rows in these games has nothing to say */
@@ -625,7 +653,7 @@ function matrixCard(d) {
       <span><i style="background:rgba(79,184,106,.6)"></i>better than the champion's own average</span>
       <span><i style="background:rgba(217,92,72,.6)"></i>worse</span>
       <span>${m.fmt === "pct" ? "percentage points" : "units"} · hover a cell for the raw value and n
-        ${m.partial ? "· this stat is only recorded for newer games" : ""}</span>
+        ${m.partial ? `· recorded for ${(m.cov * 100).toFixed(0)}% of player-rows, so the cells cover fewer games` : ""}</span>
     </div>`;
   card.innerHTML += html;
   return card;

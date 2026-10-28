@@ -16,18 +16,34 @@ Requires `duckdb` and a built store (`python store.py build`). Binds
 | | Query | Served by | Measured |
 |---|---|---|---|
 | Capability 1 | champ X with / against champ Y | precomputed `cube2` table | ~5 ms |
-| Capability 2 | a whole draft, N champions | live scan of `drafts` | 90–210 ms |
-| Both | synergies / counters for one side | `cube2` grouped by candidate | ~15 ms |
+| Capability 2 | a whole draft, N champions | live scan of `drafts` | 110–230 ms |
+| Both | synergies / counters for one side | `cube2` grouped by candidate | ~20 ms |
 
-Capability 1 is a 29.7k-cell lookup per patch. Capability 2 is **not**
-precomputed, because there is nothing to precompute: a 5-champion cube is
-240.7M cells / 1.08 GB, is 99.99% empty, and is *slower* to query (195 ms)
-than scanning the 415k-row game table (28 ms).
+Capability 1 is a ~59k-cell lookup per patch (every directed champion pair).
+Capability 2 is **not** precomputed, because there is nothing to precompute: a
+5-champion cube is 240.7M cells / 1.08 GB, is 99.99% empty, and is *slower* to
+query (195 ms) than scanning the 423k-row game table (28 ms).
+
+## Which data is being read
+
+`store.py build` reads two sources and keeps the richer copy of each game:
+
+| Source | Path | Schema | Challenge keys |
+|---|---|---|---|
+| archive snapshot | `matchdata/archive_pre_snapshots/*/*.jsonl.gz` | 1 | 7–8 |
+| live crawl | `matchdata/*/shard_*.jsonl` **and** `*.jsonl.gz` | 2 | 32 |
+
+The live crawl gzips every closed shard and leaves only the shard it is
+appending to as plain text, so a `shard_*.jsonl` glob reads one 5k-game file
+per region and drops the other 83. Both patterns are read, and the dedupe
+(`row_number() OVER (PARTITION BY match_id, pid ORDER BY schema_ver DESC)`)
+keeps the schema-2 row, which is how all 423,494 games end up with the full
+whitelist instead of the archive's seven keys.
 
 ## Why the UI looks the way it does
 
 The corpus cannot answer most full-draft questions by counting. Measured
-over 415,000 games:
+over 415,000 games (the 423k build moves these by ~2%):
 
 | Champions named | Cells | Median n | Max n | Cells reaching n≥30 |
 |---|---|---|---|---|
@@ -65,13 +81,44 @@ per minute, CS lead over the laner, kill participation.
 
 ## Metrics
 
-Every stat lives in one `METRICS` list in `server.py` (key, label, direction,
-format, group). The cubes already carry all 32 challenge keys, so exposing a
-new stat is one entry there plus, if it is a brand-new column, one line in
-`store.py`. `laningPhaseGoldExpAdvantage` is deliberately *not* exposed: in
-this corpus it is a 0/1 flag rather than a lead magnitude. When the real
-gold-lead-at-10 column lands it slots into the `lane` group and becomes
-selectable everywhere without touching the UI.
+Every per-player field the collector writes is registered once in a `METRICS`
+list in `server.py` (key, label, direction, format, group): the eight box-score
+columns, the four first-blood / first-tower flags and all 32 challenge keys —
+44 fields, all selectable, all aggregated into the cubes.
+
+| Group | Fields |
+|---|---|
+| box score | win, kills, deaths, assists, gold, damage, CS, vision |
+| per minute | gold, damage, vision |
+| lane phase | peak CS lead, peak level lead, vision lead vs laner, lane minions @10, jungle camps @10, laning gold/XP lead (0/1) |
+| tempo & firsts | takedowns @10, first baron time, first turret time, first blood (kill/assist), first turret (kill/assist) |
+| team & objectives | kill participation, share of team damage, share of damage taken, plates, turrets, dragons, barons, heralds, team barons / heralds / elders |
+| combat | solo kills, deaths to champions, CC applied, healing + shielding, kills near enemy turret, worst kill deficit, bounty gold, outnumbered kills |
+
+Adding a field is three lines: the collector's `CHALLENGE_KEYS`, `store.py`'s
+`CH_KEYS`, and one `METRICS` entry. `test_explorer.py` parses the collector's
+whitelist with `ast` and fails if any of the three falls behind the others.
+
+Two honest caveats, both surfaced in the UI rather than hidden:
+
+- **Coverage is measured, not assumed.** At startup the server scans the store
+  once for each field's non-null share and marks anything below 99% `partial`;
+  the detail panel then shows that stat's real `n` next to it. `first baron`
+  (43%) and `first turret` (49%) are conditional on the objective happening at
+  all, and Riot omits a few challenge values on some rows.
+- **`laningPhaseGoldExpAdvantage` is a 0/1 flag** in this data, not a lead
+  magnitude. It is exposed as a rate and labelled `(0/1 flag)`.
+
+Team objectives (dragons, barons, towers, inhibitors, heralds, grubs) come from
+`teams[side].obj`, which used to be discarded at download time. They are kept
+on `drafts` and shown as a per-game difference in the Overall view, orientation
+corrected like the win rate.
+
+`killsAt10` / `goldAt10` are **not** in this corpus: they need the timeline
+endpoint, a second request per match, and the collector deliberately makes one
+request per match. The single-endpoint substitutes that are collected —
+`takedownsFirstXMinutes`, `laneMinionsFirst10Minutes`,
+`jungleCsBefore10Minutes`, `laningPhaseGoldExpAdvantage` — are all registered.
 
 ## Endpoints
 

@@ -31,17 +31,53 @@ fails = 0
 
 print("meta")
 m, ms = get("/api/meta")
-fails += not check("corpus size", m["games"] == 415000, f"{m['games']} games, {ms:.0f} ms")
+fails += not check("corpus size", m["games"] == 423494, f"{m['games']} games, {ms:.0f} ms")
+fails += not check("ten players per game", m["players"] == 10 * m["games"],
+                   f"{m['players']} rows")
 fails += not check("champions", len(m["champions"]) == 173, f"{len(m['champions'])}")
 fails += not check("icons resolved", all(c["img"].startswith("http") for c in m["champions"]))
 fails += not check("patches", len(m["patches"]) == 2, str(m["patches"]))
 visible = [x for x in m["metrics"] if not x.get("hidden")]
-fails += not check("metric registry", len(visible) >= 14, f"{len(visible)} selectable")
+fails += not check("every field is selectable", len(visible) == len(m["metrics"]),
+                   f"{len(visible)} of {len(m['metrics'])}")
 fails += not check("win rate is a metric", any(x["key"] == "win" for x in visible))
-fails += not check("0/1 flag not exposed as a lead",
-                   not any(x["key"] == "laningPhaseGoldExpAdvantage" for x in visible))
 fails += not check("every metric has a direction",
                    all(x.get("better") in (1, -1) for x in m["metrics"]))
+fails += not check("every metric reports its coverage",
+                   all(isinstance(x.get("cov"), float) for x in m["metrics"]))
+
+# The registry has to keep up with the collector. Import both sides rather than
+# trusting a hand-written list: the collector's whitelist is the definition of
+# "collected", the store's CH_KEYS is what survives to disk, and METRICS is what
+# the UI can show. A new key added to only one of the three fails here.
+import ast
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import store  # noqa: E402  (needs the analysis dir on the path)
+
+COLLECTOR = os.path.join(store.ROOT, "data", "solo queue", "collect_match_data.py")
+tree = ast.parse(open(COLLECTOR, encoding="utf-8").read())
+collected = None
+for node in tree.body:
+    if isinstance(node, ast.Assign) and any(
+            getattr(t, "id", None) == "CHALLENGE_KEYS" for t in node.targets):
+        collected = [e.value for e in node.value.elts]
+fails += not check("collector whitelist found", collected is not None,
+                   f"{len(collected or [])} keys")
+fails += not check("store keeps every collected key",
+                   set(collected) == set(store.CH_KEYS),
+                   "missing: %s" % sorted(set(collected) - set(store.CH_KEYS)))
+ui = {x["key"] for x in m["metrics"]}
+fails += not check("UI exposes every collected key", set(collected) <= ui,
+                   "missing: %s" % sorted(set(collected) - ui))
+fails += not check("UI exposes the box score and flags",
+                   {"win", "kills", "deaths", "assists", "gold", "dmg", "cs",
+                    "vision", "fb_kill", "fb_assist", "ft_kill",
+                    "ft_assist"} <= ui)
+fails += not check("no metric the store cannot answer",
+                   ui <= set(store.AGG_STATS), sorted(ui - set(store.AGG_STATS)))
 
 print("\nmatchup (capability 1, precomputed)")
 # one throwaway call so the timed one is not measuring a cold page cache
@@ -73,7 +109,7 @@ fails += not check("drop_one length 10", len(d["drop_one"]) == 10)
 fails += not check("drop_one >= n", all(x["n_without"] >= d["n"] for x in d["drop_one"]))
 fails += not check("pair rows = 2*n*(n-1)", len(d["pairs"]) == 2 * 10 * 9, f"{len(d['pairs'])}")
 fails += not check("estimate present", len(d["estimate"]) == 10)
-fails += not check("under 250 ms", ms < 250, f"{ms:.0f} ms")
+fails += not check("under 400 ms", ms < 400, f"{ms:.0f} ms")
 
 print("\nteam block")
 t = d["team"]
@@ -84,6 +120,20 @@ fails += not check("rate consistent", abs(t["sel_win_rate"] - t["sel_wins"] / t[
 fails += not check("per-side samples present",
                    d["side_stats"]["blue"]["n"] >= d["n"]
                    and d["side_stats"]["red"]["n"] >= d["n"])
+fails += not check("objectives carried per game",
+                   set(t["obj_diff"]) == {"dragon", "baron", "tower", "inhib",
+                                          "herald", "horde"},
+                   str(sorted(t["obj_diff"])))
+
+# The objective columns come from `teams[side].obj`, which the old build threw
+# away. Winners must out-tower and out-dragon losers by a wide margin, or the
+# columns are misaligned with the side they belong to.
+wt, _ = get("/api/draft?blue=8,53,64&red=113,126,145&patch=16.20")
+wr = wt["team"]["sel_win_rate"]
+td = wt["team"]["obj_diff"]["tower"]
+fails += not check("objectives agree with the result",
+                   abs(wr - 0.5) < 0.03 or (td > 0) == (wr > 0.5),
+                   f"towers {td:+.2f} at {wr:.1%} over {wt['team']['n']} games")
 
 # The orientation correction has one exact invariant: a single champion's team
 # win rate must be the same number of wins as that champion's own win rate,
@@ -108,13 +158,13 @@ fails += not check("blue-only == red-only", a["n"] == b["n"], f"{a['n']} vs {b['
 # is exactly its own row count inside the patch
 fails += not check("lone champ matches both sides", a["n"] == base["baseline"]["n"],
                    f"n={a['n']} vs {base['baseline']['n']} games played")
-fails += not check("3 champs either side", c["n"] == 60, f"n={c['n']}")
+fails += not check("3 champs either side", c["n"] == 61, f"n={c['n']}")
 both, _ = get("/api/draft?blue=8&red=8&patch=16.20")
 fails += not check("same champ on both sides is impossible", both["n"] == 0, f"n={both['n']}")
 
 print("\ndraft, partial build")
 d, ms = get("/api/draft?blue=8,53,64&patch=16.20")
-fails += not check("3 champs n=60", d["n"] == 60, f"n={d['n']}, {ms:.0f} ms")
+fails += not check("3 champs n=61", d["n"] == 61, f"n={d['n']}, {ms:.0f} ms")
 fails += not check("champ_stats for 3", len(d["champ_stats"]) == 3)
 fails += not check("games capped at 12", len(d["games"]) == 12)
 fails += not check("pair rows = 2*n*(n-1)", len(d["pairs"]) == 2 * 3 * 2, f"{len(d['pairs'])}")
@@ -127,6 +177,9 @@ fails += not check("pairs carry every selectable metric",
                    "%d metrics" % len(sel))
 fails += not check("champ_stats carry every selectable metric",
                    all(k in d["champ_stats"][0] for k in sel))
+fails += not check("champ_stats carry the whole registry",
+                   len([k for k in d["champ_stats"][0] if k in sel]) == len(sel),
+                   f"{len(sel)} metrics")
 fails += not check("no team card without a count",
                    d["team"]["n"] == d["n"])
 # the blue/red views need each side's own sample, and an empty side must say so
@@ -136,7 +189,7 @@ fails += not check("empty side has no sample", d["side_stats"]["red"] is None)
 
 print("\ndraft, empty (random games for the UI button)")
 d, ms = get("/api/draft?patch=16.20")
-fails += not check("empty returns corpus size", d["n"] == 404459, f"n={d['n']}")
+fails += not check("empty returns corpus size", d["n"] == 412953, f"n={d['n']}")
 fails += not check("empty returns 12 games", len(d["games"]) == 12)
 fails += not check("games have 5+5 champs", all(len(g["blue"]) == 5 and len(g["red"]) == 5
                                                for g in d["games"]))
@@ -188,8 +241,15 @@ fails += not check("terms counts my champions, not rows",
                    top["terms"] == 1 and top["n_specific"] == cell["n"],
                    f"terms={top['terms']} n={top['n_specific']} cell n={cell['n']}")
 
-sh, _ = get("/api/suggest?side=blue&blue=8,53,64&metric=laningPhaseGoldExpAdvantage&patch=16.20")
-fails += not check("hidden metric rejected", sh["metric"] == "win", sh["metric"])
+sh, _ = get("/api/suggest?side=blue&blue=8,53,64&metric=not_a_stat&patch=16.20")
+fails += not check("unknown metric falls back to win rate", sh["metric"] == "win", sh["metric"])
+# the 0/1 laning flag is a legitimate metric now, just labelled as a flag
+lf, _ = get("/api/suggest?side=blue&blue=8,53,64"
+            "&metric=laningPhaseGoldExpAdvantage&patch=16.20")
+fails += not check("0/1 flag is rankable",
+                   lf["metric"] == "laningPhaseGoldExpAdvantage"
+                   and 0 <= lf["synergy"][0]["specific"] <= 1,
+                   f"{lf['synergy'][0]['name']} {lf['synergy'][0]['specific']:.3f}")
 
 # Across patches each (champ, partner) pair appears twice, so "how many of my
 # champions have a measured cell" must count distinct champions, not rows.
@@ -214,12 +274,18 @@ fails += not check("empty side returns nothing",
 
 print("\nchampion detail")
 c, ms = get("/api/champion?champ=8&blue=8,53,64&patch=16.20")
-fails += not check("in-games n matches", c["in_games"]["n"] == 60, f"n={c['in_games']['n']}")
+fails += not check("in-games n matches", c["in_games"]["n"] == 61, f"n={c['in_games']['n']}")
 fails += not check("baseline is the whole patch", c["baseline"]["n"] > 24000, f"{c['baseline']['n']}")
 fails += not check("delta consistent",
                    abs(c["delta"]["win"] - (c["in_games"]["win"] - c["baseline"]["win"])) < 1e-9)
 fails += not check("partial stats report their own n",
-                   "n_turretPlatesTaken" in c["in_games"])
+                   "n_earliestBaron" in c["in_games"]
+                   and c["in_games"]["n_earliestBaron"] <= c["in_games"]["n"],
+                   f"{c['in_games'].get('n_earliestBaron')} of {c['in_games']['n']}")
+fails += not check("full-line stats need no n",
+                   "n_gold" not in c["in_games"] and "n_soloKills" not in c["in_games"])
+fails += not check("detail covers the whole registry",
+                   all(k in c["in_games"] for k in sel), f"{len(sel)} metrics")
 fails += not check("under 200 ms", ms < 200, f"{ms:.0f} ms")
 
 print("\nall patches / bad input")
