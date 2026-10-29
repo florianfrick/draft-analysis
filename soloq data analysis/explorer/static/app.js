@@ -7,7 +7,7 @@ const S = {
   m: { x: null, y: null, mode: "with", role: "" },
   pickTarget: null,
   draft: null, openChamp: null, stat: null,
-  req: 0, sugReq: 0, detail: {}, sugCache: null,
+  req: 0, sugReq: 0, detail: {}, sugCache: null, openSug: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -323,6 +323,7 @@ function loadDraft() {
     if (d.error) { $("draft-results").innerHTML = `<div class="card">${d.error}</div>`; return; }
     S.draft = d;
     S.openChamp = null;
+    S.openSug = null;
     renderDraft(d);
   }, 40);
 }
@@ -721,10 +722,12 @@ function gamesCard(d) {
   return card;
 }
 
-/* ------------------------------------------------- suggestions (both sides) */
-/* One card, two columns. Each column answers both questions for its side:
-   what to add to it, and what to add to the other side to beat it. The lists
-   are fetched together so the two columns can never disagree about the draft. */
+/* ---------------------------------------------------- what to add next */
+/* One row, two columns: the best additions for each side. A side with nothing
+   picked is measured against the other side instead of alongside it, so a
+   column is never empty while a draft exists. The + on the left adds the
+   champion; the rest of the row opens the pair cells the headline is averaged
+   from, because "54% over 300 games" is only as good as the cells behind it. */
 function suggestHost(d) {
   const card = el("div", "card");
   const key = `${d.blue.join(",")}/${d.red.join(",")}/${S.metric}/${S.patch}`;
@@ -757,15 +760,23 @@ async function fillSuggest(card, d, key) {
 
 function paintSuggest(card, d, sug) {
   card.innerHTML = suggestHtml(d, sug);
-  card.querySelectorAll("tr.addable").forEach((tr) => {
+  /* the + adds; it must not also open the breakdown underneath */
+  card.querySelectorAll("button.addbtn").forEach((b) => {
+    b.onclick = (e) => {
+      e.stopPropagation();
+      addChamp(b.dataset.side, S.byRiot[Number(b.dataset.riot)]);
+    };
+  });
+  card.querySelectorAll("tr.sugrow").forEach((tr) => {
     tr.onclick = () => {
-      if (tr.classList.contains("full")) return;
-      addChamp(tr.dataset.side, S.byRiot[Number(tr.dataset.riot)]);
+      const k = tr.dataset.side + ":" + tr.dataset.riot;
+      S.openSug = S.openSug === k ? null : k;
+      paintSuggest(card, d, sug);
     };
   });
 }
 
-/* clicking a suggestion fills the next empty slot on that side */
+/* clicking + fills the next empty slot on that side */
 function addChamp(side, c) {
   if (!c) return;
   if ([...S.blue, ...S.red].some((x) => x && x.riot === c.riot)) return;
@@ -782,79 +793,132 @@ function suggestHtml(d, sug) {
     const s = sug.sides[side];
     const other = side === "blue" ? "red" : "blue";
     const st = d.side_stats && d.side_stats[side];
-    const rate = st && st.sel_win_rate !== null && st.n
-      ? ` · ${pct(st.sel_win_rate)} over ${plural(st.n, "game")}` : "";
-    const head = `<div class="sughead">
-      <span class="dot ${side}"></span><b>${side}</b>
-      <span class="tiny muted">${s.mine.length
-        ? `${s.mine.length} of 5 picked${rate}` : "no champions yet"}</span>
-    </div>`;
-    if (!s.mine.length) {
-      return `<div class="sugcol ${side}">${head}
-        <p class="muted tiny">Add a champion to ${side} to see what fits alongside it.
-        Until then, the “answers to ${other}” list in the ${other} column is exactly
-        what to pick here.</p></div>`;
-    }
-    return `<div class="sugcol ${side}">${head}
-      <div class="sugblock">
-        <div class="sugtitle">best allies
-          <span class="tiny muted">— would join ${side}</span></div>
-        ${sugTable(s.synergy, side, S[side].every(Boolean))}
+    const rate = s.basis === "with" && st && st.sel_win_rate !== null && st.n
+      ? ` · ${pct(st.sel_win_rate)} in ${plural(st.n, "game")}` : "";
+    /* say which set of champions the number was measured against, because
+       "alongside blue" and "against red" are different claims */
+    const basis = s.basis === "vs"
+      ? `measured against ${other}'s ${plural(s.subject.length, "pick")}`
+      : `measured alongside ${side}'s ${plural(s.subject.length, "pick")}`;
+    return `<div class="sugcol ${side}">
+      <div class="sughead">
+        <span class="dot ${side}"></span><b>Best for ${side}</b>
+        <span class="tiny muted">${basis}${rate}</span>
       </div>
-      <div class="sugblock">
-        <div class="sugtitle">best answers to ${side}
-          <span class="tiny muted">— would join ${other}</span></div>
-        ${sugTable(s.counter, other, S[other].every(Boolean))}
-      </div>
+      ${sugTable(s, side)}
     </div>`;
   };
   return `<h3>What to add next</h3>
-    <div class="hint tiny muted">Top five per list, ranked by <b>${m.label}</b> in
-      games against the champions already on that side. Click a row to add it.</div>
+    <div class="hint tiny muted">One list per side, ranked by <b>${m.label}</b>.
+      <b>+</b> puts the champion on that team; clicking the row breaks the number
+      into the pair cells it is averaged from.</div>
     <div class="sugcols">${col("blue")}${col("red")}</div>
     <details class="methods">
       <summary class="tiny">how these five are chosen</summary>
       <div class="tiny muted">
-        <p>Every champion not already in the draft is scored against one side at a time,
-        using only its 2-way cells with those champions: <b>allies</b> are the games where
-        it shared a team with at least one of them, <b>answers</b> are the games where it
-        faced at least one. The value is that champion's own ${m.label} in those games, so
-        the list answers “how does it do next to these champions”, not “how good is it”.</p>
-        <p><b>games</b> is the number of distinct games behind the value: a game where the
-        candidate played alongside two of yours counts once. <b>vs own avg</b> is the gap
-        to that champion's average across the whole patch — a big positive gap on a small
-        game count is the interesting case, and also the one most likely to be noise.</p>
+        <p>Each column answers one question: which champion would most help that
+        side. A side that already has picks is measured <b>alongside</b> them — its
+        games with at least one of those champions on its own team. A side with
+        nothing picked is measured <b>against</b> the other side instead, since
+        there is nothing for it to stand next to yet.</p>
+        <p>Only 2-way cells are used. Every champion not already in the draft is
+        scored from the precomputed pair cube, the best 14 are re-measured on the
+        games table, and the top five are shown — so <b>games</b> is a count of
+        distinct games, not a sum of cells. <b>vs own avg</b> is the gap to that
+        champion's average over the whole patch: a large gap on a small count is
+        the interesting case and also the one most likely to be noise.</p>
+        <p>Clicking a row splits the headline into the individual pair cells
+        behind it, one per champion on the other side of the comparison. Those
+        cells overlap — a game where two of the picks were on the team counts in
+        both — so together they cover more games than the headline. The headline
+        is the deduplicated union, and its mean is taken over games, not over
+        cells.</p>
         <p>${m.partial
-          ? `This stat is recorded for ${(m.cov * 100).toFixed(0)}% of player-rows, so games without it are skipped and the count is lower than the games played.`
+          ? `This stat is recorded for ${(m.cov * 100).toFixed(0)}% of player-rows.
+             Averages are taken over the rows that carry it, while the game counts
+             are all matching games, so a count can be larger than the sample
+             behind the average.`
           : "Every matching game carries this stat."}</p>
       </div>
     </details>`;
 }
 
-function sugTable(items, addSide, full) {
-  if (!items || !items.length) {
-    return `<p class="muted tiny">No champion has a measured game here.</p>`;
+function sugTable(s, addSide) {
+  const m = S.byKey[S.metric];
+  const items = s.best || [];
+  if (!items.length) {
+    return `<p class="muted tiny">No champion has a measured game here yet.</p>`;
   }
+  const full = S[addSide].every(Boolean);
   const maxAbs = Math.max(...items.map((x) => Math.abs(x.delta)), 1e-9);
   let html = `<table class="stats sug"><thead><tr>
-    <th>champion</th><th>${S.byKey[S.metric].label}</th>
+    <th class="addcol"></th><th>champion</th><th>${m.label}</th>
     <th>games</th><th>vs own avg</th>
   </tr></thead><tbody>`;
   items.forEach((x) => {
     const c = S.byRiot[x.riot];
     const dcls = dclsOf(S.metric, x.delta);
     const w = Math.min(100, Math.abs(x.delta) / maxAbs * 100);
-    html += `<tr class="addable ${full ? "full" : ""}" data-riot="${x.riot}"
-        data-side="${addSide}"
-        title="${full ? `${addSide} is full` : `add ${x.name} to ${addSide}`}">
-      <td class="champ">${img(c)}<span>${x.name}</span><i class="addmark">+</i></td>
+    const open = S.openSug === addSide + ":" + x.riot;
+    const addTitle = full ? `${addSide} is full`
+      : `add ${x.name} to ${addSide}`;
+    html += `<tr class="sugrow ${open ? "open" : ""}" data-riot="${x.riot}"
+        data-side="${addSide}" title="click for the pair cells behind this number">
+      <td class="addcol"><button class="addbtn" data-riot="${x.riot}"
+        data-side="${addSide}" ${full ? "disabled" : ""}
+        title="${addTitle}">+</button></td>
+      <td class="champ">${img(c)}<span>${x.name}</span></td>
       <td>${fmtMetric(S.metric, x.specific)}</td>
       <td class="flat">${x.n.toLocaleString()}</td>
       <td class="${dcls}">${fmtDelta(S.metric, x.delta)}
         <div class="minibar"><i class="${dcls}" style="width:${w}%"></i></div></td>
     </tr>`;
+    if (open) html += `<tr class="brkrow"><td colspan="5">${breakdown(x, s)}</td></tr>`;
   });
   return html + `</tbody></table>`;
+}
+
+/* The headline, then every pair cell it is made of. Read-only: the parts are
+   context for the number, not another set of things to add. */
+function breakdown(x, s) {
+  const m = S.byKey[S.metric];
+  const parts = x.parts || [];
+  const cover = parts.reduce((a, p) => a + p.n, 0);
+  const maxAbs = Math.max(...parts.map((p) => Math.abs(p.delta)), 1e-9);
+  const cond = s.basis === "vs"
+    ? `facing at least one of ${plural(s.subject.length, "pick")}`
+    : `sharing a team with at least one of ${plural(s.subject.length, "pick")}`;
+  let rows = parts.map((p) => {
+    const dcls = dclsOf(S.metric, p.delta);
+    const w = Math.min(50, Math.abs(p.delta) / maxAbs * 50);
+    /* a bar that grows out from the champion's own average, so the cells that
+       pull the headline up and the ones that pull it down are both visible */
+    const bar = `<div class="dbar"><b></b><i class="${dcls}" style="${
+      p.delta >= 0 ? `left:50%;width:${w}%` : `right:50%;width:${w}%`}"></i></div>`;
+    return `<tr>
+      <td class="champ">${img(S.byRiot[p.riot])}<span>${p.name}</span></td>
+      <td>${fmtMetric(S.metric, p.value)}</td>
+      <td class="flat">${p.n.toLocaleString()}</td>
+      <td class="${dcls}">${fmtDelta(S.metric, p.delta)}${bar}</td>
+    </tr>`;
+  }).join("");
+  return `<div class="brkbox">
+    <div class="brkhead">
+      <span><b>${x.name}</b> ${fmtMetric(S.metric, x.specific)}
+        over ${plural(x.n, "game")} ${cond}</span>
+      <span class="tiny muted">own average ${fmtMetric(S.metric, x.general)}
+        over ${plural(x.n_general, "game")}</span>
+    </div>
+    ${parts.length ? `<table class="stats brk">
+      <thead><tr><th>${s.basis === "vs" ? "opponent" : "teammate"}</th>
+        <th>${m.label}</th><th>games</th><th>vs own avg</th></tr></thead>
+      <tbody>${rows}</tbody></table>` : `<p class="muted tiny">No per-champion cell.</p>`}
+    <p class="tiny muted">Each row is one pair cell: ${x.name} in the games where
+      that champion was ${s.basis === "vs" ? "on the other side" : "on the same team"}.
+      The cells overlap — a game with two of the picks sits in two of them — so
+      together they cover ${plural(cover, "game")} against the
+      ${plural(x.n, "game")} above. The headline is the deduplicated union.</p>
+  </div>`;
 }
 
 

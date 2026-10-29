@@ -5,7 +5,8 @@ Answers the questions the draft UI needs, from measured data only:
   matchup   avg stats of champ X when paired with / against champ Y   (2-way)
   draft     given the picks built so far, how many games match, how the two
             teams fared, and what each champion actually did             (N-way)
-  suggest   which champions would best complete / counter a team        (2-way)
+  suggest   which champion would help a side most, and the pair cells behind
+            that number                                                (2-way)
   champion  one champion's full stat line inside the matching games     (N-way)
 
 Design notes
@@ -635,10 +636,19 @@ def _sample_games(con, names, patch, limit=12):
 
 
 def api_suggest(con, blue, red, metric, patch, top=5, pool=14):
-    """Best allies to add to each side, and best answers to each side.
+    """One ranked list per side: the champions that would help that side most.
 
-    The two lists answer different questions and are read from different
-    places on purpose:
+    Each side is measured against whichever champions it can be measured
+    against, and the response says which, because the two are different claims:
+
+      basis 'with'  the side already has picks, so a candidate is ranked by how
+                    it does *alongside* them
+      basis 'vs'    the side is empty, so a candidate is ranked by how it does
+                    *against* the other side - the same question asked from the
+                    other end, and the only one answerable before the side has
+                    a pick of its own
+
+    The measurement is two-step on purpose:
 
       pool    every candidate is ranked cheaply from the 2-way cube, which is
               dense (median 370-495 games per cell) and covers all 173 champs
@@ -650,10 +660,14 @@ def api_suggest(con, blue, red, metric, patch, top=5, pool=14):
               is used to choose the shortlist and the table to report the
               number that is actually shown.
 
+    `parts` breaks that headline back down into the overlapping cells it came
+    from - one per champion on the subject side - so the UI can show what the
+    average is made of. The parts are not meant to add up to the headline: a
+    game with two of the picks sits in two cells and in one headline game.
+
     `delta` compares the candidate with its own average over the patch, which
     is what separates "a strong champion" from "a strong champion into this
-    draft". A side with no champions gets empty lists - there is nothing to
-    synergise with or to answer.
+    draft".
     """
     m = metric if metric in METRIC_BY_KEY and not METRIC_BY_KEY[metric].get("hidden") else "win"
     sign = METRIC_BY_KEY[m]["better"]
@@ -713,37 +727,71 @@ def api_suggest(con, blue, red, metric, patch, top=5, pool=14):
         return {int(r[0]): (int(r[1]), _num(r[2]), int(r[3]), _num(r[4]))
                 for r in rows}
 
+    def parts_for(ids, subject, kind):
+        """The pairwise cells behind each candidate's headline number.
+
+        One row per (candidate, subject champion), straight from the cube, so
+        each part is a real 2-way measurement rather than a share of an
+        average. Across patches the cell is the n-weighted union of its two
+        patch rows, the same rule `cube_cell` uses.
+        """
+        if not ids or not subject:
+            return {}
+        wavg = ("sum(%s * n) / nullif(sum(CASE WHEN %s IS NOT NULL THEN n END), 0)"
+                % (m, m))
+        rows = con.execute(f"""
+          SELECT champ, partner, sum(n), {wavg}
+          FROM cube2
+          WHERE kind = '{kind}'
+            AND champ IN ({",".join("?" * len(ids))})
+            AND partner IN ({",".join("?" * len(subject))}){pat}
+          GROUP BY 1, 2""", ids + subject + pp).fetchall()
+        out_parts = {}
+        for champ, partner, n, v in rows:
+            val = _num(v)
+            g = general.get(int(champ))
+            if val is None or not g or g[1] is None:
+                continue
+            out_parts.setdefault(int(champ), []).append({
+                "riot": int(partner), "name": names.get(int(partner), str(partner)),
+                "n": int(n), "value": val, "delta": val - g[1],
+            })
+        for lst in out_parts.values():
+            lst.sort(key=lambda x: (sign * x["value"], -x["n"]), reverse=True)
+        return out_parts
+
     for side, mine, other in (("blue", blue, red), ("red", red, blue)):
-        side_out = {"mine": mine, "synergy": [], "counter": []}
+        basis = "with" if mine else "vs"
+        subject = mine if mine else other
+        side_out = {"side": side, "mine": mine, "basis": basis,
+                    "subject": subject, "best": []}
         out["sides"][side] = side_out
-        if not mine:
+        if not subject:
             continue
         excl = set(mine) | set(other)
-        syn_ids = shortlist("with", mine, excl)
-        ctr_ids = shortlist("vs", mine, excl)
-        exact = measure(sorted(set(syn_ids) | set(ctr_ids)), mine)
+        ids = shortlist(basis, subject, excl)
+        exact = measure(ids, subject)
+        parts = parts_for(ids, subject, basis)
+        idx = 0 if basis == "with" else 2
 
-        def build(ids, idx):
-            items = []
-            for cand in ids:
-                row = exact.get(cand)
-                if not row:
-                    continue
-                n, val = row[idx], row[idx + 1]
-                g = general.get(cand)
-                if not n or val is None or not g or g[1] is None:
-                    continue
-                items.append({
-                    "riot": cand, "name": names.get(cand, str(cand)),
-                    "specific": val, "n": int(n),
-                    "general": g[1], "n_general": g[0],
-                    "delta": val - g[1],
-                })
-            items.sort(key=lambda x: (sign * x["specific"], -x["n"]), reverse=True)
-            return items[:top]
-
-        side_out["synergy"] = build(syn_ids, 0)
-        side_out["counter"] = build(ctr_ids, 2)
+        items = []
+        for cand in ids:
+            row = exact.get(cand)
+            if not row:
+                continue
+            n, val = row[idx], row[idx + 1]
+            g = general.get(cand)
+            if not n or val is None or not g or g[1] is None:
+                continue
+            items.append({
+                "riot": cand, "name": names.get(cand, str(cand)),
+                "specific": val, "n": int(n),
+                "general": g[1], "n_general": g[0],
+                "delta": val - g[1],
+                "parts": parts.get(cand, []),
+            })
+        items.sort(key=lambda x: (sign * x["specific"], -x["n"]), reverse=True)
+        side_out["best"] = items[:top]
 
     out["partial"] = bool(METRIC_BY_KEY[m].get("partial"))
     out["cov"] = METRIC_BY_KEY[m].get("cov")
