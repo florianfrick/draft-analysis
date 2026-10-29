@@ -57,11 +57,16 @@ function fmtMetric(key, v) {
 function fmtDelta(key, d) {
   const m = S.byKey[key];
   if (d === null || d === undefined) return "";
-  if (!m) return (d > 0 ? "+" : "") + d.toFixed(1);
-  if (m.fmt === "pct") return (d > 0 ? "+" : "") + (d * 100).toFixed(1) + " pts";
-  if (m.fmt === "int") return (d > 0 ? "+" : "") + Math.round(d).toLocaleString();
-  if (m.fmt === "sec") return (d > 0 ? "+" : "") + Math.round(d) + "s";
-  return (d > 0 ? "+" : "") + d.toFixed(1);
+  let body, suffix = "";
+  if (!m) body = d.toFixed(1);
+  else if (m.fmt === "pct") { body = (d * 100).toFixed(1); suffix = " pts"; }
+  else if (m.fmt === "int") body = Math.round(d).toLocaleString();
+  else if (m.fmt === "sec") { body = String(Math.round(d)); suffix = "s"; }
+  else body = d.toFixed(1);
+  /* a delta that rounds to zero is zero, not "-0.0" */
+  const mag = Number(body.replace(/[^0-9.]/g, ""));
+  if (body.startsWith("-") && mag === 0) body = body.slice(1);
+  return (d > 0 && mag > 0 ? "+" : "") + body + suffix;
 }
 const signOf = (key) => (S.byKey[key] && S.byKey[key].better < 0 ? -1 : 1);
 /* a delta is "good" when it moves in the metric's preferred direction */
@@ -793,46 +798,52 @@ function suggestHtml(d, sug) {
     const s = sug.sides[side];
     const other = side === "blue" ? "red" : "blue";
     const st = d.side_stats && d.side_stats[side];
-    const rate = s.basis === "with" && st && st.sel_win_rate !== null && st.n
+    const rate = s.mine.length && st && st.sel_win_rate !== null && st.n
       ? ` · ${pct(st.sel_win_rate)} in ${plural(st.n, "game")}` : "";
-    /* say which set of champions the number was measured against, because
-       "alongside blue" and "against red" are different claims */
-    const basis = s.basis === "vs"
-      ? `measured against ${other}'s ${plural(s.subject.length, "pick")}`
-      : `measured alongside ${side}'s ${plural(s.subject.length, "pick")}`;
+    /* both comparisons, always, and each one named: "with blue" and "vs red"
+       are different claims and the row now carries both */
+    const parts = [];
+    if (s.mine.length) parts.push(`with ${side}'s ${plural(s.mine.length, "pick")}`);
+    if (s.other.length) parts.push(`against ${other}'s ${plural(s.other.length, "pick")}`);
     return `<div class="sugcol ${side}">
       <div class="sughead">
         <span class="dot ${side}"></span><b>Best for ${side}</b>
-        <span class="tiny muted">${basis}${rate}</span>
+        <span class="tiny muted">${parts.join(" · ")}${rate}</span>
       </div>
       ${sugTable(s, side)}
     </div>`;
   };
   return `<h3>What to add next</h3>
-    <div class="hint tiny muted">One list per side, ranked by <b>${m.label}</b>.
-      <b>+</b> puts the champion on that team; clicking the row breaks the number
-      into the pair cells it is averaged from.</div>
+    <div class="hint tiny muted">Every row is measured twice — <b>with</b> that side's
+      picks and <b>against</b> the other side's — and combined into <b>if added</b>,
+      which is what the list is ordered on. <b>+</b> puts the champion on that team;
+      clicking the row opens the pair cells behind all three.</div>
     <div class="sugcols">${col("blue")}${col("red")}</div>
     <details class="methods">
       <summary class="tiny">how these five are chosen</summary>
       <div class="tiny muted">
-        <p>Each column answers one question: which champion would most help that
-        side. A side that already has picks is measured <b>alongside</b> them — its
-        games with at least one of those champions on its own team. A side with
-        nothing picked is measured <b>against</b> the other side instead, since
-        there is nothing for it to stand next to yet.</p>
+        <p>A candidate is measured against both sides at once, because both are
+        known: <b>with</b> is its games alongside at least one of that side's
+        picks, <b>vs</b> is its games against at least one of the other side's.
+        A side with no picks has no "with" group and the estimate falls back to
+        the one comparison that exists.</p>
+        <p><b>if added</b> is that champion's own average over the patch plus the
+        mean of the two shifts — one shift for each side, weighted equally so
+        three allies cannot outvote five opponents. It is a model, not a
+        measurement: the two shifts are each measured on thousands of games, but
+        combining them assumes the pair effects add up.</p>
+        <p>The direct measurement is <b>both at once</b> in the breakdown: games
+        where the candidate was beside one of yours <i>and</i> opposite one of
+        theirs. That is the exact situation it would be drafted into, and it
+        covers only a few hundred games, so the top five by that number barely
+        agrees with the top five by the pooled evidence. The list is ordered on
+        the pooled estimate for that reason.</p>
         <p>Only 2-way cells are used. Every champion not already in the draft is
         scored from the precomputed pair cube, the best 14 are re-measured on the
         games table, and the top five are shown — so <b>games</b> is a count of
-        distinct games, not a sum of cells. <b>vs own avg</b> is the gap to that
-        champion's average over the whole patch: a large gap on a small count is
-        the interesting case and also the one most likely to be noise.</p>
-        <p>Clicking a row splits the headline into the individual pair cells
-        behind it, one per champion on the other side of the comparison. Those
-        cells overlap — a game where two of the picks were on the team counts in
-        both — so together they cover more games than the headline. The headline
-        is the deduplicated union, and its mean is taken over games, not over
-        cells.</p>
+        distinct games, not a sum of cells. Cells overlap: a game with two of the
+        picks sits in two of them, so each union covers fewer games than its cells
+        added up.</p>
         <p>${m.partial
           ? `This stat is recorded for ${(m.cov * 100).toFixed(0)}% of player-rows.
              Averages are taken over the rows that carry it, while the game counts
@@ -849,50 +860,60 @@ function sugTable(s, addSide) {
   if (!items.length) {
     return `<p class="muted tiny">No champion has a measured game here yet.</p>`;
   }
+  const other = addSide === "blue" ? "red" : "blue";
   const full = S[addSide].every(Boolean);
-  const maxAbs = Math.max(...items.map((x) => Math.abs(x.delta)), 1e-9);
+  /* a comparison with no picks on that side has nothing to show, so its column
+     is dropped rather than filled with dashes */
+  const cols = [];
+  if (s.mine.length) cols.push({ kind: "with", label: `with ${addSide}` });
+  if (s.other.length) cols.push({ kind: "vs", label: `vs ${other}` });
+  const ncols = cols.length + 3;
+
   let html = `<table class="stats sug"><thead><tr>
-    <th class="addcol"></th><th>champion</th><th>${m.label}</th>
-    <th>games</th><th>vs own avg</th>
+    <th class="addcol"></th><th>champion</th>
+    ${cols.map((c) => `<th class="num">${c.label}</th>`).join("")}
+    <th class="num">if added</th>
   </tr></thead><tbody>`;
   items.forEach((x) => {
     const c = S.byRiot[x.riot];
-    const dcls = dclsOf(S.metric, x.delta);
-    const w = Math.min(100, Math.abs(x.delta) / maxAbs * 100);
     const open = S.openSug === addSide + ":" + x.riot;
-    const addTitle = full ? `${addSide} is full`
-      : `add ${x.name} to ${addSide}`;
+    const addTitle = full ? `${addSide} is full` : `add ${x.name} to ${addSide}`;
+    const cells = cols.map((col) => {
+      const g = (x.groups || {})[col.kind];
+      if (!g) return `<td class="num flat">—</td>`;
+      return `<td class="num"><span class="v">${fmtMetric(S.metric, g.value)}</span>
+        <span class="g">${plural(g.n, "game")}</span></td>`;
+    }).join("");
+    const ed = x.est.delta;
     html += `<tr class="sugrow ${open ? "open" : ""}" data-riot="${x.riot}"
-        data-side="${addSide}" title="click for the pair cells behind this number">
+        data-side="${addSide}" title="click for the pair cells behind these numbers">
       <td class="addcol"><button class="addbtn" data-riot="${x.riot}"
         data-side="${addSide}" ${full ? "disabled" : ""}
         title="${addTitle}">+</button></td>
       <td class="champ">${img(c)}<span>${x.name}</span></td>
-      <td>${fmtMetric(S.metric, x.specific)}</td>
-      <td class="flat">${x.n.toLocaleString()}</td>
-      <td class="${dcls}">${fmtDelta(S.metric, x.delta)}
-        <div class="minibar"><i class="${dcls}" style="width:${w}%"></i></div></td>
+      ${cells}
+      <td class="num"><span class="v">${fmtMetric(S.metric, x.est.value)}</span>
+        <span class="g ${dclsOf(S.metric, ed)}">${fmtDelta(S.metric, ed)}</span></td>
     </tr>`;
-    if (open) html += `<tr class="brkrow"><td colspan="5">${breakdown(x, s)}</td></tr>`;
+    if (open) html += `<tr class="brkrow"><td colspan="${ncols}">${breakdown(x, s)}</td></tr>`;
   });
   return html + `</tbody></table>`;
 }
 
-/* The headline, then every pair cell it is made of. Read-only: the parts are
-   context for the number, not another set of things to add. */
+/* Everything behind a row: each pair cell, the union of each group, and the two
+   numbers the row shows. Read-only - the cells are context, not things to add. */
 function breakdown(x, s) {
   const m = S.byKey[S.metric];
-  const parts = x.parts || [];
-  const cover = parts.reduce((a, p) => a + p.n, 0);
-  const maxAbs = Math.max(...parts.map((p) => Math.abs(p.delta)), 1e-9);
-  const cond = s.basis === "vs"
-    ? `facing at least one of ${plural(s.subject.length, "pick")}`
-    : `sharing a team with at least one of ${plural(s.subject.length, "pick")}`;
-  let rows = parts.map((p) => {
+  const other = s.side === "blue" ? "red" : "blue";
+  const parts = x.parts || {};
+  const all = [...(parts.with || []), ...(parts.vs || [])];
+  const maxAbs = Math.max(...all.map((p) => Math.abs(p.delta)), 1e-9);
+
+  const cell = (p) => {
     const dcls = dclsOf(S.metric, p.delta);
     const w = Math.min(50, Math.abs(p.delta) / maxAbs * 50);
     /* a bar that grows out from the champion's own average, so the cells that
-       pull the headline up and the ones that pull it down are both visible */
+       pull the shift up and the ones that pull it down are both visible */
     const bar = `<div class="dbar"><b></b><i class="${dcls}" style="${
       p.delta >= 0 ? `left:50%;width:${w}%` : `right:50%;width:${w}%`}"></i></div>`;
     return `<tr>
@@ -901,23 +922,50 @@ function breakdown(x, s) {
       <td class="flat">${p.n.toLocaleString()}</td>
       <td class="${dcls}">${fmtDelta(S.metric, p.delta)}${bar}</td>
     </tr>`;
-  }).join("");
+  };
+  const group = (kind, label, list) => {
+    const g = (x.groups || {})[kind];
+    if (!g || !list || !list.length) return "";
+    return `<tr class="grp"><td colspan="4">${label}</td></tr>
+      ${list.map(cell).join("")}
+      <tr class="sub"><td>union of the above</td>
+        <td>${fmtMetric(S.metric, g.value)}</td>
+        <td class="flat">${g.n.toLocaleString()}</td>
+        <td class="${dclsOf(S.metric, g.delta)}">${fmtDelta(S.metric, g.delta)}</td></tr>`;
+  };
+  const both = x.both;
+  const bothDelta = both ? both.value - x.base : null;
+  const thin = both && both.n < (S.meta.thresholds.strong || 200);
+  const twoSides = !!(x.groups.with && x.groups.vs);
+
   return `<div class="brkbox">
     <div class="brkhead">
-      <span><b>${x.name}</b> ${fmtMetric(S.metric, x.specific)}
-        over ${plural(x.n, "game")} ${cond}</span>
-      <span class="tiny muted">own average ${fmtMetric(S.metric, x.general)}
-        over ${plural(x.n_general, "game")}</span>
+      <span><b>${x.name}</b> — own average ${fmtMetric(S.metric, x.base)}
+        over ${plural(x.n_base, "game")}</span>
     </div>
-    ${parts.length ? `<table class="stats brk">
-      <thead><tr><th>${s.basis === "vs" ? "opponent" : "teammate"}</th>
-        <th>${m.label}</th><th>games</th><th>vs own avg</th></tr></thead>
-      <tbody>${rows}</tbody></table>` : `<p class="muted tiny">No per-champion cell.</p>`}
-    <p class="tiny muted">Each row is one pair cell: ${x.name} in the games where
-      that champion was ${s.basis === "vs" ? "on the other side" : "on the same team"}.
-      The cells overlap — a game with two of the picks sits in two of them — so
-      together they cover ${plural(cover, "game")} against the
-      ${plural(x.n, "game")} above. The headline is the deduplicated union.</p>
+    <table class="stats brk">
+      <thead><tr><th>pair</th><th>${m.label}</th><th>games</th>
+        <th>vs own avg</th></tr></thead>
+      <tbody>
+        ${group("with", `alongside ${s.side}'s ${plural(s.mine.length, "pick")}`, parts.with)}
+        ${group("vs", `against ${other}'s ${plural(s.other.length, "pick")}`, parts.vs)}
+        <tr class="total"><td>if added</td>
+          <td>${fmtMetric(S.metric, x.est.value)}</td>
+          <td class="flat">—</td>
+          <td class="${dclsOf(S.metric, x.est.delta)}">${fmtDelta(S.metric, x.est.delta)}</td></tr>
+        ${both ? `<tr class="total${thin ? " thin" : ""}"><td>both at once</td>
+          <td>${fmtMetric(S.metric, both.value)}</td>
+          <td class="flat">${both.n.toLocaleString()}${thin ? " · thin" : ""}</td>
+          <td class="${dclsOf(S.metric, bothDelta)}">${fmtDelta(S.metric, bothDelta)}</td></tr>` : ""}
+      </tbody>
+    </table>
+    <p class="tiny muted"><b>if added</b> ${twoSides
+      ? "is the own average plus the mean of the two unions — a combination, not a measurement."
+      : `is just the own average plus that one shift, so it repeats the column above.`}${both
+      ? ` <b>both at once</b> is the direct one: games where ${x.name} was beside
+        one of ${s.side}'s picks and opposite one of ${other}'s${
+        thin ? ", too few to order the list on" : ""}.`
+      : ""}</p>
   </div>`;
 }
 

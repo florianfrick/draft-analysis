@@ -636,21 +636,28 @@ def _sample_games(con, names, patch, limit=12):
 
 
 def api_suggest(con, blue, red, metric, patch, top=5, pool=14):
-    """One ranked list per side: the champions that would help that side most.
+    """Both sides of the board in every row: with your picks and against theirs.
 
-    Each side is measured against whichever champions it can be measured
-    against, and the response says which, because the two are different claims:
+    A candidate's number is not one measurement but three, and they answer
+    different questions:
 
-      basis 'with'  the side already has picks, so a candidate is ranked by how
-                    it does *alongside* them
-      basis 'vs'    the side is empty, so a candidate is ranked by how it does
-                    *against* the other side - the same question asked from the
-                    other end, and the only one answerable before the side has
-                    a pick of its own
+      with    its games alongside at least one of this side's picks
+      vs      its games against at least one of the other side's picks
+      both    its games that were *both* - beside one of yours and opposite one
+              of theirs, which is the situation it would actually be drafted
+              into
 
-    The measurement is two-step on purpose:
+    `both` is the most relevant and the thinnest: with 3 picks against 5 it
+    covers ~200-400 games per candidate, against 1,500-3,500 for each marginal.
+    Ranking on it is noise - measured here, the top five by `both` and the top
+    five by the pooled evidence share no champion at all - so the list is
+    ordered by `est`, the champion's own patch average plus the mean of the
+    two measured shifts. `both` is still reported: it is the only number that
+    is a measurement of the draft as it stands rather than a combination.
 
-      pool    every candidate is ranked cheaply from the 2-way cube, which is
+    Two-step measurement, on purpose:
+
+      pool    every candidate is scored cheaply from the 2-way cube, which is
               dense (median 370-495 games per cell) and covers all 173 champs
       final   the top `pool` are then re-measured on `wide`, where the number
               is a count of *distinct games*: "champion C in a game where at
@@ -660,21 +667,22 @@ def api_suggest(con, blue, red, metric, patch, top=5, pool=14):
               is used to choose the shortlist and the table to report the
               number that is actually shown.
 
-    `parts` breaks that headline back down into the overlapping cells it came
-    from - one per champion on the subject side - so the UI can show what the
-    average is made of. The parts are not meant to add up to the headline: a
-    game with two of the picks sits in two cells and in one headline game.
+    `parts` breaks each shift back down into the overlapping cells it came
+    from - one per champion on that side - so the UI can show what the average
+    is made of. The parts are not meant to add up to the shift: a game with two
+    of the picks sits in two cells and in one headline game.
 
-    `delta` compares the candidate with its own average over the patch, which
-    is what separates "a strong champion" from "a strong champion into this
-    draft".
+    A side with no picks has no `with` group and no `both` group; the estimate
+    then reduces to its own average plus the one shift that exists, so the
+    list is never empty while the draft has anything in it.
     """
     m = metric if metric in METRIC_BY_KEY and not METRIC_BY_KEY[metric].get("hidden") else "win"
-    sign = METRIC_BY_KEY[m]["better"]
+    spec = METRIC_BY_KEY[m]
+    sign = spec["better"]
     names = APP["names"]
     out = {"metric": m, "sides": {}}
 
-    # the candidate's own average over the patch, for the delta column
+    # the candidate's own average over the patch, for every delta here
     if patch:
         grow = con.execute(
             "SELECT champ, n, %s FROM champ_base WHERE patch = ?" % m, [patch]).fetchall()
@@ -687,114 +695,152 @@ def api_suggest(con, blue, red, metric, patch, top=5, pool=14):
     pat = " AND patch = ?" if patch else ""
     pp = [patch] if patch else []
 
-    def shortlist(kind, mine, excl):
-        """Cube-ranked candidates for one question (cheap, all 173 champs)."""
-        ph = ",".join("?" * len(mine))
-        wavg = ("sum(%s * n) / nullif(sum(CASE WHEN %s IS NOT NULL THEN n END), 0)"
-                % (m, m))
-        rows = con.execute(f"""
-          SELECT champ, sum(n), {wavg}
-          FROM cube2 WHERE kind = '{kind}' AND partner IN ({ph}){pat}
-          GROUP BY 1""", mine + pp).fetchall()
-        items = [(int(c), _num(v)) for c, n, v in rows
-                 if int(c) not in excl and _num(v) is not None]
-        items.sort(key=lambda x: sign * x[1], reverse=True)
-        return [c for c, _ in items[:pool]]
+    def shortlist(allies, enemies, excl):
+        """Cube-scored candidates: own average + mean of the two shifts.
 
-    def measure(ids, mine):
+        The cube's n-weighted union stands in for the exact union here; it is
+        only used to pick the 14 who get re-measured, so a small difference in
+        the overlap correction cannot change which champion is best.
+        """
+        partners = list(allies) + list(enemies)
+        if not partners:
+            return []
+        ph = ",".join("?" * len(partners))
+        rows = con.execute(f"""
+          SELECT champ,
+                 sum(n) FILTER (WHERE kind = 'with' AND {m} IS NOT NULL) n_w,
+                 sum({m} * n) FILTER (WHERE kind = 'with' AND {m} IS NOT NULL) s_w,
+                 sum(n) FILTER (WHERE kind = 'vs' AND {m} IS NOT NULL) n_e,
+                 sum({m} * n) FILTER (WHERE kind = 'vs' AND {m} IS NOT NULL) s_e
+          FROM cube2 WHERE partner IN ({ph}){pat}
+          GROUP BY 1""", partners + pp).fetchall()
+        scored = []
+        for c, n_w, s_w, n_e, s_e in rows:
+            c = int(c)
+            g = general.get(c)
+            if c in excl or not g or g[1] is None:
+                continue
+            shifts = [s / n - g[1] for n, s in ((n_w, s_w), (n_e, s_e)) if n]
+            if not shifts:
+                continue
+            scored.append((c, g[1] + sum(shifts) / len(shifts)))
+        scored.sort(key=lambda x: sign * x[1], reverse=True)
+        return [c for c, _ in scored[:pool]]
+
+    def measure(ids, allies, enemies):
         """Exact per-game numbers for a shortlist, one scan of `wide`.
 
-        The two membership tests are computed once per row in the inner select
-        and then filtered twice, so each `?` appears exactly once and one
-        champion's games are never counted twice.
+        The membership tests are computed once per row in the inner select and
+        then filtered, so each `?` appears exactly once and one champion's
+        games are never counted twice. `both` costs nothing extra: it is the
+        same two flags combined.
         """
         if not ids:
             return {}
-        ally = " OR ".join("list_contains(ally_champs, ?)" for _ in mine)
-        enemy = " OR ".join("list_contains(enemy_champs, ?)" for _ in mine)
+
+        def pred(col, champs):
+            if not champs:
+                return "FALSE", []
+            return (" OR ".join("list_contains(%s, ?)" % col for _ in champs),
+                    list(champs))
+
+        a_sql, a_p = pred("ally_champs", allies)
+        e_sql, e_p = pred("enemy_champs", enemies)
         rows = con.execute(f"""
           WITH t AS (
-            SELECT champ, {m} AS v, ({ally}) AS on_my_team, ({enemy}) AS vs_my_team
+            SELECT champ, {m} AS v, ({a_sql}) AS a, ({e_sql}) AS e
             FROM wide
             WHERE champ IN ({",".join("?" * len(ids))}){pat}
           )
           SELECT champ,
-                 count(*) FILTER (WHERE on_my_team) n_syn,
-                 avg(v) FILTER (WHERE on_my_team) v_syn,
-                 count(*) FILTER (WHERE vs_my_team) n_ctr,
-                 avg(v) FILTER (WHERE vs_my_team) v_ctr
-          FROM t GROUP BY 1""", mine + mine + ids + pp).fetchall()
-        return {int(r[0]): (int(r[1]), _num(r[2]), int(r[3]), _num(r[4]))
-                for r in rows}
+                 count(*) FILTER (WHERE a) n_w, avg(v) FILTER (WHERE a) v_w,
+                 count(*) FILTER (WHERE e) n_e, avg(v) FILTER (WHERE e) v_e,
+                 count(*) FILTER (WHERE a AND e) n_b, avg(v) FILTER (WHERE a AND e) v_b
+          FROM t GROUP BY 1""", a_p + e_p + ids + pp).fetchall()
+        return {int(r[0]): (int(r[1]), _num(r[2]), int(r[3]), _num(r[4]),
+                            int(r[5]), _num(r[6])) for r in rows}
 
-    def parts_for(ids, subject, kind):
-        """The pairwise cells behind each candidate's headline number.
+    def parts_for(ids, allies, enemies):
+        """The pairwise cells behind each shift.
 
-        One row per (candidate, subject champion), straight from the cube, so
-        each part is a real 2-way measurement rather than a share of an
+        One row per (candidate, champion on that side), straight from the cube,
+        so each part is a real 2-way measurement rather than a share of an
         average. Across patches the cell is the n-weighted union of its two
         patch rows, the same rule `cube_cell` uses.
         """
-        if not ids or not subject:
-            return {}
-        wavg = ("sum(%s * n) / nullif(sum(CASE WHEN %s IS NOT NULL THEN n END), 0)"
-                % (m, m))
-        rows = con.execute(f"""
-          SELECT champ, partner, sum(n), {wavg}
-          FROM cube2
-          WHERE kind = '{kind}'
-            AND champ IN ({",".join("?" * len(ids))})
-            AND partner IN ({",".join("?" * len(subject))}){pat}
-          GROUP BY 1, 2""", ids + subject + pp).fetchall()
         out_parts = {}
-        for champ, partner, n, v in rows:
-            val = _num(v)
-            g = general.get(int(champ))
-            if val is None or not g or g[1] is None:
+        for kind, partners in (("with", allies), ("vs", enemies)):
+            if not ids or not partners:
                 continue
-            out_parts.setdefault(int(champ), []).append({
-                "riot": int(partner), "name": names.get(int(partner), str(partner)),
-                "n": int(n), "value": val, "delta": val - g[1],
-            })
-        for lst in out_parts.values():
-            lst.sort(key=lambda x: (sign * x["value"], -x["n"]), reverse=True)
+            wavg = ("sum(%s * n) / nullif(sum(CASE WHEN %s IS NOT NULL THEN n END), 0)"
+                    % (m, m))
+            rows = con.execute(f"""
+              SELECT champ, partner, sum(n), {wavg}
+              FROM cube2
+              WHERE kind = '{kind}'
+                AND champ IN ({",".join("?" * len(ids))})
+                AND partner IN ({",".join("?" * len(partners))}){pat}
+              GROUP BY 1, 2""", ids + list(partners) + pp).fetchall()
+            for champ, partner, n, v in rows:
+                val = _num(v)
+                g = general.get(int(champ))
+                if val is None or not g or g[1] is None:
+                    continue
+                out_parts.setdefault(int(champ), {}).setdefault(kind, []).append({
+                    "riot": int(partner), "name": names.get(int(partner), str(partner)),
+                    "n": int(n), "value": val, "delta": val - g[1],
+                })
+        for groups in out_parts.values():
+            for lst in groups.values():
+                lst.sort(key=lambda x: (sign * x["value"], -x["n"]), reverse=True)
         return out_parts
 
-    for side, mine, other in (("blue", blue, red), ("red", red, blue)):
-        basis = "with" if mine else "vs"
-        subject = mine if mine else other
-        side_out = {"side": side, "mine": mine, "basis": basis,
-                    "subject": subject, "best": []}
+    for side, allies, enemies in (("blue", blue, red), ("red", red, blue)):
+        side_out = {"side": side, "mine": allies, "other": enemies, "best": []}
         out["sides"][side] = side_out
-        if not subject:
+        if not allies and not enemies:
             continue
-        excl = set(mine) | set(other)
-        ids = shortlist(basis, subject, excl)
-        exact = measure(ids, subject)
-        parts = parts_for(ids, subject, basis)
-        idx = 0 if basis == "with" else 2
+        excl = set(allies) | set(enemies)
+        ids = shortlist(allies, enemies, excl)
+        exact = measure(ids, allies, enemies)
+        parts = parts_for(ids, allies, enemies)
 
         items = []
         for cand in ids:
             row = exact.get(cand)
-            if not row:
-                continue
-            n, val = row[idx], row[idx + 1]
             g = general.get(cand)
-            if not n or val is None or not g or g[1] is None:
+            if not row or not g or g[1] is None:
                 continue
+            base = g[1]
+            n_w, v_w, n_e, v_e, n_b, v_b = row
+            groups = {}
+            if n_w and v_w is not None:
+                groups["with"] = {"value": v_w, "n": n_w, "delta": v_w - base}
+            if n_e and v_e is not None:
+                groups["vs"] = {"value": v_e, "n": n_e, "delta": v_e - base}
+            if not groups:
+                continue
+            # equal weight per side, not per game: three allies should not
+            # outvote five opponents just because there are more of them
+            shift = sum(x["delta"] for x in groups.values()) / len(groups)
+            est = base + shift
+            if spec["fmt"] == "pct":
+                est = max(0.0, min(1.0, est))
             items.append({
                 "riot": cand, "name": names.get(cand, str(cand)),
-                "specific": val, "n": int(n),
-                "general": g[1], "n_general": g[0],
-                "delta": val - g[1],
-                "parts": parts.get(cand, []),
+                "base": base, "n_base": g[0],
+                "groups": groups,
+                "est": {"value": est, "delta": shift, "groups": len(groups)},
+                "both": ({"value": v_b, "n": n_b}
+                         if n_b and v_b is not None else None),
+                "parts": parts.get(cand, {}),
             })
-        items.sort(key=lambda x: (sign * x["specific"], -x["n"]), reverse=True)
+        items.sort(key=lambda x: (sign * x["est"]["value"], -x["est"]["groups"]),
+                   reverse=True)
         side_out["best"] = items[:top]
 
-    out["partial"] = bool(METRIC_BY_KEY[m].get("partial"))
-    out["cov"] = METRIC_BY_KEY[m].get("cov")
+    out["partial"] = bool(spec.get("partial"))
+    out["cov"] = spec.get("cov")
     return out
 
 

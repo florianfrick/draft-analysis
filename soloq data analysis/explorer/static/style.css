@@ -230,13 +230,6 @@ table.stats td.champ img { width: 22px; height: 22px; border-radius: 3px; }
   transform: translateX(-1px);
 }
 
-/* minibar in the suggestion tables */
-.minibar { height: 8px; background: #171b21; border-radius: 3px; overflow: hidden; }
-.minibar i { display: block; height: 100%; border-radius: 3px; }
-.minibar i.up { background: var(--good); }
-.minibar i.down { background: var(--bad); }
-.minibar i.flat { background: #4a5468; }
-
 /* drop-one chips */
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip {
@@ -282,9 +275,14 @@ table.matrix th.corner .ax { display: block; white-space: nowrap; }
 }
 .sughead b { font-weight: 600; }
 table.sug { font-size: 12px; }
-table.sug td { padding: 4px 5px; }
+table.sug td { padding: 4px 6px; vertical-align: top; }
+table.sug th.num, table.sug td.num { text-align: right; }
+table.sug td.num .v { display: block; font-variant-numeric: tabular-nums; }
+table.sug td.num .g {
+  display: block; font-size: 10px; line-height: 1.3; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
 table.sug td.champ span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-table.sug td .minibar { height: 2px; margin-top: 3px; }
 table.sug tr.sugrow { cursor: pointer; }
 table.sug tr.sugrow:hover { background: #1c222c; }
 table.sug tr.sugrow.open { background: #1c222c; }
@@ -317,6 +315,17 @@ table.brk th { font-weight: 500; color: var(--muted); font-size: 10px;
   text-transform: uppercase; letter-spacing: .5px; padding: 2px 6px 4px; }
 table.brk td { padding: 2px 6px; }
 table.brk td.champ span { max-width: 130px; }
+table.brk tr.grp td {
+  padding: 9px 6px 3px; font-size: 10px; text-transform: uppercase;
+  letter-spacing: .5px; color: var(--muted);
+}
+table.brk tr.sub td { color: var(--muted); border-bottom: 1px solid #2c3340; }
+table.brk tr.sub td:first-child { font-style: italic; }
+table.brk tr.total td { border-top: 1px solid #3a4557; font-weight: 600; padding-top: 4px; }
+table.brk tr.total td:first-child { color: var(--text); }
+table.brk tr.total td.flat { font-weight: 400; }
+/* a joint measurement too thin to order the list on should not read as a headline */
+table.brk tr.total.thin { opacity: .6; }
 table.brk th:last-child, table.brk td:last-child { min-width: 84px; }
 /* diverging bar: grows left or right of the champion's own average */
 .dbar {

@@ -196,83 +196,115 @@ fails += not check("games have 5+5 champs", all(len(g["blue"]) == 5 and len(g["r
 fails += not check("empty has no team block", d["team"] is None)
 fails += not check("empty has no pairs", d["pairs"] == [])
 
-print("\nsuggest (one ranked list per side, both sides in one call)")
+print("\nsuggest (both sides measured at once, one list per side)")
 # one call returns blue and red together: the card shows them side by side, and a
 # single response is what stops the two columns disagreeing about the draft.
 s, ms = get("/api/suggest?blue=8,53,64&red=113,126,145&metric=win&patch=16.20")
 fails += not check("both sides returned", set(s["sides"]) == {"blue", "red"})
 sb, sr = s["sides"]["blue"], s["sides"]["red"]
-fails += not check("each side knows its own champions",
-                   sb["mine"] == [8, 53, 64] and sr["mine"] == [113, 126, 145])
-fails += not check("a side with picks is measured alongside them",
-                   sb["basis"] == "with" and sb["subject"] == [8, 53, 64])
+fails += not check("each side knows both teams",
+                   sb["mine"] == [8, 53, 64] and sb["other"] == [113, 126, 145]
+                   and sr["mine"] == [113, 126, 145] and sr["other"] == [8, 53, 64])
 fails += not check("top five per side",
                    len(sb["best"]) == 5 and len(sr["best"]) == 5,
                    f"{len(sb['best'])} / {len(sr['best'])}")
 fails += not check("fast", ms < 400, f"{ms:.0f} ms")
-excl = set(sb["mine"]) | set(sr["mine"])
+
+row = sb["best"][0]
+fails += not check("a row carries both comparisons",
+                   set(row["groups"]) == {"with", "vs"},
+                   str(sorted(row["groups"])))
+fails += not check("both are measured, not one",
+                   row["groups"]["with"]["n"] > 0 and row["groups"]["vs"]["n"] > 0,
+                   f"with n={row['groups']['with']['n']} vs n={row['groups']['vs']['n']}")
+excl = set(sb["mine"]) | set(sb["other"])
 fails += not check("selected champions excluded",
                    not any(x["riot"] in excl for x in sb["best"] + sr["best"]))
-fails += not check("ranked by the metric",
-                   all(sb["best"][i]["specific"] >= sb["best"][i + 1]["specific"]
+fails += not check("ranked by the estimate",
+                   all(sb["best"][i]["est"]["value"] >= sb["best"][i + 1]["est"]["value"]
                        for i in range(4)))
-fails += not check("delta == specific - general",
-                   all(abs(x["delta"] - (x["specific"] - x["general"])) < 1e-9
+fails += not check("estimate is own average plus the mean of the two shifts",
+                   all(abs(x["est"]["delta"]
+                           - sum(g["delta"] for g in x["groups"].values())
+                           / len(x["groups"])) < 1e-9
+                       and abs(x["est"]["value"] - (x["base"] + x["est"]["delta"])) < 1e-9
                        for x in sb["best"] + sr["best"]))
-fails += not check("every row carries a game count",
-                   all(x["n"] > 0 for x in sb["best"] + sr["best"]))
+fails += not check("each shift is measured against the champion's own average",
+                   all(abs(g["delta"] - (g["value"] - x["base"])) < 1e-9
+                       for x in sb["best"] + sr["best"]
+                       for g in x["groups"].values()))
+fails += not check("every row carries game counts",
+                   all(g["n"] > 0 for x in sb["best"] + sr["best"]
+                       for g in x["groups"].values()))
 
-# The breakdown has to be the real pair cells, not a share of the headline: each
-# part must equal the 2-way cell for (candidate, one of my champions).
-row = sb["best"][0]
-fails += not check("breakdown has one cell per subject champion",
-                   len(row["parts"]) == len(sb["subject"]),
-                   f"{len(row['parts'])} parts for {len(sb['subject'])} picks")
-part = row["parts"][0]
-cell, _ = get("/api/matchup?champ=%d&partner=%d&mode=with&patch=16.20"
-              % (row["riot"], part["riot"]))
-fails += not check("a part is that pair's own cell",
-                   abs(part["value"] - cell["stats"]["win"]) < 1e-9
-                   and part["n"] == cell["n"],
-                   f"{part['value']:.4f} vs {cell['stats']['win']:.4f}, "
-                   f"n {part['n']} vs {cell['n']}")
+# The joint number is the intersection of the two game sets, so it can never be
+# bigger than either - and it is the thin one, which is why the list is not
+# ordered on it.
+fails += not check("both at once is a subset of each comparison",
+                   all(x["both"]["n"] <= min(x["groups"]["with"]["n"],
+                                             x["groups"]["vs"]["n"])
+                       for x in sb["best"] + sr["best"] if x["both"]),
+                   str([x["both"]["n"] for x in sb["best"] if x["both"]]))
+fails += not check("both at once is present and thin",
+                   all(x["both"] and x["both"]["n"] < x["groups"]["with"]["n"]
+                       for x in sb["best"]),
+                   str([x["both"]["n"] for x in sb["best"]]))
+
+# The breakdown has to be the real pair cells, not a share of the union: each
+# part must equal the 2-way cell for (candidate, one champion on that side).
+fails += not check("breakdown covers both sides",
+                   len(row["parts"]["with"]) == len(sb["mine"])
+                   and len(row["parts"]["vs"]) == len(sb["other"]),
+                   f"{len(row['parts'].get('with', []))} with, "
+                   f"{len(row['parts'].get('vs', []))} vs")
+for kind, mode in (("with", "with"), ("vs", "vs")):
+    part = row["parts"][kind][0]
+    cell, _ = get("/api/matchup?champ=%d&partner=%d&mode=%s&patch=16.20"
+                  % (row["riot"], part["riot"], mode))
+    fails += not check(f"a {kind} part is that pair's own cell",
+                       abs(part["value"] - cell["stats"]["win"]) < 1e-9
+                       and part["n"] == cell["n"],
+                       f"{part['value']:.4f} vs {cell['stats']['win']:.4f}, "
+                       f"n {part['n']} vs {cell['n']}")
 fails += not check("parts overlap rather than partition the games",
-                   sum(p["n"] for p in row["parts"]) >= row["n"],
-                   f"{sum(p['n'] for p in row['parts'])} cells vs {row['n']} games")
-fails += not check("parts carry their own delta",
-                   all(abs(p["delta"] - (p["value"] - row["general"])) < 1e-9
-                       for p in row["parts"]))
+                   sum(p["n"] for p in row["parts"]["with"]) >= row["groups"]["with"]["n"]
+                   and sum(p["n"] for p in row["parts"]["vs"]) >= row["groups"]["vs"]["n"],
+                   f"{sum(p['n'] for p in row['parts']['with'])} cells vs "
+                   f"{row['groups']['with']['n']} games")
 
 sg, _ = get("/api/suggest?blue=8,53,64&red=113,126,145"
             "&metric=goldPerMinute&patch=16.20")
 fails += not check("metric switch changes the ranking",
-                   sg["sides"]["blue"]["best"][0]["riot"] != sb["best"][0]["riot"],
-                   f"{sg['sides']['blue']['best'][0]['name']} vs {sb['best'][0]['name']}")
+                   sg["sides"]["blue"]["best"][0]["riot"] != row["riot"],
+                   f"{sg['sides']['blue']['best'][0]['name']} vs {row['name']}")
 fails += not check("rate metric has a different unit",
-                   sg["sides"]["blue"]["best"][0]["specific"] > 100,
-                   f"{sg['sides']['blue']['best'][0]['specific']:.0f}")
+                   sg["sides"]["blue"]["best"][0]["est"]["value"] > 100,
+                   f"{sg['sides']['blue']['best'][0]['est']['value']:.0f}")
 
-# Every number in a row must describe the CANDIDATE. With one champion on my side
-# each row is a single cube cell, so the exact game-counted value has to equal that
-# cell - the check that catches reading the row off my own champion instead.
-one, _ = get("/api/suggest?blue=8&metric=goldPerMinute&patch=16.20")
+# Every number in a row must describe the CANDIDATE. With one champion on each
+# side each group is a single cube cell, so the exact game-counted value has to
+# equal that cell - the check that catches reading the row off my own champion.
+one, _ = get("/api/suggest?blue=8&red=113&metric=goldPerMinute&patch=16.20")
 top = one["sides"]["blue"]["best"][0]
-cell, _ = get("/api/matchup?champ=%d&partner=8&mode=with&patch=16.20" % top["riot"])
-fails += not check("a row measures the candidate, not my champion",
-                   abs(top["specific"] - cell["stats"]["goldPerMinute"]) < 1e-6,
-                   f"{top['name']} {top['specific']:.1f} vs cell "
-                   f"{cell['stats']['goldPerMinute']:.1f}")
-# n is a count of games, not the sum of cube cells: with one champion on my side
-# the two must agree exactly, and with three they may not (a game with two of my
-# champions is one game, not two).
-fails += not check("n is a game count, not a cell sum",
-                   top["n"] == cell["n"], f"{top['n']} vs cell {cell['n']}")
-three, _ = get("/api/suggest?blue=8,53,64&metric=goldPerMinute&patch=16.20")
+for kind, partner, mode in (("with", 8, "with"), ("vs", 113, "vs")):
+    cell, _ = get("/api/matchup?champ=%d&partner=%d&mode=%s&patch=16.20"
+                  % (top["riot"], partner, mode))
+    g = top["groups"][kind]
+    fails += not check(f"the {kind} column measures the candidate, not my champion",
+                       abs(g["value"] - cell["stats"]["goldPerMinute"]) < 1e-6
+                       and g["n"] == cell["n"],
+                       f"{g['value']:.1f} vs {cell['stats']['goldPerMinute']:.1f}, "
+                       f"n {g['n']} vs {cell['n']}")
+
+# With several champions a game where two of them were on the team is one game,
+# not two, so the union must be smaller than the sum of the cells.
+three, _ = get("/api/suggest?blue=8,53,64&red=113&metric=goldPerMinute&patch=16.20")
 t3 = three["sides"]["blue"]["best"][0]
 cells = [get("/api/matchup?champ=%d&partner=%d&mode=with&patch=16.20"
              % (t3["riot"], x))[0]["n"] for x in (8, 53, 64)]
 fails += not check("union of games <= sum of the cells",
-                   t3["n"] <= sum(cells), f"{t3['n']} <= {sum(cells)} (cells)")
+                   t3["groups"]["with"]["n"] <= sum(cells),
+                   f"{t3['groups']['with']['n']} <= {sum(cells)} (cells)")
 
 sh, _ = get("/api/suggest?blue=8,53,64&metric=not_a_stat&patch=16.20")
 fails += not check("unknown metric falls back to win rate", sh["metric"] == "win", sh["metric"])
@@ -281,44 +313,41 @@ lf, _ = get("/api/suggest?blue=8,53,64"
             "&metric=laningPhaseGoldExpAdvantage&patch=16.20")
 fails += not check("0/1 flag is rankable",
                    lf["metric"] == "laningPhaseGoldExpAdvantage"
-                   and 0 <= lf["sides"]["blue"]["best"][0]["specific"] <= 1,
-                   f"{lf['sides']['blue']['best'][0]['specific']:.3f}")
+                   and 0 <= lf["sides"]["blue"]["best"][0]["groups"]["with"]["value"] <= 1,
+                   f"{lf['sides']['blue']['best'][0]['groups']['with']['value']:.3f}")
 
 # Across patches each (champ, partner) pair appears twice; the exact count is
 # taken from `wide`, so it can never exceed the games the champion actually played.
-sa, _ = get("/api/suggest?blue=8,53,64&metric=win&patch=")
+sa, _ = get("/api/suggest?blue=8,53,64&red=113,126,145&metric=win&patch=")
 fails += not check("all-patch counts stay sane",
-                   all(x["n"] <= x["n_general"] for x in sa["sides"]["blue"]["best"]),
-                   f"max {max(x['n'] for x in sa['sides']['blue']['best'])}")
-s20, _ = get("/api/suggest?blue=8,53,64&metric=win&patch=16.20")
+                   all(g["n"] <= x["n_base"] for x in sa["sides"]["blue"]["best"]
+                       for g in x["groups"].values()),
+                   f"max {max(g['n'] for x in sa['sides']['blue']['best'] for g in x['groups'].values())}")
+s20, _ = get("/api/suggest?blue=8,53,64&red=113,126,145&metric=win&patch=16.20")
 row = s20["sides"]["blue"]["best"][0]
 mt, _ = get("/api/matchup?champ=%d&partner=8&mode=with&patch=16.20" % row["riot"])
-fails += not check("general is the champion's own patch average",
-                   abs(row["general"] - mt["baseline"]["win"]) < 1e-6,
-                   f"{row['general']:.4f} vs {mt['baseline']['win']:.4f}")
-fails += not check("n_general is that champion's patch games",
-                   row["n_general"] == mt["baseline"]["n"],
-                   f"{row['n_general']} vs {mt['baseline']['n']}")
+fails += not check("base is the champion's own patch average",
+                   abs(row["base"] - mt["baseline"]["win"]) < 1e-6,
+                   f"{row['base']:.4f} vs {mt['baseline']['win']:.4f}")
+fails += not check("n_base is that champion's patch games",
+                   row["n_base"] == mt["baseline"]["n"],
+                   f"{row['n_base']} vs {mt['baseline']['n']}")
 
 # An empty side has nothing to stand next to, so it is measured against the other
-# side instead - and says so, because that is a different claim from "alongside".
+# side only - no "with" group, no joint number, and the estimate is that one shift.
 e, _ = get("/api/suggest?blue=8,53,64&patch=16.20")
-er = e["sides"]["red"]
-fails += not check("an empty side switches to the other side",
-                   er["basis"] == "vs" and er["subject"] == [8, 53, 64],
-                   f"basis={er['basis']} subject={er['subject']}")
-fails += not check("and still gets five answers", len(er["best"]) == 5,
-                   f"{len(er['best'])}")
-fails += not check("its breakdown is the opponent cells",
-                   all(p["riot"] in (8, 53, 64) for p in er["best"][0]["parts"]))
-# with one champion to measure against, headline and cell must be the same number
-e1, _ = get("/api/suggest?blue=8&patch=16.20")
-e1r = e1["sides"]["red"]["best"][0]
-ecell, _ = get("/api/matchup?champ=%d&partner=8&mode=vs&patch=16.20" % e1r["riot"])
-fails += not check("those answers are measured against, not with",
-                   abs(e1r["specific"] - ecell["stats"]["win"]) < 1e-9
-                   and e1r["n"] == ecell["n"],
-                   f"{e1r['specific']:.4f} vs {ecell['stats']['win']:.4f}")
+er = e["sides"]["red"]["best"][0]
+fails += not check("an empty side keeps only the one comparison",
+                   set(er["groups"]) == {"vs"} and er["both"] is None,
+                   f"{sorted(er['groups'])} both={er['both']}")
+fails += not check("its estimate is that one shift",
+                   abs(er["est"]["value"] - er["groups"]["vs"]["value"]) < 1e-12
+                   and er["est"]["groups"] == 1)
+fails += not check("and it still gets five answers",
+                   len(e["sides"]["red"]["best"]) == 5)
+eb, _ = get("/api/suggest?blue=8,53,64&patch=16.20")
+fails += not check("with no opponent picked, only the own comparison exists",
+                   set(eb["sides"]["blue"]["best"][0]["groups"]) == {"with"})
 fails += not check("one side alone still gets both columns",
                    len(get("/api/suggest?red=113,126,145&patch=16.20")[0]
                        ["sides"]["red"]["best"]) == 5)
