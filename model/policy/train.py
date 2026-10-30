@@ -43,8 +43,10 @@ PRO_DIR = ROOT / "data" / "pro play"
 SOLOQ_PROC_DIR = ROOT / "data" / "solo queue" / "process matchdata"
 PRETRAIN_CKPT_GLOB = str(MODEL_DIR / "pretraining" / "ckpt" /
                          "run_*" / "best.pt")
+# The one pretraining run kept in the repo (see STATUS.md). `--init-ckpt
+# auto` resolves to the same file now that the old ablations are gone.
 DEFAULT_INIT = str(MODEL_DIR / "pretraining" / "ckpt" /
-                   "run_20261019_141424_oct19-medium-with-new-role-given-champ-mask" / "best.pt")
+                   "run_20261029_153912_v2-D512-p8" / "best.pt")
 KEY_FILE = MODEL_DIR / "pretraining" / "wandb_key.txt"
 IGNORE_INDEX = -100
 N_MOVES = 20

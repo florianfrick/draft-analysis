@@ -24,10 +24,32 @@ def app():
     return S.APP
 
 
-def test_find_best_ckpt_picks_run1(app):
+def _best_available_score():
+    """The champ_top5 find_best_ckpt is supposed to pick, from the files."""
+    import torch
+    best = 0.0
+    pattern = str(S.ROOT / "model" / "pretraining" / "ckpt" / "run_*" / "best.pt")
+    for path in glob.glob(pattern):
+        try:
+            payload = torch.load(path, map_location="cpu", weights_only=False)
+        except Exception:  # noqa: BLE001  unreadable ckpt is not this test
+            continue
+        best = max(best, float(payload.get("metrics", {})
+                               .get("champ_top5", -1.0)))
+    return best
+
+
+def test_find_best_ckpt_picks_the_best_available(app):
+    """The default must be the highest val champ_top5 present, not run1.
+
+    Hard-coding 0.281 tied this test to one checkpoint that has since been
+    deleted; the contract is "max over ckpt/", which survives churn.
+    """
     ckpt = Path(app["predictor"].ckpt_path)
     assert "run_" in str(ckpt)
-    assert app["predictor"].val_top5 >= 0.28, "expected run1's 0.281 score"
+    expected = _best_available_score()
+    assert expected > 0.0, "no readable pretraining checkpoint under ckpt/"
+    assert app["predictor"].val_top5 == pytest.approx(expected, abs=1e-6)
 
 
 def test_suggest_empty_draft(app):
@@ -115,7 +137,8 @@ def test_http_api(app):
         assert r.status == 200
         data = json.loads(r.read())
         assert len(data["champions"]) == 173
-        assert data["model"]["val_top5"] >= 0.28
+        assert data["model"]["val_top5"] == pytest.approx(
+            _best_available_score(), abs=1e-6)
         conn.request("GET", "/")
         r = conn.getresponse()
         assert r.status == 200 and b"Draft Assistant" in r.read()  # index.html

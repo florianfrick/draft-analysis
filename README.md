@@ -1,5 +1,9 @@
 # LoL Draft Analysis
 
+> **Current state of the project: see [STATUS.md](STATUS.md)** — one section per
+> stage (pretraining, finetune, policy, prefix value), the exact checkpoints
+> kept, and the evaluation numbers for each.
+
 Project Goals:
 
 Create a draft analyzer/helper/predictor for league of legends pro games. It should be able to predict which champion will be picked/banned next.
@@ -154,6 +158,8 @@ Pick Phase 2:	R4
 
 
 
-Best Model So Far:
+Best Model So Far (the only checkpoints still on disk — see STATUS.md):
 - policy/run_20261025_000606_ablF-stage1
   + pretraining/run_20261029_153912_v2-D512-p8
+  + finetune/run_20261017_185016_stage1-full
+  + finetune/value_20261030_180102

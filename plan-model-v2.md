@@ -275,6 +275,20 @@ condition you ship under:
 
 ### P2 — Ban features (~1–2 days, largest immediate metric gain)
 
+> **Decision (2026-10-30): superseded.** Ban quality is treated as a
+> *decision* problem, not a prediction problem: accuracy against observed
+> bans rewards agreeing with humans, not winning. Implemented as
+> `ban_search.py` (negamax over a value function) and `ban_propose.py`
+> (policy rollout, value as verifier). See STATUS.md §5. Keep the features
+> below only as inputs to a future *policy*, not as a target.
+>
+> **Correction to an earlier claim:** the phase-2 null in `ban_propose` is a
+> property of the *additive* value function, not of the game. Once champions
+> are locked (blue on Ezreal, red on Kaisa) the two teams want different
+> supporting picks — Karma vs Nautilus — which no `W[role, champ]` can
+> express. P3 must supply champion×champion complementarity before the ban
+> search can be judged.
+
 Bans are 60% of moves and the weakest predictions.
 
 1. **Patch×champ frequency as an explicit input.** A `[n_patches, C]`

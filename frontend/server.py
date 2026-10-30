@@ -73,7 +73,7 @@ PRO_DRAFTS_PT = ROOT / "data" / "pro play" / "pro_drafts.pt"
 sys.path.insert(0, str(MODEL_DIR))
 
 from soloq_model import (SoloQPretrainedModel, ROLE_FLEX_ID,  # noqa: E402
-                         NUM_ROLES)
+                         NUM_ROLES, load_encoder_state)
 
 ROLE_ROWS = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"]
 N_SLOTS = 10
@@ -202,7 +202,10 @@ class Predictor:
             num_intra_layers=cfg["num_intra"],
             num_cross_layers=cfg["num_cross"],
             dropout=cfg.get("dropout", 0.0))
-        self.model.load_state_dict(state)
+        # load_encoder_state tolerates the opt-in value path (`pma.*`,
+        # `win_head.*`) that pretraining checkpoints carry, and still raises
+        # on a real mismatch. The frontend never needs the value head.
+        load_encoder_state(self.model, state)
         self.model.eval()
         self.device = torch.device(device)
         self.model.to(self.device)
@@ -379,11 +382,18 @@ def resolve_ckpt_path(spec, confine=True):
 
 
 def list_checkpoints():
-    """Every .pt under the known ckpt dirs; cheap (payload not read)."""
+    """Every .pt under the known ckpt dirs; cheap (payload not read).
+
+    `latest.pt` is skipped: it is whatever the last epoch wrote, which is
+    only useful for resuming, not for serving. The dropdown should offer
+    the checkpoints that were selected on validation.
+    """
     out = []
     for kind, pattern in CKPT_PATTERNS:
         for hit in sorted(glob.glob(pattern)):
             pp = Path(hit)
+            if pp.name == "latest.pt":
+                continue
             out.append({"path": _rel(hit), "kind": kind,
                         "label": "[%s] %s/%s" % (kind, pp.parent.name,
                                                 pp.name)})
