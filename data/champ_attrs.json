@@ -1,0 +1,3552 @@
+{
+ "anchors": {
+  "dive": {
+   "0": "cannot reach a backline at all",
+   "1": "needs a teammate to set it up",
+   "2": "can get in and out on its own",
+   "3": "elite backline access and kill pressure (Zed, Talon, Kha'Zix)"
+  },
+  "engage": {
+   "0": "no way to start a fight",
+   "1": "situational or single-target initiation",
+   "2": "reliable initiation, usually on one target",
+   "3": "reliable AoE fight-start (Malphite R, Rakan W/R, Rell R)"
+  },
+  "hard_cc": {
+   "0": "no stun/root/knockup/suppress/charm/fear",
+   "1": "one short or conditional hard CC",
+   "2": "one reliable hard CC, or several short ones",
+   "3": "multiple reliable hard CC, chainable (Nautilus, Leona, Maokai)"
+  },
+  "lane_priority": {
+   "0": "concedes the wave, cannot push",
+   "1": "slow push, needs help to shove",
+   "2": "can shove and rotate on its own",
+   "3": "permapush, permanently holds the wave (Ziggs, Malzahar, Anivia)"
+  },
+  "magic_damage": {
+   "0": "pure physical (true damage counts as neither)",
+   "1": "mostly physical, one magic spell",
+   "2": "genuinely mixed",
+   "3": "pure magic"
+  },
+  "mobility": {
+   "0": "immobile, no dash and no real self-speed",
+   "1": "one situational dash or a modest speed boost",
+   "2": "a reliable dash or blink on a short cooldown",
+   "3": "highly mobile, repeatedly repositions (Yasuo, Zed, Akali, Lee Sin)"
+  },
+  "objective_speed": {
+   "0": "cannot take a neutral objective or tower",
+   "1": "slow: a support's or tank's DPS",
+   "2": "decent sustained single-target damage",
+   "3": "elite objective DPS (Yi, Vayne, Kog'Maw, Trundle, Yorick)"
+  },
+  "peel": {
+   "0": "nothing to protect a carry with",
+   "1": "one small tool (a slow, a short shield)",
+   "2": "solid: a displacement, a real shield, a zone",
+   "3": "elite disengage that cancels a dive (Janna Q/R, Poppy W)"
+  },
+  "poke": {
+   "0": "melee, no ranged chip",
+   "1": "incidental ranged damage",
+   "2": "good lane poke / sustained ranged harassment",
+   "3": "artillery: wins the pre-fight from 900+ units"
+  },
+  "range": {
+   "0": "melee",
+   "1": "short (<500): melee-with-reach, Urgot, Thresh, Rakan",
+   "2": "mid (500-650): most mages and marksmen",
+   "3": "long (650+): Caitlyn, artillery mages, Kog'Maw W, Tristana passive"
+  },
+  "scaling": {
+   "0": "must win by 15 minutes or is a liability",
+   "1": "falls off noticeably after two items",
+   "2": "stable: strong at every stage",
+   "3": "late-game win condition (Kog'Maw, Vayne, Kassadin, Kayle)"
+  },
+  "sustain": {
+   "0": "no healing or shielding for the team",
+   "1": "self-sustain only, or a token shield",
+   "2": "meaningful healing/shielding for allies",
+   "3": "elite enchanter throughput (Soraka, Yuumi, Sona, Lulu)"
+  },
+  "tankiness": {
+   "0": "squishy: dies to one rotation",
+   "1": "bruiser build, survives a dive but not a teamfight",
+   "2": "real frontline: soaks a rotation and keeps going",
+   "3": "full tank: the team's wall (Ornn, Rammus, Tahm Kench)"
+  }
+ },
+ "axes": [
+  "engage",
+  "peel",
+  "poke",
+  "dive",
+  "scaling",
+  "lane_priority",
+  "hard_cc",
+  "mobility",
+  "range",
+  "objective_speed",
+  "tankiness",
+  "magic_damage",
+  "sustain"
+ ],
+ "champions": {
+  "1": {
+   "attrs": [
+    1,
+    1,
+    1,
+    1,
+    2,
+    2,
+    2,
+    0,
+    2,
+    1,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 0,
+   "name": "Annie"
+  },
+  "10": {
+   "attrs": [
+    0,
+    2,
+    1,
+    0,
+    3,
+    1,
+    0,
+    1,
+    2,
+    2,
+    0,
+    2,
+    1
+   ],
+   "confidence": "high",
+   "idx": 9,
+   "name": "Kayle"
+  },
+  "101": {
+   "attrs": [
+    0,
+    0,
+    3,
+    0,
+    2,
+    3,
+    1,
+    0,
+    3,
+    1,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 84,
+   "name": "Xerath"
+  },
+  "102": {
+   "attrs": [
+    1,
+    0,
+    0,
+    1,
+    2,
+    2,
+    0,
+    2,
+    0,
+    3,
+    2,
+    2,
+    0
+   ],
+   "confidence": "high",
+   "idx": 85,
+   "name": "Shyvana"
+  },
+  "103": {
+   "attrs": [
+    1,
+    0,
+    2,
+    2,
+    2,
+    2,
+    1,
+    3,
+    2,
+    1,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 86,
+   "name": "Ahri"
+  },
+  "104": {
+   "attrs": [
+    0,
+    1,
+    1,
+    1,
+    2,
+    2,
+    0,
+    1,
+    1,
+    2,
+    1,
+    0,
+    0
+   ],
+   "confidence": "high",
+   "idx": 87,
+   "name": "Graves"
+  },
+  "105": {
+   "attrs": [
+    1,
+    0,
+    0,
+    3,
+    2,
+    1,
+    2,
+    3,
+    0,
+    1,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 88,
+   "name": "Fizz"
+  },
+  "106": {
+   "attrs": [
+    2,
+    1,
+    0,
+    1,
+    2,
+    2,
+    2,
+    1,
+    0,
+    2,
+    3,
+    2,
+    2
+   ],
+   "confidence": "high",
+   "idx": 89,
+   "name": "Volibear"
+  },
+  "107": {
+   "attrs": [
+    1,
+    0,
+    0,
+    3,
+    1,
+    1,
+    1,
+    3,
+    0,
+    2,
+    0,
+    1,
+    1
+   ],
+   "confidence": "high",
+   "idx": 90,
+   "name": "Rengar"
+  },
+  "11": {
+   "attrs": [
+    0,
+    0,
+    0,
+    2,
+    3,
+    2,
+    0,
+    2,
+    0,
+    3,
+    0,
+    1,
+    1
+   ],
+   "confidence": "high",
+   "idx": 10,
+   "name": "Master Yi"
+  },
+  "110": {
+   "attrs": [
+    1,
+    1,
+    3,
+    0,
+    2,
+    3,
+    1,
+    0,
+    3,
+    2,
+    0,
+    2,
+    0
+   ],
+   "confidence": "high",
+   "idx": 91,
+   "name": "Varus"
+  },
+  "111": {
+   "attrs": [
+    3,
+    2,
+    0,
+    2,
+    2,
+    1,
+    3,
+    1,
+    0,
+    1,
+    3,
+    2,
+    0
+   ],
+   "confidence": "high",
+   "idx": 92,
+   "name": "Nautilus"
+  },
+  "112": {
+   "attrs": [
+    1,
+    1,
+    3,
+    0,
+    3,
+    3,
+    1,
+    0,
+    2,
+    1,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 93,
+   "name": "Viktor"
+  },
+  "113": {
+   "attrs": [
+    3,
+    2,
+    0,
+    1,
+    2,
+    1,
+    3,
+    1,
+    0,
+    1,
+    3,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 94,
+   "name": "Sejuani"
+  },
+  "114": {
+   "attrs": [
+    0,
+    1,
+    0,
+    1,
+    3,
+    2,
+    1,
+    2,
+    0,
+    3,
+    1,
+    0,
+    2
+   ],
+   "confidence": "high",
+   "idx": 95,
+   "name": "Fiora"
+  },
+  "115": {
+   "attrs": [
+    0,
+    1,
+    3,
+    0,
+    2,
+    3,
+    1,
+    1,
+    3,
+    2,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 96,
+   "name": "Ziggs"
+  },
+  "117": {
+   "attrs": [
+    0,
+    3,
+    1,
+    0,
+    2,
+    2,
+    1,
+    1,
+    2,
+    1,
+    0,
+    3,
+    3
+   ],
+   "confidence": "high",
+   "idx": 97,
+   "name": "Lulu"
+  },
+  "119": {
+   "attrs": [
+    0,
+    0,
+    1,
+    0,
+    0,
+    3,
+    1,
+    1,
+    2,
+    2,
+    0,
+    0,
+    0
+   ],
+   "confidence": "high",
+   "idx": 98,
+   "name": "Draven"
+  },
+  "12": {
+   "attrs": [
+    3,
+    2,
+    0,
+    1,
+    1,
+    1,
+    3,
+    1,
+    0,
+    1,
+    3,
+    2,
+    0
+   ],
+   "confidence": "high",
+   "idx": 11,
+   "name": "Alistar"
+  },
+  "120": {
+   "attrs": [
+    2,
+    1,
+    0,
+    2,
+    2,
+    2,
+    2,
+    3,
+    0,
+    2,
+    2,
+    2,
+    1
+   ],
+   "confidence": "high",
+   "idx": 99,
+   "name": "Hecarim"
+  },
+  "121": {
+   "attrs": [
+    0,
+    0,
+    1,
+    3,
+    1,
+    1,
+    1,
+    3,
+    0,
+    2,
+    1,
+    0,
+    1
+   ],
+   "confidence": "high",
+   "idx": 100,
+   "name": "Kha'Zix"
+  },
+  "122": {
+   "attrs": [
+    1,
+    0,
+    0,
+    0,
+    1,
+    2,
+    1,
+    0,
+    0,
+    2,
+    2,
+    0,
+    1
+   ],
+   "confidence": "high",
+   "idx": 101,
+   "name": "Darius"
+  },
+  "126": {
+   "attrs": [
+    1,
+    1,
+    3,
+    1,
+    1,
+    3,
+    1,
+    1,
+    2,
+    1,
+    1,
+    1,
+    0
+   ],
+   "confidence": "high",
+   "idx": 102,
+   "name": "Jayce"
+  },
+  "127": {
+   "attrs": [
+    2,
+    2,
+    1,
+    1,
+    1,
+    2,
+    2,
+    2,
+    2,
+    1,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 103,
+   "name": "Lissandra"
+  },
+  "13": {
+   "attrs": [
+    0,
+    1,
+    1,
+    0,
+    3,
+    2,
+    1,
+    1,
+    2,
+    2,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 12,
+   "name": "Ryze"
+  },
+  "131": {
+   "attrs": [
+    2,
+    0,
+    0,
+    3,
+    2,
+    2,
+    1,
+    3,
+    0,
+    2,
+    1,
+    3,
+    1
+   ],
+   "confidence": "high",
+   "idx": 104,
+   "name": "Diana"
+  },
+  "133": {
+   "attrs": [
+    0,
+    1,
+    2,
+    1,
+    1,
+    2,
+    1,
+    3,
+    2,
+    1,
+    0,
+    0,
+    0
+   ],
+   "confidence": "high",
+   "idx": 105,
+   "name": "Quinn"
+  },
+  "134": {
+   "attrs": [
+    1,
+    1,
+    2,
+    1,
+    3,
+    3,
+    1,
+    0,
+    2,
+    1,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 106,
+   "name": "Syndra"
+  },
+  "136": {
+   "attrs": [
+    0,
+    1,
+    1,
+    1,
+    3,
+    2,
+    1,
+    1,
+    2,
+    1,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 107,
+   "name": "Aurelion Sol"
+  },
+  "14": {
+   "attrs": [
+    2,
+    1,
+    0,
+    1,
+    3,
+    3,
+    2,
+    1,
+    0,
+    2,
+    3,
+    2,
+    1
+   ],
+   "confidence": "high",
+   "idx": 13,
+   "name": "Sion"
+  },
+  "141": {
+   "attrs": [
+    1,
+    0,
+    0,
+    3,
+    2,
+    2,
+    1,
+    3,
+    0,
+    2,
+    1,
+    1,
+    1
+   ],
+   "confidence": "high",
+   "idx": 108,
+   "name": "Kayn"
+  },
+  "142": {
+   "attrs": [
+    1,
+    1,
+    3,
+    1,
+    2,
+    2,
+    2,
+    1,
+    3,
+    1,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 109,
+   "name": "Zoe"
+  },
+  "143": {
+   "attrs": [
+    1,
+    2,
+    3,
+    0,
+    2,
+    2,
+    2,
+    0,
+    3,
+    1,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 110,
+   "name": "Zyra"
+  },
+  "145": {
+   "attrs": [
+    0,
+    0,
+    1,
+    2,
+    3,
+    1,
+    0,
+    1,
+    2,
+    2,
+    0,
+    2,
+    0
+   ],
+   "confidence": "high",
+   "idx": 111,
+   "name": "Kai'Sa"
+  },
+  "147": {
+   "attrs": [
+    1,
+    2,
+    3,
+    0,
+    3,
+    3,
+    1,
+    0,
+    3,
+    1,
+    0,
+    3,
+    3
+   ],
+   "confidence": "high",
+   "idx": 112,
+   "name": "Seraphine"
+  },
+  "15": {
+   "attrs": [
+    0,
+    1,
+    1,
+    0,
+    2,
+    3,
+    0,
+    1,
+    2,
+    2,
+    0,
+    0,
+    0
+   ],
+   "confidence": "high",
+   "idx": 14,
+   "name": "Sivir"
+  },
+  "150": {
+   "attrs": [
+    2,
+    2,
+    2,
+    1,
+    2,
+    2,
+    2,
+    2,
+    1,
+    1,
+    2,
+    2,
+    0
+   ],
+   "confidence": "high",
+   "idx": 113,
+   "name": "Gnar"
+  },
+  "154": {
+   "attrs": [
+    3,
+    2,
+    0,
+    1,
+    2,
+    1,
+    2,
+    3,
+    0,
+    1,
+    3,
+    2,
+    2
+   ],
+   "confidence": "high",
+   "idx": 114,
+   "name": "Zac"
+  },
+  "157": {
+   "attrs": [
+    2,
+    1,
+    0,
+    2,
+    3,
+    2,
+    1,
+    3,
+    0,
+    2,
+    1,
+    0,
+    0
+   ],
+   "confidence": "high",
+   "idx": 115,
+   "name": "Yasuo"
+  },
+  "16": {
+   "attrs": [
+    0,
+    1,
+    2,
+    0,
+    2,
+    1,
+    1,
+    0,
+    2,
+    1,
+    0,
+    3,
+    3
+   ],
+   "confidence": "high",
+   "idx": 15,
+   "name": "Soraka"
+  },
+  "161": {
+   "attrs": [
+    0,
+    1,
+    3,
+    0,
+    2,
+    2,
+    1,
+    0,
+    3,
+    1,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 116,
+   "name": "Vel'Koz"
+  },
+  "163": {
+   "attrs": [
+    1,
+    1,
+    2,
+    0,
+    2,
+    3,
+    2,
+    2,
+    2,
+    1,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 117,
+   "name": "Taliyah"
+  },
+  "164": {
+   "attrs": [
+    1,
+    1,
+    0,
+    2,
+    2,
+    2,
+    2,
+    3,
+    0,
+    2,
+    2,
+    0,
+    1
+   ],
+   "confidence": "high",
+   "idx": 118,
+   "name": "Camille"
+  },
+  "166": {
+   "attrs": [
+    0,
+    0,
+    2,
+    2,
+    1,
+    2,
+    0,
+    2,
+    2,
+    2,
+    0,
+    0,
+    0
+   ],
+   "confidence": "high",
+   "idx": 119,
+   "name": "Akshan"
+  },
+  "17": {
+   "attrs": [
+    0,
+    1,
+    2,
+    0,
+    1,
+    2,
+    1,
+    1,
+    2,
+    1,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 16,
+   "name": "Teemo"
+  },
+  "18": {
+   "attrs": [
+    0,
+    1,
+    1,
+    2,
+    2,
+    2,
+    1,
+    2,
+    3,
+    2,
+    0,
+    1,
+    0
+   ],
+   "confidence": "high",
+   "idx": 17,
+   "name": "Tristana"
+  },
+  "19": {
+   "attrs": [
+    2,
+    1,
+    0,
+    1,
+    1,
+    2,
+    2,
+    1,
+    0,
+    2,
+    2,
+    2,
+    3
+   ],
+   "confidence": "high",
+   "idx": 18,
+   "name": "Warwick"
+  },
+  "2": {
+   "attrs": [
+    0,
+    0,
+    0,
+    1,
+    1,
+    3,
+    0,
+    1,
+    0,
+    2,
+    2,
+    0,
+    2
+   ],
+   "confidence": "high",
+   "idx": 1,
+   "name": "Olaf"
+  },
+  "20": {
+   "attrs": [
+    3,
+    2,
+    0,
+    1,
+    2,
+    2,
+    2,
+    2,
+    0,
+    2,
+    3,
+    3,
+    2
+   ],
+   "confidence": "high",
+   "idx": 19,
+   "name": "Nunu & Willump"
+  },
+  "200": {
+   "attrs": [
+    1,
+    0,
+    0,
+    2,
+    2,
+    2,
+    1,
+    2,
+    0,
+    3,
+    1,
+    1,
+    1
+   ],
+   "confidence": "high",
+   "idx": 120,
+   "name": "Bel'Veth"
+  },
+  "201": {
+   "attrs": [
+    1,
+    3,
+    1,
+    0,
+    2,
+    1,
+    3,
+    1,
+    0,
+    1,
+    3,
+    2,
+    0
+   ],
+   "confidence": "high",
+   "idx": 121,
+   "name": "Braum"
+  },
+  "202": {
+   "attrs": [
+    0,
+    1,
+    2,
+    0,
+    2,
+    2,
+    1,
+    0,
+    3,
+    1,
+    0,
+    0,
+    0
+   ],
+   "confidence": "high",
+   "idx": 122,
+   "name": "Jhin"
+  },
+  "203": {
+   "attrs": [
+    0,
+    2,
+    1,
+    1,
+    3,
+    2,
+    0,
+    2,
+    2,
+    3,
+    0,
+    1,
+    1
+   ],
+   "confidence": "high",
+   "idx": 123,
+   "name": "Kindred"
+  },
+  "21": {
+   "attrs": [
+    0,
+    0,
+    2,
+    0,
+    2,
+    3,
+    1,
+    0,
+    2,
+    1,
+    0,
+    1,
+    0
+   ],
+   "confidence": "high",
+   "idx": 20,
+   "name": "Miss Fortune"
+  },
+  "22": {
+   "attrs": [
+    2,
+    1,
+    2,
+    0,
+    2,
+    2,
+    2,
+    0,
+    2,
+    1,
+    0,
+    0,
+    0
+   ],
+   "confidence": "high",
+   "idx": 21,
+   "name": "Ashe"
+  },
+  "221": {
+   "attrs": [
+    0,
+    0,
+    1,
+    0,
+    3,
+    2,
+    0,
+    3,
+    2,
+    2,
+    0,
+    1,
+    0
+   ],
+   "confidence": "high",
+   "idx": 124,
+   "name": "Zeri"
+  },
+  "222": {
+   "attrs": [
+    0,
+    1,
+    2,
+    0,
+    3,
+    2,
+    1,
+    1,
+    3,
+    2,
+    0,
+    0,
+    0
+   ],
+   "confidence": "high",
+   "idx": 125,
+   "name": "Jinx"
+  },
+  "223": {
+   "attrs": [
+    1,
+    2,
+    0,
+    0,
+    2,
+    2,
+    2,
+    1,
+    0,
+    1,
+    3,
+    2,
+    2
+   ],
+   "confidence": "high",
+   "idx": 126,
+   "name": "Tahm Kench"
+  },
+  "23": {
+   "attrs": [
+    0,
+    0,
+    0,
+    2,
+    3,
+    2,
+    0,
+    1,
+    0,
+    3,
+    1,
+    0,
+    2
+   ],
+   "confidence": "high",
+   "idx": 22,
+   "name": "Tryndamere"
+  },
+  "233": {
+   "attrs": [
+    1,
+    0,
+    0,
+    3,
+    1,
+    2,
+    2,
+    2,
+    0,
+    2,
+    1,
+    0,
+    1
+   ],
+   "confidence": "high",
+   "idx": 127,
+   "name": "Briar"
+  },
+  "234": {
+   "attrs": [
+    1,
+    0,
+    0,
+    2,
+    2,
+    2,
+    1,
+    2,
+    0,
+    2,
+    1,
+    1,
+    1
+   ],
+   "confidence": "high",
+   "idx": 128,
+   "name": "Viego"
+  },
+  "235": {
+   "attrs": [
+    0,
+    1,
+    3,
+    0,
+    3,
+    1,
+    1,
+    1,
+    3,
+    1,
+    0,
+    2,
+    2
+   ],
+   "confidence": "high",
+   "idx": 129,
+   "name": "Senna"
+  },
+  "236": {
+   "attrs": [
+    0,
+    0,
+    2,
+    1,
+    0,
+    3,
+    0,
+    2,
+    2,
+    1,
+    0,
+    0,
+    0
+   ],
+   "confidence": "high",
+   "idx": 130,
+   "name": "Lucian"
+  },
+  "238": {
+   "attrs": [
+    0,
+    0,
+    1,
+    3,
+    1,
+    2,
+    0,
+    3,
+    0,
+    1,
+    0,
+    0,
+    0
+   ],
+   "confidence": "high",
+   "idx": 131,
+   "name": "Zed"
+  },
+  "24": {
+   "attrs": [
+    1,
+    1,
+    0,
+    1,
+    3,
+    2,
+    1,
+    2,
+    0,
+    3,
+    2,
+    2,
+    0
+   ],
+   "confidence": "high",
+   "idx": 23,
+   "name": "Jax"
+  },
+  "240": {
+   "attrs": [
+    2,
+    0,
+    0,
+    2,
+    1,
+    2,
+    1,
+    2,
+    0,
+    1,
+    2,
+    0,
+    1
+   ],
+   "confidence": "high",
+   "idx": 132,
+   "name": "Kled"
+  },
+  "245": {
+   "attrs": [
+    1,
+    1,
+    1,
+    3,
+    2,
+    1,
+    1,
+    3,
+    0,
+    1,
+    1,
+    3,
+    1
+   ],
+   "confidence": "high",
+   "idx": 133,
+   "name": "Ekko"
+  },
+  "246": {
+   "attrs": [
+    1,
+    0,
+    0,
+    3,
+    1,
+    2,
+    1,
+    3,
+    0,
+    1,
+    0,
+    1,
+    0
+   ],
+   "confidence": "high",
+   "idx": 134,
+   "name": "Qiyana"
+  },
+  "25": {
+   "attrs": [
+    1,
+    2,
+    2,
+    0,
+    2,
+    2,
+    2,
+    0,
+    2,
+    1,
+    0,
+    3,
+    1
+   ],
+   "confidence": "high",
+   "idx": 24,
+   "name": "Morgana"
+  },
+  "254": {
+   "attrs": [
+    3,
+    1,
+    0,
+    3,
+    2,
+    2,
+    2,
+    2,
+    0,
+    2,
+    2,
+    1,
+    1
+   ],
+   "confidence": "high",
+   "idx": 135,
+   "name": "Vi"
+  },
+  "26": {
+   "attrs": [
+    0,
+    3,
+    1,
+    0,
+    2,
+    2,
+    1,
+    1,
+    2,
+    1,
+    0,
+    3,
+    2
+   ],
+   "confidence": "high",
+   "idx": 25,
+   "name": "Zilean"
+  },
+  "266": {
+   "attrs": [
+    1,
+    0,
+    1,
+    1,
+    1,
+    2,
+    1,
+    1,
+    1,
+    2,
+    2,
+    0,
+    1
+   ],
+   "confidence": "high",
+   "idx": 136,
+   "name": "Aatrox"
+  },
+  "267": {
+   "attrs": [
+    1,
+    2,
+    2,
+    0,
+    2,
+    2,
+    1,
+    1,
+    2,
+    1,
+    0,
+    3,
+    3
+   ],
+   "confidence": "high",
+   "idx": 137,
+   "name": "Nami"
+  },
+  "268": {
+   "attrs": [
+    1,
+    2,
+    2,
+    1,
+    3,
+    2,
+    1,
+    1,
+    2,
+    2,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 138,
+   "name": "Azir"
+  },
+  "27": {
+   "attrs": [
+    1,
+    1,
+    0,
+    0,
+    2,
+    2,
+    1,
+    2,
+    0,
+    1,
+    2,
+    3,
+    1
+   ],
+   "confidence": "high",
+   "idx": 26,
+   "name": "Singed"
+  },
+  "28": {
+   "attrs": [
+    0,
+    0,
+    0,
+    3,
+    2,
+    1,
+    1,
+    2,
+    0,
+    1,
+    0,
+    3,
+    1
+   ],
+   "confidence": "high",
+   "idx": 27,
+   "name": "Evelynn"
+  },
+  "29": {
+   "attrs": [
+    0,
+    0,
+    1,
+    1,
+    3,
+    1,
+    1,
+    1,
+    2,
+    2,
+    0,
+    1,
+    0
+   ],
+   "confidence": "high",
+   "idx": 28,
+   "name": "Twitch"
+  },
+  "3": {
+   "attrs": [
+    2,
+    2,
+    1,
+    1,
+    2,
+    2,
+    3,
+    1,
+    0,
+    1,
+    3,
+    3,
+    1
+   ],
+   "confidence": "high",
+   "idx": 2,
+   "name": "Galio"
+  },
+  "30": {
+   "attrs": [
+    0,
+    0,
+    2,
+    0,
+    3,
+    2,
+    0,
+    0,
+    2,
+    2,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 29,
+   "name": "Karthus"
+  },
+  "31": {
+   "attrs": [
+    1,
+    1,
+    1,
+    0,
+    3,
+    2,
+    2,
+    0,
+    0,
+    2,
+    3,
+    2,
+    1
+   ],
+   "confidence": "high",
+   "idx": 30,
+   "name": "Cho'Gath"
+  },
+  "32": {
+   "attrs": [
+    3,
+    2,
+    0,
+    1,
+    2,
+    1,
+    3,
+    1,
+    0,
+    1,
+    3,
+    2,
+    0
+   ],
+   "confidence": "high",
+   "idx": 31,
+   "name": "Amumu"
+  },
+  "33": {
+   "attrs": [
+    2,
+    2,
+    0,
+    1,
+    2,
+    1,
+    2,
+    2,
+    0,
+    1,
+    3,
+    2,
+    0
+   ],
+   "confidence": "high",
+   "idx": 32,
+   "name": "Rammus"
+  },
+  "34": {
+   "attrs": [
+    0,
+    2,
+    2,
+    0,
+    2,
+    3,
+    2,
+    0,
+    2,
+    1,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 33,
+   "name": "Anivia"
+  },
+  "35": {
+   "attrs": [
+    0,
+    0,
+    1,
+    2,
+    0,
+    1,
+    1,
+    2,
+    0,
+    1,
+    0,
+    1,
+    0
+   ],
+   "confidence": "high",
+   "idx": 34,
+   "name": "Shaco"
+  },
+  "350": {
+   "attrs": [
+    0,
+    2,
+    1,
+    0,
+    3,
+    1,
+    1,
+    1,
+    2,
+    1,
+    0,
+    3,
+    3
+   ],
+   "confidence": "high",
+   "idx": 139,
+   "name": "Yuumi"
+  },
+  "36": {
+   "attrs": [
+    0,
+    0,
+    1,
+    1,
+    3,
+    2,
+    0,
+    1,
+    0,
+    2,
+    3,
+    1,
+    2
+   ],
+   "confidence": "high",
+   "idx": 35,
+   "name": "Dr. Mundo"
+  },
+  "360": {
+   "attrs": [
+    0,
+    1,
+    0,
+    2,
+    3,
+    1,
+    0,
+    2,
+    2,
+    2,
+    0,
+    0,
+    1
+   ],
+   "confidence": "high",
+   "idx": 140,
+   "name": "Samira"
+  },
+  "37": {
+   "attrs": [
+    0,
+    2,
+    2,
+    0,
+    3,
+    1,
+    1,
+    0,
+    2,
+    1,
+    0,
+    3,
+    3
+   ],
+   "confidence": "high",
+   "idx": 36,
+   "name": "Sona"
+  },
+  "38": {
+   "attrs": [
+    0,
+    0,
+    0,
+    2,
+    3,
+    0,
+    0,
+    3,
+    0,
+    1,
+    1,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 37,
+   "name": "Kassadin"
+  },
+  "39": {
+   "attrs": [
+    1,
+    0,
+    0,
+    2,
+    2,
+    2,
+    1,
+    3,
+    0,
+    2,
+    1,
+    1,
+    1
+   ],
+   "confidence": "high",
+   "idx": 38,
+   "name": "Irelia"
+  },
+  "4": {
+   "attrs": [
+    1,
+    1,
+    1,
+    1,
+    2,
+    2,
+    1,
+    1,
+    2,
+    1,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 3,
+   "name": "Twisted Fate"
+  },
+  "40": {
+   "attrs": [
+    0,
+    3,
+    1,
+    0,
+    2,
+    1,
+    2,
+    1,
+    2,
+    1,
+    0,
+    2,
+    3
+   ],
+   "confidence": "high",
+   "idx": 39,
+   "name": "Janna"
+  },
+  "41": {
+   "attrs": [
+    0,
+    1,
+    2,
+    0,
+    3,
+    2,
+    0,
+    1,
+    0,
+    1,
+    1,
+    1,
+    1
+   ],
+   "confidence": "high",
+   "idx": 40,
+   "name": "Gangplank"
+  },
+  "412": {
+   "attrs": [
+    3,
+    3,
+    1,
+    1,
+    2,
+    1,
+    3,
+    1,
+    1,
+    1,
+    2,
+    2,
+    1
+   ],
+   "confidence": "high",
+   "idx": 141,
+   "name": "Thresh"
+  },
+  "42": {
+   "attrs": [
+    0,
+    0,
+    2,
+    0,
+    2,
+    2,
+    0,
+    2,
+    2,
+    2,
+    0,
+    2,
+    0
+   ],
+   "confidence": "high",
+   "idx": 41,
+   "name": "Corki"
+  },
+  "420": {
+   "attrs": [
+    1,
+    0,
+    0,
+    0,
+    2,
+    3,
+    1,
+    0,
+    0,
+    2,
+    2,
+    0,
+    1
+   ],
+   "confidence": "high",
+   "idx": 142,
+   "name": "Illaoi"
+  },
+  "421": {
+   "attrs": [
+    2,
+    0,
+    0,
+    1,
+    0,
+    2,
+    1,
+    3,
+    0,
+    1,
+    2,
+    1,
+    1
+   ],
+   "confidence": "high",
+   "idx": 143,
+   "name": "Rek'Sai"
+  },
+  "427": {
+   "attrs": [
+    0,
+    2,
+    0,
+    0,
+    2,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    2,
+    2
+   ],
+   "confidence": "high",
+   "idx": 144,
+   "name": "Ivern"
+  },
+  "429": {
+   "attrs": [
+    1,
+    2,
+    1,
+    0,
+    1,
+    3,
+    0,
+    2,
+    2,
+    2,
+    0,
+    0,
+    0
+   ],
+   "confidence": "high",
+   "idx": 145,
+   "name": "Kalista"
+  },
+  "43": {
+   "attrs": [
+    0,
+    1,
+    2,
+    0,
+    1,
+    3,
+    1,
+    1,
+    2,
+    1,
+    0,
+    3,
+    2
+   ],
+   "confidence": "high",
+   "idx": 42,
+   "name": "Karma"
+  },
+  "432": {
+   "attrs": [
+    2,
+    2,
+    1,
+    0,
+    2,
+    1,
+    2,
+    2,
+    1,
+    1,
+    1,
+    2,
+    2
+   ],
+   "confidence": "high",
+   "idx": 146,
+   "name": "Bard"
+  },
+  "44": {
+   "attrs": [
+    1,
+    3,
+    0,
+    0,
+    2,
+    1,
+    2,
+    0,
+    0,
+    1,
+    3,
+    3,
+    2
+   ],
+   "confidence": "high",
+   "idx": 43,
+   "name": "Taric"
+  },
+  "45": {
+   "attrs": [
+    1,
+    2,
+    1,
+    0,
+    3,
+    1,
+    2,
+    0,
+    2,
+    1,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 44,
+   "name": "Veigar"
+  },
+  "48": {
+   "attrs": [
+    1,
+    1,
+    0,
+    1,
+    2,
+    2,
+    1,
+    0,
+    0,
+    3,
+    3,
+    1,
+    2
+   ],
+   "confidence": "high",
+   "idx": 45,
+   "name": "Trundle"
+  },
+  "497": {
+   "attrs": [
+    3,
+    2,
+    0,
+    2,
+    2,
+    1,
+    3,
+    3,
+    0,
+    1,
+    1,
+    3,
+    2
+   ],
+   "confidence": "high",
+   "idx": 147,
+   "name": "Rakan"
+  },
+  "498": {
+   "attrs": [
+    0,
+    2,
+    1,
+    1,
+    3,
+    2,
+    1,
+    1,
+    2,
+    2,
+    0,
+    0,
+    0
+   ],
+   "confidence": "high",
+   "idx": 148,
+   "name": "Xayah"
+  },
+  "5": {
+   "attrs": [
+    3,
+    1,
+    0,
+    2,
+    1,
+    2,
+    1,
+    2,
+    0,
+    2,
+    2,
+    0,
+    1
+   ],
+   "confidence": "high",
+   "idx": 4,
+   "name": "Xin Zhao"
+  },
+  "50": {
+   "attrs": [
+    1,
+    1,
+    2,
+    0,
+    2,
+    2,
+    1,
+    0,
+    2,
+    1,
+    2,
+    3,
+    2
+   ],
+   "confidence": "high",
+   "idx": 46,
+   "name": "Swain"
+  },
+  "51": {
+   "attrs": [
+    0,
+    1,
+    3,
+    0,
+    1,
+    3,
+    1,
+    1,
+    3,
+    2,
+    0,
+    0,
+    0
+   ],
+   "confidence": "high",
+   "idx": 47,
+   "name": "Caitlyn"
+  },
+  "516": {
+   "attrs": [
+    3,
+    2,
+    0,
+    1,
+    2,
+    2,
+    3,
+    0,
+    0,
+    2,
+    3,
+    2,
+    0
+   ],
+   "confidence": "high",
+   "idx": 149,
+   "name": "Ornn"
+  },
+  "517": {
+   "attrs": [
+    1,
+    0,
+    0,
+    3,
+    2,
+    2,
+    1,
+    3,
+    0,
+    1,
+    2,
+    3,
+    2
+   ],
+   "confidence": "high",
+   "idx": 150,
+   "name": "Sylas"
+  },
+  "518": {
+   "attrs": [
+    2,
+    1,
+    2,
+    1,
+    1,
+    2,
+    2,
+    1,
+    2,
+    1,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 151,
+   "name": "Neeko"
+  },
+  "523": {
+   "attrs": [
+    0,
+    1,
+    1,
+    0,
+    3,
+    1,
+    1,
+    0,
+    2,
+    2,
+    0,
+    0,
+    0
+   ],
+   "confidence": "high",
+   "idx": 152,
+   "name": "Aphelios"
+  },
+  "526": {
+   "attrs": [
+    3,
+    2,
+    0,
+    1,
+    2,
+    1,
+    3,
+    2,
+    0,
+    1,
+    3,
+    3,
+    1
+   ],
+   "confidence": "high",
+   "idx": 153,
+   "name": "Rell"
+  },
+  "53": {
+   "attrs": [
+    3,
+    1,
+    0,
+    1,
+    1,
+    1,
+    3,
+    1,
+    0,
+    1,
+    2,
+    2,
+    0
+   ],
+   "confidence": "high",
+   "idx": 48,
+   "name": "Blitzcrank"
+  },
+  "54": {
+   "attrs": [
+    3,
+    1,
+    1,
+    1,
+    2,
+    1,
+    2,
+    0,
+    0,
+    1,
+    3,
+    2,
+    0
+   ],
+   "confidence": "high",
+   "idx": 49,
+   "name": "Malphite"
+  },
+  "55": {
+   "attrs": [
+    0,
+    0,
+    0,
+    2,
+    2,
+    1,
+    0,
+    2,
+    0,
+    1,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 50,
+   "name": "Katarina"
+  },
+  "555": {
+   "attrs": [
+    2,
+    1,
+    0,
+    2,
+    0,
+    2,
+    2,
+    3,
+    0,
+    1,
+    0,
+    0,
+    1
+   ],
+   "confidence": "high",
+   "idx": 154,
+   "name": "Pyke"
+  },
+  "56": {
+   "attrs": [
+    2,
+    1,
+    0,
+    2,
+    1,
+    2,
+    2,
+    2,
+    0,
+    2,
+    1,
+    1,
+    0
+   ],
+   "confidence": "high",
+   "idx": 51,
+   "name": "Nocturne"
+  },
+  "57": {
+   "attrs": [
+    3,
+    2,
+    1,
+    1,
+    2,
+    2,
+    3,
+    0,
+    0,
+    1,
+    3,
+    3,
+    1
+   ],
+   "confidence": "high",
+   "idx": 52,
+   "name": "Maokai"
+  },
+  "58": {
+   "attrs": [
+    2,
+    1,
+    0,
+    1,
+    0,
+    3,
+    2,
+    2,
+    0,
+    1,
+    2,
+    0,
+    1
+   ],
+   "confidence": "high",
+   "idx": 53,
+   "name": "Renekton"
+  },
+  "59": {
+   "attrs": [
+    3,
+    1,
+    0,
+    2,
+    2,
+    2,
+    2,
+    2,
+    0,
+    2,
+    2,
+    0,
+    0
+   ],
+   "confidence": "high",
+   "idx": 54,
+   "name": "Jarvan IV"
+  },
+  "6": {
+   "attrs": [
+    2,
+    1,
+    1,
+    1,
+    2,
+    2,
+    1,
+    1,
+    1,
+    2,
+    2,
+    0,
+    0
+   ],
+   "confidence": "high",
+   "idx": 5,
+   "name": "Urgot"
+  },
+  "60": {
+   "attrs": [
+    2,
+    0,
+    1,
+    2,
+    0,
+    1,
+    1,
+    2,
+    0,
+    2,
+    1,
+    3,
+    1
+   ],
+   "confidence": "high",
+   "idx": 55,
+   "name": "Elise"
+  },
+  "61": {
+   "attrs": [
+    1,
+    1,
+    2,
+    0,
+    2,
+    3,
+    2,
+    0,
+    2,
+    1,
+    0,
+    3,
+    1
+   ],
+   "confidence": "high",
+   "idx": 56,
+   "name": "Orianna"
+  },
+  "62": {
+   "attrs": [
+    3,
+    1,
+    0,
+    2,
+    2,
+    2,
+    2,
+    2,
+    0,
+    1,
+    2,
+    0,
+    0
+   ],
+   "confidence": "high",
+   "idx": 57,
+   "name": "Wukong"
+  },
+  "63": {
+   "attrs": [
+    0,
+    0,
+    2,
+    0,
+    2,
+    2,
+    1,
+    0,
+    2,
+    1,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 58,
+   "name": "Brand"
+  },
+  "64": {
+   "attrs": [
+    2,
+    2,
+    0,
+    2,
+    0,
+    2,
+    2,
+    3,
+    0,
+    2,
+    1,
+    1,
+    1
+   ],
+   "confidence": "high",
+   "idx": 59,
+   "name": "Lee Sin"
+  },
+  "67": {
+   "attrs": [
+    0,
+    1,
+    0,
+    1,
+    3,
+    0,
+    1,
+    2,
+    2,
+    3,
+    0,
+    1,
+    0
+   ],
+   "confidence": "high",
+   "idx": 60,
+   "name": "Vayne"
+  },
+  "68": {
+   "attrs": [
+    2,
+    1,
+    1,
+    1,
+    1,
+    3,
+    1,
+    1,
+    0,
+    1,
+    1,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 61,
+   "name": "Rumble"
+  },
+  "69": {
+   "attrs": [
+    0,
+    1,
+    2,
+    0,
+    3,
+    2,
+    1,
+    1,
+    2,
+    2,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 62,
+   "name": "Cassiopeia"
+  },
+  "7": {
+   "attrs": [
+    1,
+    0,
+    2,
+    3,
+    1,
+    2,
+    1,
+    3,
+    2,
+    1,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 6,
+   "name": "LeBlanc"
+  },
+  "711": {
+   "attrs": [
+    1,
+    1,
+    2,
+    2,
+    2,
+    2,
+    2,
+    1,
+    2,
+    1,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 155,
+   "name": "Vex"
+  },
+  "72": {
+   "attrs": [
+    3,
+    2,
+    0,
+    1,
+    2,
+    1,
+    3,
+    1,
+    0,
+    1,
+    3,
+    2,
+    0
+   ],
+   "confidence": "high",
+   "idx": 63,
+   "name": "Skarner"
+  },
+  "74": {
+   "attrs": [
+    0,
+    1,
+    3,
+    0,
+    2,
+    3,
+    1,
+    0,
+    2,
+    1,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 64,
+   "name": "Heimerdinger"
+  },
+  "75": {
+   "attrs": [
+    0,
+    1,
+    0,
+    1,
+    3,
+    1,
+    1,
+    0,
+    0,
+    2,
+    2,
+    2,
+    1
+   ],
+   "confidence": "high",
+   "idx": 65,
+   "name": "Nasus"
+  },
+  "76": {
+   "attrs": [
+    0,
+    1,
+    3,
+    1,
+    1,
+    2,
+    0,
+    2,
+    2,
+    2,
+    0,
+    3,
+    1
+   ],
+   "confidence": "high",
+   "idx": 66,
+   "name": "Nidalee"
+  },
+  "77": {
+   "attrs": [
+    1,
+    1,
+    0,
+    1,
+    2,
+    2,
+    1,
+    2,
+    0,
+    2,
+    2,
+    2,
+    1
+   ],
+   "confidence": "high",
+   "idx": 67,
+   "name": "Udyr"
+  },
+  "777": {
+   "attrs": [
+    2,
+    0,
+    0,
+    3,
+    3,
+    2,
+    1,
+    3,
+    0,
+    2,
+    1,
+    1,
+    0
+   ],
+   "confidence": "high",
+   "idx": 156,
+   "name": "Yone"
+  },
+  "78": {
+   "attrs": [
+    2,
+    3,
+    0,
+    1,
+    2,
+    2,
+    3,
+    1,
+    0,
+    1,
+    3,
+    1,
+    0
+   ],
+   "confidence": "high",
+   "idx": 68,
+   "name": "Poppy"
+  },
+  "79": {
+   "attrs": [
+    2,
+    2,
+    1,
+    1,
+    2,
+    1,
+    2,
+    2,
+    0,
+    2,
+    2,
+    3,
+    2
+   ],
+   "confidence": "high",
+   "idx": 69,
+   "name": "Gragas"
+  },
+  "799": {
+   "attrs": [
+    1,
+    0,
+    0,
+    2,
+    2,
+    2,
+    0,
+    3,
+    0,
+    2,
+    2,
+    0,
+    1
+   ],
+   "confidence": "high",
+   "idx": 157,
+   "name": "Ambessa"
+  },
+  "8": {
+   "attrs": [
+    0,
+    0,
+    1,
+    1,
+    3,
+    1,
+    0,
+    1,
+    2,
+    1,
+    1,
+    3,
+    2
+   ],
+   "confidence": "high",
+   "idx": 7,
+   "name": "Vladimir"
+  },
+  "80": {
+   "attrs": [
+    1,
+    1,
+    2,
+    1,
+    0,
+    3,
+    1,
+    1,
+    0,
+    1,
+    1,
+    0,
+    0
+   ],
+   "confidence": "high",
+   "idx": 70,
+   "name": "Pantheon"
+  },
+  "800": {
+   "attrs": [
+    0,
+    1,
+    2,
+    0,
+    2,
+    2,
+    1,
+    1,
+    2,
+    1,
+    0,
+    3,
+    1
+   ],
+   "confidence": "low",
+   "idx": 158,
+   "name": "Mel"
+  },
+  "804": {
+   "attrs": [
+    0,
+    1,
+    2,
+    0,
+    2,
+    2,
+    1,
+    1,
+    2,
+    2,
+    0,
+    2,
+    0
+   ],
+   "confidence": "low",
+   "idx": 159,
+   "name": "Yunara"
+  },
+  "805": {
+   "attrs": null,
+   "confidence": "unknown",
+   "idx": 160,
+   "name": "Locke",
+   "note": "Riot id 805 - no reliable kit knowledge"
+  },
+  "81": {
+   "attrs": [
+    0,
+    0,
+    3,
+    0,
+    2,
+    2,
+    0,
+    2,
+    2,
+    1,
+    0,
+    1,
+    0
+   ],
+   "confidence": "high",
+   "idx": 71,
+   "name": "Ezreal"
+  },
+  "82": {
+   "attrs": [
+    2,
+    1,
+    0,
+    1,
+    2,
+    2,
+    1,
+    0,
+    0,
+    1,
+    3,
+    3,
+    1
+   ],
+   "confidence": "high",
+   "idx": 72,
+   "name": "Mordekaiser"
+  },
+  "83": {
+   "attrs": [
+    0,
+    1,
+    0,
+    0,
+    3,
+    3,
+    1,
+    0,
+    0,
+    3,
+    2,
+    2,
+    1
+   ],
+   "confidence": "high",
+   "idx": 73,
+   "name": "Yorick"
+  },
+  "84": {
+   "attrs": [
+    0,
+    0,
+    1,
+    3,
+    2,
+    2,
+    0,
+    3,
+    0,
+    1,
+    1,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 74,
+   "name": "Akali"
+  },
+  "85": {
+   "attrs": [
+    3,
+    1,
+    1,
+    2,
+    2,
+    2,
+    3,
+    1,
+    2,
+    1,
+    1,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 75,
+   "name": "Kennen"
+  },
+  "86": {
+   "attrs": [
+    0,
+    0,
+    0,
+    1,
+    2,
+    2,
+    1,
+    1,
+    0,
+    2,
+    2,
+    0,
+    2
+   ],
+   "confidence": "high",
+   "idx": 76,
+   "name": "Garen"
+  },
+  "875": {
+   "attrs": [
+    2,
+    1,
+    0,
+    1,
+    2,
+    2,
+    1,
+    1,
+    0,
+    1,
+    2,
+    0,
+    2
+   ],
+   "confidence": "high",
+   "idx": 161,
+   "name": "Sett"
+  },
+  "876": {
+   "attrs": [
+    1,
+    1,
+    1,
+    1,
+    2,
+    2,
+    2,
+    2,
+    0,
+    1,
+    1,
+    3,
+    1
+   ],
+   "confidence": "high",
+   "idx": 162,
+   "name": "Lillia"
+  },
+  "887": {
+   "attrs": [
+    0,
+    1,
+    0,
+    2,
+    3,
+    1,
+    0,
+    2,
+    0,
+    2,
+    1,
+    3,
+    1
+   ],
+   "confidence": "high",
+   "idx": 163,
+   "name": "Gwen"
+  },
+  "888": {
+   "attrs": [
+    1,
+    2,
+    1,
+    0,
+    2,
+    2,
+    2,
+    0,
+    2,
+    1,
+    0,
+    3,
+    2
+   ],
+   "confidence": "high",
+   "idx": 164,
+   "name": "Renata Glasc"
+  },
+  "89": {
+   "attrs": [
+    3,
+    2,
+    0,
+    1,
+    1,
+    1,
+    3,
+    1,
+    0,
+    1,
+    3,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 77,
+   "name": "Leona"
+  },
+  "893": {
+   "attrs": [
+    1,
+    0,
+    2,
+    2,
+    2,
+    2,
+    1,
+    2,
+    2,
+    1,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 165,
+   "name": "Aurora"
+  },
+  "895": {
+   "attrs": [
+    1,
+    1,
+    0,
+    2,
+    3,
+    1,
+    1,
+    2,
+    0,
+    2,
+    0,
+    1,
+    1
+   ],
+   "confidence": "high",
+   "idx": 166,
+   "name": "Nilah"
+  },
+  "897": {
+   "attrs": [
+    2,
+    2,
+    1,
+    1,
+    2,
+    2,
+    2,
+    2,
+    0,
+    1,
+    3,
+    1,
+    1
+   ],
+   "confidence": "high",
+   "idx": 167,
+   "name": "K'Sante"
+  },
+  "9": {
+   "attrs": [
+    3,
+    1,
+    1,
+    1,
+    2,
+    1,
+    2,
+    1,
+    2,
+    1,
+    0,
+    3,
+    1
+   ],
+   "confidence": "high",
+   "idx": 8,
+   "name": "Fiddlesticks"
+  },
+  "90": {
+   "attrs": [
+    1,
+    1,
+    1,
+    0,
+    2,
+    3,
+    2,
+    0,
+    2,
+    1,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 78,
+   "name": "Malzahar"
+  },
+  "901": {
+   "attrs": [
+    0,
+    0,
+    2,
+    0,
+    3,
+    1,
+    0,
+    1,
+    2,
+    1,
+    0,
+    1,
+    0
+   ],
+   "confidence": "high",
+   "idx": 168,
+   "name": "Smolder"
+  },
+  "902": {
+   "attrs": [
+    0,
+    3,
+    1,
+    0,
+    2,
+    2,
+    0,
+    1,
+    2,
+    1,
+    0,
+    3,
+    3
+   ],
+   "confidence": "high",
+   "idx": 169,
+   "name": "Milio"
+  },
+  "904": {
+   "attrs": null,
+   "confidence": "unknown",
+   "idx": 170,
+   "name": "Zaahen",
+   "note": "Riot id 904 - no reliable kit knowledge"
+  },
+  "91": {
+   "attrs": [
+    0,
+    0,
+    1,
+    3,
+    1,
+    2,
+    0,
+    3,
+    0,
+    1,
+    0,
+    0,
+    0
+   ],
+   "confidence": "high",
+   "idx": 79,
+   "name": "Talon"
+  },
+  "910": {
+   "attrs": [
+    0,
+    1,
+    3,
+    0,
+    2,
+    3,
+    2,
+    0,
+    2,
+    1,
+    0,
+    3,
+    0
+   ],
+   "confidence": "high",
+   "idx": 171,
+   "name": "Hwei"
+  },
+  "92": {
+   "attrs": [
+    2,
+    0,
+    0,
+    2,
+    1,
+    2,
+    1,
+    3,
+    0,
+    2,
+    1,
+    0,
+    1
+   ],
+   "confidence": "high",
+   "idx": 80,
+   "name": "Riven"
+  },
+  "950": {
+   "attrs": [
+    1,
+    0,
+    0,
+    3,
+    1,
+    2,
+    1,
+    2,
+    0,
+    1,
+    1,
+    1,
+    0
+   ],
+   "confidence": "high",
+   "idx": 172,
+   "name": "Naafiri"
+  },
+  "96": {
+   "attrs": [
+    0,
+    0,
+    3,
+    0,
+    3,
+    1,
+    0,
+    0,
+    3,
+    3,
+    0,
+    2,
+    0
+   ],
+   "confidence": "high",
+   "idx": 81,
+   "name": "Kog'Maw"
+  },
+  "98": {
+   "attrs": [
+    2,
+    3,
+    0,
+    1,
+    2,
+    2,
+    2,
+    1,
+    0,
+    1,
+    3,
+    2,
+    2
+   ],
+   "confidence": "high",
+   "idx": 82,
+   "name": "Shen"
+  },
+  "99": {
+   "attrs": [
+    1,
+    1,
+    3,
+    0,
+    2,
+    2,
+    1,
+    0,
+    3,
+    1,
+    0,
+    3,
+    1
+   ],
+   "confidence": "high",
+   "idx": 83,
+   "name": "Lux"
+  }
+ },
+ "low_confidence": {
+  "Mel": "released after my reliable knowledge cutoff; read as a ranged mage",
+  "Yunara": "released after my reliable knowledge cutoff; read as a marksman"
+ },
+ "notes": {
+  "Kassadin": "lane_priority 0 is the point of the champion, not an oversight",
+  "Kennen": "engage 3 is R-only, but R alone is enough to start a fight",
+  "Master Yi": "magic_damage 1: Wuju Style is true damage, which counts as neither",
+  "Thresh": "engage 3 and peel 3 both: hook starts fights, lantern+flay end them",
+  "Yuumi": "mobility 1 on purpose - she moves by attaching, not by dashing"
+ },
+ "num_champs": 173,
+ "patch": "16.20",
+ "provenance": "hand-tagged from kit knowledge at patch 16.20; no model queried at build time",
+ "scale": "ordinal 0..3; divide by 3 before use",
+ "unknown": {
+  "Locke": "Riot id 805 - no reliable kit knowledge",
+  "Zaahen": "Riot id 904 - no reliable kit knowledge"
+ }
+}
