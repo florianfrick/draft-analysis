@@ -13,7 +13,8 @@ cross-attention -> slot-level champion + role heads;
 set/permutation-invariant; Siamese blue/red). Decided revisions: **no team
 embedding** (team from slot index only), vocab `REAL + MASK + PAD = 175`,
 role head outputs exactly the 5 real roles, BERT-style 10% role-visible
-masks, hard CE losses, >= 1 mask per draft, no aux heads yet.
+masks, hard CE losses, >= 1 mask per draft, plus an opt-in value path
+(PMA pooling + blue-win head, Sec 4.3) that is off by default.
 
 This file freezes the **tensor shapes, dtypes, vocabs, and invariants**
 the future data pipeline/loader and `soloq_model.py` MUST satisfy.
@@ -72,9 +73,11 @@ Loader yields a **dict of tensors** (first dim = batch `B`).
 | `champ_labels` | `[B,10]` | `long` | real champ `0..C-1` where `is_masked`, `-100` elsewhere (ignore index) |
 | `role_labels` | `[B,10]` | `long` | real role `0..4` where `is_masked` OR role-only (`role_masked & ~is_masked`), `-100` elsewhere (always truth, even when role input kept visible) |
 | `pad_mask` | `[B,10]` | `bool` | `True` <=> `champ_ids==PAD` (all-False for full SoloQ drafts) |
+| `win_label` | `[B]` | `long` | **optional**, `1` if blue won. Present only when the loader is given `wins`; masked modelling ignores it |
 
 No `team_ids` tensor: team follows slot index (0-4 Blue, 5-9 Red).
-No `win_label` / `aux_targets`: auxiliary heads deferred (see Sec 6).
+No `aux_targets`: auxiliary heads deferred (see Sec 6). `win_label` exists only
+to supervise the opt-in value path (Sec 4.3).
 
 ### 3.1 Masking protocol (train)
 
@@ -106,8 +109,10 @@ pad_mask      Bool  [32,10]  all False (full drafts)
 |---|---|---|---|
 | `champ_logits` | `[B,10,C]` | `float` | `C`=NUM_REAL_CHAMPS (real champs only, exactly 173 cols). No MASK/PAD columns |
 | `role_logits` | `[B,10,5]` | `float` | exactly 5-way over `0..4`. No FLEX column |
+| `win_logit` | `[B,1]` | `float` | **only when built with `with_value=True`**; blue-win logit. Forbidden otherwise |
 
-Heads: `champ: Linear(D,C)`, `role: Linear(D,5)`. No PMA, no auxiliary heads (deferred).
+Heads: `champ: Linear(D,C)`, `role: Linear(D,5)`. No auxiliary heads beyond the
+opt-in value path in Sec 4.3.
 
 ### 4.1 Duplicate-logit masking (required)
 
@@ -130,6 +135,72 @@ Loss = CE(champ_logits[is_masked], champ_labels) + lam * CE(role_logits[role lab
 - KNOWN LIMITATION (hard CE treats all wrong champions as equally wrong): a functionally similar-but-wrong champion (e.g. another engage support) is penalized the same as a nonsense pick, which may make learning slower/less graded than a similarity-weighted target. Options considered: soft targets from cosine similarity of a frozen prior (NOT the embedding being trained — that is circular), co-pick statistics, or role-conditioned priors. Deferred: implement hard CE first, revisit if confusion patterns show the model needs graded credit.
 - Loss: champ head on `is_masked` slots; role head on ALL role-labelled slots (champ-masked + role-only); PAD slots never contribute (key_padding_mask).
 
+### 4.3 Opt-in value path (`with_value=True`)
+
+Off by default, so the masked-modelling contract and every pre-existing
+checkpoint are unchanged. SoloQ pretraining turns it on.
+
+```text
+h [B,10,D]  ->  PMA(seeds=4) over blue slots  -> v_blue [B,D]
+            ->  PMA(seeds=4) over red slots   -> v_red  [B,D]   (Siamese: one instance)
+            ->  z = concat(v_blue, v_red, v_blue-v_red, v_blue*v_red)  [B,4D]
+            ->  win_head: LN -> Linear(4D,D) -> GELU -> Linear(D,1)
+```
+
+- **Why it exists.** Every soloQ shard already carried `teams.{blue,red}.win`;
+  pretraining never read it. Masked-champ alone never has to know which comp
+  wins, so the pooled vector carried no *trained* outcome signal, and the pro
+  value head sat at the base rate for 8,000 steps (AUC 0.497, Brier 0.2510
+  against 0.2482 for a constant). A linear probe on the old checkpoint's
+  pooled vector reads **AUC 0.5329**, i.e. the information was present but
+  nothing downstream was trained to use it.
+- **PMA, not mean pooling.** A PAD-masked mean over 5 slots divides per-slot
+  differences by 5 and is dominated by whichever slots are present. PMA's
+  learned queries stay permutation-invariant (fixed queries, set keys) and
+  Siamese (shared instance), so invariants 8 and 9 still hold.
+- **All-PAD team** (partial drafts): one key is kept attendable to avoid a NaN
+  softmax, and the pooled vector is zeroed by mask, matching mean-pool.
+- **Loss:** `+ lambda_win * BCE(win_logit, win_label)`; `lambda_win=1.0` by
+  default (one global label weighted like one masked slot), `--no-win` reverts
+  to the old objective.
+- **Ramp, don't switch on.** `lambda_win` is ramped linearly from 0 to its full
+  value over `--win-warmup-epochs` (default 5). Measured reason: at 700 steps
+  the encoder probe read 0.4996 and the win head sat exactly at the prior
+  (AUC 0.4970, BCE 0.6904 vs ln2 0.6931), while a fresh PMA+win head on the
+  *mature* frozen encoder reached AUC 0.5396 in the same 700 steps. The head
+  design is right; it was starved by an immature representation, so the value
+  loss must not compete with champion-identity learning early.
+- **And cut out.** `--win-patience` (default 8) freezes `lambda_win` at 0 once
+  val win AUC has not improved for that many epochs. Measured: in the D=512
+  40-epoch run train win BCE fell 0.6842 -> 0.4359 while val Brier rose
+  0.2467 -> 0.3857 and AUC fell 0.5601 -> 0.5206, i.e. everything after
+  ~epoch 19 made the head *and* the encoder worse. `best_value.pt` already
+  holds the good head (epoch 15); freezing lets the encoder finish on the
+  masked task alone instead of chasing outcome noise.
+- **Which checkpoint to load.** `best.pt` = best `champ_top5` (encoder for
+  policy/finetune), `best_value.pt` = best val win AUC (the value head). In the
+  D=512 run these are epoch 38 and epoch 15, and the value head inside
+  `best.pt` is the overfitted one (Brier 0.373) - do not use it for value.
+- **The two objectives trade off; the freeze decides which way.** Freezing
+  `lambda_win` stops the head overfitting but also stops pushing outcome
+  information into the pooled vector, and that information then decays:
+  a fresh PMA probe on the epoch-33 encoder reads **0.5444**, against
+  **0.5521-0.5529** at the epoch-15/26 encoder. So a late checkpoint is the
+  better *masked* encoder and an early one is the better *value* encoder - they
+  are not interchangeable. Concretely: load `best_value.pt` for P4 search,
+  `best.pt` for policy/finetune.
+- **The freeze latches.** Once `--win-patience` fires it stays off; the frozen
+  head's AUC drifts up ~1e-4 as the encoder moves, and letting that reset the
+  counter resumed the overfitting (observed at epoch 26, AUC 0.5597 -> 0.5467).
+  `--win-freeze` is the manual override, e.g. when resuming a run whose head
+  already overfit.
+- **Measured on a clean view.** Value metrics are computed with
+  `mask_prob=0, force_one=False`, because a 15%-masked draft caps any readout.
+  `win_skill = 1 - brier/brier_const`; > 0 means it beats the constant.
+- **Label rule.** `blue_win = teams.blue.win` only when it disagrees with
+  `teams.red.win`; agreeing rows are dropped (72 of 384,428 on 16.20). Verified
+  identical to `store.py`'s `blue_win` on 37,820 overlapping games.
+
 ## 5. Invariants checklist (what tests enforce)
 
 1. Shapes/dtypes/ranges: every key in Sec 3 matches table (incl. `role_masked Bool [B,10]`, no `team_ids`/`win_label`).
@@ -137,7 +208,7 @@ Loss = CE(champ_logits[is_masked], champ_labels) + lam * CE(role_logits[role lab
 3. Mask consistency: `is_masked <=> champ_ids==MASK` (full drafts); `role_masked <=> role_ids==FLEX` on labelled slots; champ-masked role-hidden slots are a subset of `is_masked`; role-only slots (`role_masked & ~is_masked`) show a real champ in `champ_ids` with `champ_labels==-100`; role-visible masks (`is_masked & ~role_masked`) keep true role in `role_ids`; champ labels `-100` exactly where not `is_masked`; role labels `-100` exactly where neither `is_masked` nor `role_masked`; labelled roles in range; **>= 1 champ-masked slot per draft**.
 4. No duplicates: no repeated real champ id within a draft (visible + hidden truth).
 5. PAD discipline: full drafts have no PAD; if PAD present that slot's labels are `-100`, not masked, and model must ignore via `pad_mask`/key_padding_mask.
-6. Forward shapes: outputs exactly `champ_logits [B,10,173]` + `role_logits [B,10,5]`; no NaN/+inf (`-inf` only via duplicate mask); no aux outputs; grad flows.
+6. Forward shapes: outputs exactly `champ_logits [B,10,173]` + `role_logits [B,10,5]`; no NaN/+inf (`-inf` only via duplicate mask); no aux outputs; grad flows. `win_logit [B,1]` present **iff** `with_value=True`, finite, and absent otherwise.
 7. Duplicate-logit mask: Sec 4.1 holds on every masked position.
 8. Permutation equivariance: permuting slots *within* a team (same perm on all slot-aligned tensors) permutes that team's slot outputs identically (no positional embedding allowed; red-team and cross-team outputs unaffected beyond the permuted team's content).
 9. Siamese teams: intra-team attention weights shared across Blue/Red (param sharing / identical output under team swap when champs/roles swapped accordingly).
@@ -146,7 +217,12 @@ Loss = CE(champ_logits[is_masked], champ_labels) + lam * CE(role_logits[role lab
 
 - Draft **order**, pick/ban sequence, fearless bans, turn structure: pro finetune only.
 - Frontend/coach UI (top-N per remaining role, flex handling): consumes this model's embeddings/logits later.
-- Auxiliary / multitask heads (win prob, duration, gold, kills, objectives, PMA pooling): deferred, not implemented, not tested.
+- Auxiliary / multitask heads (duration, gold, kills, objectives): deferred, not
+  implemented, not tested. The one exception is the opt-in value path in
+  Sec 4.3 (win probability only), which pretraining uses and which pro stages
+  may either keep or replace with their own head - `load_encoder_state()`
+  drops `pma.*` / `win_head.*` when the target has no value path, and raises on
+  any other unexpected key so real shape mismatches stay loud.
 - Exact `D`, `lam`, heads depth: hyperparameters, not contract. Defaults: `D=128`, `dropout=0.0` (underfitting risk dominates at this size; raise only if train/val gap shows overfitting).
 
 ## 7. How to satisfy this contract
@@ -172,7 +248,7 @@ Run `pytest tests/test_soloq_contract.py -v`. Pure-contract tests (synthetic bat
 N_SLOTS=10, NUM_REAL_CHAMPS=173 (patch-specific), CHAMP_MASK_ID=173, CHAMP_PAD_ID=174,
 CHAMP_VOCAB_SIZE=175 (required), NUM_ROLES=5, ROLE_VOCAB_SIZE=6 (input only), ROLE_FLEX_ID=5 (input only),
 ROLE_HEAD_DIM=5 (output, no FLEX), MASK_PROB~=0.15, ROLE_KEEP_PROB=0.1, ROLE_ONLY_PROB~=0.10, IGNORE_INDEX=-100, EMBED_DIM example 128, DROPOUT default 0.0
-No team_ids tensor. No win/aux outputs.
+No team_ids tensor. No win/aux outputs unless with_value=True (Sec 4.3).
 ```
 
 

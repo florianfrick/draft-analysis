@@ -437,7 +437,7 @@ class ProMaskedDraftDataset(Dataset):
             "weight": torch.tensor(float(row.get("weight", 1.0)),
                                    dtype=torch.float32),
             "meta": {"gameid": row["gameid"], "series_id": row["series_id"],
-                     "patch": row["patch"]},
+                     "league": row.get("league", "?"), "patch": row["patch"]},
         }
 
     def weights(self):

@@ -66,6 +66,10 @@ soloq data analysis/store/
 # ============================================================
 wandb/
 **/wandb/
+# pretraining logs here, not in pretraining/wandb - that folder name shadows
+# the installed wandb package on sys.path and breaks import
+wandb_runs/
+**/wandb_runs/
 frontend/server.log
 frontend/server.err
 frontend/.cache/
