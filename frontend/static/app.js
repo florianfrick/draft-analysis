@@ -36,13 +36,19 @@ function setModelInfo(m) {
 function renderModelInfo() {
   const m = CURRENT_MODEL;
   if (!m) return;
-  let txt = `model ${m.ckpt} · val top-5 ` +
-    (m.val_top5 >= 0 ? `${(100 * m.val_top5).toFixed(1)}%` : 'n/a');
-  if (m.kind === 'finetune')
+  let txt = `model ${m.ckpt}`;
+  if (m.kind === 'policy') txt += ' · next-move policy';
+  else if (m.kind === 'finetune')
     txt += ` · finetuned${m.stage != null ? ' (stage ' + m.stage + ')' : ''}`;
-  else if (m.kind) txt += ` · ${m.kind}`;
+  else if (m.kind) txt += ' · ' + m.kind;
+  txt += m.val_top5 == null ? ' · val top-5 n/a'
+    : ` · val top-5 ${(100 * m.val_top5).toFixed(1)}%`;
   if (m.epoch != null) txt += ` · ep ${m.epoch}`;
+  if (m.value_ckpt) txt += ` · value ${m.value_ckpt.split('/').slice(-2).join('/')}`;
   document.getElementById('model-info').textContent = txt;
+  const isPolicy = m.kind === 'policy';
+  document.body.classList.toggle('policy-mode', isPolicy);
+  if (!isPolicy) document.getElementById('nextmove').classList.add('hidden');
 }
 
 async function refreshCheckpoints() {
@@ -86,6 +92,16 @@ async function switchModel(url, opts) {
   resp = null;
   await refreshCheckpoints();
   changed();   // re-run suggestions with the new weights
+}
+
+function currentFirstPick() {
+  // A loaded game dictates the order; a hand-built draft uses the toggle.
+  if (WT) return WT.draft.first_pick ? 1 : 0;
+  return +document.getElementById('first-pick').value ? 1 : 0;
+}
+
+function isPolicyModel() {
+  return !!(CURRENT_MODEL && CURRENT_MODEL.kind === 'policy');
 }
 
 function nextTurn(firstPick) {
@@ -149,7 +165,11 @@ function buildStrips(team) {
 }
 
 function renderTurn() {
-  const t = nextTurn(WT ? WT.draft.first_pick : 0);
+  // The policy model answers "whose move is it" itself (and flags boards
+  // that do not fit the order), so trust its state when one is active.
+  const t = (isPolicyModel() && resp && resp.state && !resp.state.complete)
+    ? { kind: resp.state.kind, side: resp.state.side }
+    : nextTurn(currentFirstPick());
   ['blue', 'red'].forEach(name => {
     document.getElementById('turn-' + name).textContent = '';
   });
@@ -281,7 +301,7 @@ function addPick(team, idx) {
 
 function renderAll() {
   renderSlots(); renderBans(); renderRoles();
-  renderSuggestions(); renderTurn();
+  renderSuggestions(); renderTurn(); renderNextMove();
 }
 
 function changed() {
@@ -344,19 +364,132 @@ function closePicker() {
 function requestSuggest() {
   clearTimeout(debounceT);
   debounceT = setTimeout(async () => {
+    const policy = isPolicyModel();
+    const body = policy
+      ? {
+        picks: picks,
+        bans: allBansFlat(),
+        first_pick: currentFirstPick(),
+        k: 8,
+        ban_k: 4,
+        rollout: document.getElementById('nm-rollout').checked
+      }
+      : { picks: picks, bans: allBansFlat() };
     let r;
     try {
-      r = await (await fetch('/api/suggest', {
+      r = await (await fetch(policy ? '/api/next-move' : '/api/suggest', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ picks: picks, bans: allBansFlat() })
+        body: JSON.stringify(body)
       })).json();
     } catch (e) { return; }
-    if (r.error) { console.warn(r.error); return; }
+    if (r.error) {
+      resp = null;
+      renderNextMoveError(r.error);
+      return;
+    }
     resp = r;
     renderSlots(); renderRoles(); renderSuggestions(); renderTurn();
+    renderNextMove();
     renderCompare();
   }, 200);
+}
+
+// ---- next-move policy panel --------------------------------------------
+
+function renderNextMove() {
+  const box = document.getElementById('nextmove');
+  if (!isPolicyModel() || !resp || !resp.state) {
+    box.classList.add('hidden');
+    return;
+  }
+  box.classList.remove('hidden');
+  const st = resp.state;
+  const sideName = st.side === 0 ? 'Blue' : 'Red';
+  document.getElementById('nm-turn').innerHTML = st.complete
+    ? '<b>Draft complete</b>'
+    : `<b>${sideName} to ${st.kind}</b>`;
+  document.getElementById('nm-meta').textContent = st.complete
+    ? '' : `move ${st.move_idx + 1}/20 · ${st.phase}`;
+  const warn = document.getElementById('nm-warning');
+  if (st.warning) {
+    warn.textContent = 'board warning: ' + st.warning;
+    warn.classList.remove('hidden');
+  } else {
+    warn.classList.add('hidden');
+  }
+  const chips = document.getElementById('nm-chips');
+  chips.innerHTML = '';
+  if (!st.complete) {
+    (resp.suggestions || []).forEach(c => {
+      const b = document.createElement('button');
+      b.className = 'nm-chip';
+      b.innerHTML = imgTag(BY_IDX[c.idx])
+        + `<span class="nm">${c.name}</span>`
+        + `<span class="p">${(100 * c.prob).toFixed(1)}%</span>`;
+      b.title = `${sideName} ${st.kind}: ${c.name}`;
+      b.addEventListener('click', () => applyMove(st.kind, st.side, c.idx));
+      chips.appendChild(b);
+    });
+  }
+  const banBox = document.getElementById('nm-bans');
+  const bd = resp.bans;
+  if (st.kind === 'ban' && bd && bd.candidates && bd.candidates.length) {
+    banBox.classList.remove('hidden');
+    document.getElementById('nm-ban-sub').innerHTML =
+      'Ban candidates — ' + (bd.win_prob_available
+        ? 'denial% = how likely they were to take it, win% = simulated '
+          + 'finished draft (value model is weak, treat as a tiebreaker)'
+        : 'ranked by how likely they were to take it · no value model '
+          + 'loaded, so no simulated win%');
+    const list = document.getElementById('nm-ban-list');
+    list.innerHTML = '';
+    bd.candidates.forEach(c => {
+      const row = document.createElement('button');
+      row.className = 'nm-ban-row';
+      row.innerHTML = `<span class="rk">#${c.rank}</span>`
+        + imgTag(BY_IDX[c.idx])
+        + `<span class="nm">${c.name}</span>`
+        + `<span class="p">${(100 * c.denial).toFixed(0)}% they take it</span>`
+        + (c.win_prob != null
+          ? `<span class="wp">win ${(100 * c.win_prob).toFixed(1)}%</span>`
+          : '');
+      row.title = `ban ${c.name}`;
+      row.addEventListener('click', () => applyMove('ban', st.side, c.idx));
+      list.appendChild(row);
+    });
+  } else {
+    banBox.classList.add('hidden');
+  }
+}
+
+function renderNextMoveError(msg) {
+  const box = document.getElementById('nextmove');
+  if (!isPolicyModel()) { box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  document.getElementById('nm-turn').innerHTML = '<b>no suggestion</b>';
+  document.getElementById('nm-meta').textContent = '';
+  document.getElementById('nm-chips').innerHTML = '';
+  document.getElementById('nm-bans').classList.add('hidden');
+  const warn = document.getElementById('nm-warning');
+  warn.textContent = msg;
+  warn.classList.remove('hidden');
+}
+
+function applyMove(kind, side, idx) {
+  const c = BY_IDX[idx];
+  if (!c) return;
+  if (kind === 'ban') {
+    const team = side === 0 ? 'blue' : 'red';
+    if (bans[team].length >= 5) return;
+    bans[team].push(c.riot);
+  } else {
+    const base = side === 0 ? 0 : 5;
+    for (let s = base; s < base + 5; s++) {
+      if (picks[s] == null) { picks[s] = c.riot; break; }
+    }
+  }
+  changed();
 }
 
 // ---- walkthrough of real pro drafts -------------------------------------
@@ -383,11 +516,30 @@ function renderCompare() {
     + ` — ${sideLabel} to ${m.kind}`;
   if (m.kind === 'ban') {
     box.innerHTML = `${head}: ${imgTag(BY_IDX[m.idx])} <b>${m.name}</b>`
-      + ' — bans are a post-filter; they never change what the model'
-      + ' conditions on.';
+      + (isPolicyModel()
+        ? ' — the policy reads bans as input, so this is part of its state.'
+        : ' — bans are a post-filter; they never change what the model'
+          + ' conditions on.');
     return;
   }
   const role = ROLES[m.role];
+  if (isPolicyModel()) {
+    // the policy is role-free, so judge the move against the next-move
+    // list it produced *before* this move was applied
+    const list = (WT.prev && WT.prev.suggestions) || [];
+    const k = list.findIndex(c => c.idx === m.idx);
+    let verdict;
+    if (k >= 0) {
+      verdict = `policy ranked it <b>#${k + 1}</b>`
+        + ` (${(100 * list[k].prob).toFixed(1)}%)`;
+    } else {
+      verdict = '<b>not in the policy\'s top-8</b>'
+        + (list[0] ? ` (its #1 was ${list[0].name})` : '');
+    }
+    box.innerHTML = `${head}: ${imgTag(BY_IDX[m.idx])} <b>${m.name}</b>`
+      + ` <span class="muted">(${role})</span> — ${verdict}`;
+    return;
+  }
   const lists = resp && resp[sideName] ? resp[sideName] : {};
   const inRole = lists[role] || [];
   let rank = -1, prob = 0;
@@ -419,6 +571,7 @@ function wtApply() {
   picks = Array(10).fill(null);
   bans = { blue: [], red: [] };
   if (WT) {
+    WT.prev = resp;              // suggestions for the pre-move board
     WT.actualRole = {};
     const next = [0, 0];                 // next free pick slot per team
     for (let k = 0; k < WT.step; k++) {
@@ -448,6 +601,9 @@ async function wtLoad(i) {
     sel.appendChild(o);
   }
   sel.value = String(i);
+  const fp = document.getElementById('first-pick');
+  fp.value = d.first_pick ? '1' : '0';
+  fp.disabled = true;              // the game dictates the order
   renderWalkthrough();
   wtApply();   // changed() -> suggest -> renderCompare on response
   renderCompare();
@@ -456,6 +612,7 @@ async function wtLoad(i) {
 function wtExit() {
   WT = null;
   document.getElementById('wt-select').value = '';
+  document.getElementById('first-pick').disabled = false;
   resetDraft();
 }
 
@@ -514,6 +671,12 @@ async function refreshDraftList(q) {
 document.getElementById('btn-reset').addEventListener('click', () => {
   if (WT) { wtExit(); return; }
   resetDraft();
+});
+document.getElementById('first-pick').addEventListener('change', () => {
+  if (!WT) changed();          // the whole order mirrors
+});
+document.getElementById('nm-rollout').addEventListener('change', () => {
+  requestSuggest();
 });
 document.getElementById('picker-close').addEventListener('click', closePicker);
 document.getElementById('picker').addEventListener('click', ev => {

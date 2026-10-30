@@ -189,3 +189,56 @@ footer { padding: 8px 18px; border-top: 1px solid var(--line);
   border-radius: 6px; padding: 5px 6px; font: inherit; max-width: 380px;
 }
 .hidden { display: none; }
+
+/* --- next-move policy panel ------------------------------------------- */
+.fp-label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.fp-label select {
+  background: #12151b; color: var(--text); border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px 6px; font: inherit;
+}
+#nextmove {
+  max-width: 1400px; margin: 18px auto 0; padding: 12px 14px;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px;
+}
+#nextmove.hidden { display: none; }
+.nm-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+#nm-turn { font-size: 16px; }
+#nm-turn b { color: var(--acc); }
+.nm-opt { font-size: 12px; display: flex; align-items: center; gap: 5px; }
+.nm-warn {
+  margin-top: 8px; padding: 6px 9px; font-size: 12px; border-radius: 6px;
+  background: #3a2a12; border: 1px solid #6b4a1d; color: #f0c785;
+}
+.nm-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.nm-chip {
+  display: flex; align-items: center; gap: 7px; padding: 5px 9px;
+  background: #232a36; border: 1px solid var(--line); border-radius: 8px;
+  font-size: 13px;
+}
+.nm-chip:hover { border-color: var(--acc); }
+.nm-chip .ic { width: 30px; height: 30px; }
+.nm-chip .p, .nm-ban-row .p { color: var(--muted); font-variant-numeric: tabular-nums; }
+.nm-sub {
+  margin: 14px 0 8px; font-size: 12px; color: var(--muted);
+  letter-spacing: .3px;
+}
+.nm-ban-list { display: flex; flex-direction: column; gap: 6px; }
+.nm-ban-row {
+  display: flex; align-items: center; gap: 10px; padding: 5px 9px;
+  background: #232a36; border: 1px solid var(--line); border-radius: 8px;
+  text-align: left; font-size: 13px;
+}
+.nm-ban-row:hover { border-color: var(--red); }
+.nm-ban-row .ic { width: 28px; height: 28px; }
+.nm-ban-row .rk {
+  color: var(--muted); min-width: 26px; font-variant-numeric: tabular-nums;
+}
+.nm-ban-row .nm { min-width: 110px; }
+.nm-ban-row .wp {
+  color: var(--acc); font-variant-numeric: tabular-nums;
+}
+#nm-bans.hidden { display: none; }
+
+/* a next-move policy is role-free: the per-role tables do not apply */
+body.policy-mode .sug-table, body.policy-mode .sugs-head { display: none; }

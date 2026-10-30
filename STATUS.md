@@ -154,10 +154,14 @@ pool.
 **Important caveat on the phase-2 null.** It is a property of the *model class*,
 not of the game. An additive `W[role, champ]` cannot express "Karma is worth
 more to the team that already has Ezreal than to the team facing Kaisa". Real
-drafts have exactly that champion-specific complementarity, which is why the
-ban proposer's symmetric self-play rollout cancels: it removes the same
-champion from both sides. The missing ingredient is champion x champion
-interaction conditioned on what is already locked in — see P3.
+drafts have exactly that champion-specific complementarity — blue on Ezreal
+wants Karma, red on Kaisa wants Nautilus — and the rollout does produce such
+asymmetric drafts (87.9% of decisions change, mean 2.47 champion slots). What
+the additive `W` cannot do is *score* the difference, which is why the proposal
+reads as a null and why `--propose value` tops out at +0.0173: the effect is
+below this value function's resolution, not absent from the game. The missing
+ingredient is champion × champion interaction conditioned on what is already
+locked in — see P3.
 
 ## 6. Discarded ablations (weights deleted, conclusions kept)
 
@@ -200,20 +204,36 @@ The repo is now shaped for these four P3 items (`plan-model-v2.md` §P3):
 4. **Patch-day cold start.** `data/patch notes/` corpus -> champion priority
    prior, bridging the patch reset that `by_patch` currently exposes.
 
-Frontend work needed before any of this is visible:
+The frontend now serves both model families (done 2026-10-30):
 
-- `Predictor` in `frontend/server.py` only does masked-draft completion. It
-  needs a next-move path that builds a `build_prefix`-style batch and calls
-  `PolicyValueModel`, plus a ban-suggestion path; `model/policy/ban_propose.py`
-  is the reference implementation of the latter.
-- The `--ckpt` dropdown lists the `best_*` files under `ckpt/run_*/` only
-  (`latest.pt` is filtered out — it is a resume point, not a model). With the
-  old runs gone it now offers exactly the four kept checkpoints.
+- **Masked path** (`/api/suggest`): the `Predictor` class, role-conditioned
+  MASK queries for every empty role slot on both teams. Accepts pretraining
+  and finetune checkpoints only — a policy checkpoint is rejected with
+  "not a next-move policy" because it has no champ head.
+- **Next-move path** (`/api/next-move`): `model/policy/infer.py` owns it
+  (`PolicyPredictor`), with no dataset or training imports, so the server
+  never pulls in `datasets.py`. It resolves the canonical 20-move order
+  (including a red first pick), builds the board from the UI's picks/bans,
+  and returns the next move's top-k plus, on ban moves, denial-ranked ban
+  candidates: roll the policy forward to the opponent's next pick, shortlist
+  their top-k, ban each for real, score the finished drafts with the prefix
+  value model, rank by denial. `--value` (default: the newest
+  `ckpt/value_*/best.pt`) supplies the verifier; without it the panel ranks
+  by denial alone and says so.
+- Model family is dispatched from the state-dict keys, not the filename:
+  `policy_head.*` → policy, `heads.*` → finetune, otherwise pretraining.
 - `Predictor` loads through `load_encoder_state`, so a pretraining checkpoint
   that carries the value path (`pma.*`, `win_head.*`) loads cleanly while a
-  real architecture mismatch still raises. This was broken before the cleanup
-  and only surfaced because the surviving checkpoint has `with_value=True`.
+  real architecture mismatch still raises.
+- The `--ckpt` dropdown lists the `best_*` files under `ckpt/run_*/` only
+  (`latest.pt` is filtered out — it is a resume point, not a model), across
+  all four kept checkpoints.
 - `--host 0.0.0.0` is required when serving through the Docker port mapping.
+
+Known gap: the offline proposer is told the role of each future pick from the
+pro row; a UI board has no role labels, so the rollout infers each simulated
+pick's role from the champion. The UI's simulated win% is therefore a harder
+task than the offline null and is shown only as a tiebreaker behind denial.
 
 ## 8. Reproduce
 

@@ -351,3 +351,112 @@ def test_drafts_endpoints(app, httpd):
     assert status == 200 and len(d["drafts"]) == 1
     status, _ = _get(httpd, "/api/draft?i=abc")
     assert status == 404
+
+
+# --- next-move policy models --------------------------------------------
+
+POLICY_GLOB = str(S.ROOT / "model" / "policy" / "ckpt"
+                  / "run_*" / "best_policy.pt")
+
+
+@pytest.fixture()
+def policy_ckpt():
+    hits = sorted(glob.glob(POLICY_GLOB))
+    if not hits:
+        pytest.skip("no policy checkpoints on disk")
+    return hits[-1]
+
+
+def _empty_board(first_pick=0):
+    return json.dumps({"picks": [None] * 10, "bans": [],
+                       "first_pick": first_pick})
+
+
+def test_policy_checkpoint_switches_kind(app, policy_ckpt):
+    """A best_policy.pt must load as a next-move model, not an encoder."""
+    pred = S.load_predictor(Path(policy_ckpt))
+    assert pred.kind == "policy"
+    info = S.model_info(pred)
+    assert info["kind"] == "policy"
+    assert info["metric"] == "next-move top5"
+    # policy checkpoints report val next-move top5, not champ_top5
+    assert info["val_top5"] is None or 0.0 <= info["val_top5"] <= 1.0
+    assert info["ckpt"].endswith("best_policy.pt")
+
+
+def test_next_move_endpoint_returns_a_ban_decision(app, httpd, policy_ckpt):
+    S.load_predictor(Path(policy_ckpt))
+    status, d = _post(httpd, "/api/next-move", _empty_board())
+    assert status == 200, d
+    st = d["state"]
+    assert (st["move_idx"], st["kind"], st["side"]) == (0, "ban", 0)
+    assert st["phase"] == "bans1" and st["complete"] is False
+    # suggestions: real champions with names, descending, legal
+    assert d["suggestions"], "expected next-move suggestions"
+    probs = [c["prob"] for c in d["suggestions"]]
+    assert probs == sorted(probs, reverse=True)
+    for c in d["suggestions"]:
+        assert 0 <= c["idx"] < 173 and c["name"]
+    # roles stay in the shape the masked panel already renders
+    assert len(d["roles"]) == 10
+    assert d["roles"][0] == []                       # nothing picked yet
+    # ban panel: denial-ranked candidates from the rollout
+    bans = d["bans"]
+    assert bans and bans["candidates"] and bans["ranked_by"] == "denial"
+    assert [c["rank"] for c in bans["candidates"]] == \
+        list(range(1, len(bans["candidates"]) + 1))
+    denials = [c["denial"] for c in bans["candidates"]]
+    assert denials == sorted(denials, reverse=True)
+    for c in bans["candidates"]:
+        assert 0 <= c["idx"] < 173 and c["name"]
+        assert c["win_prob"] is None or 0.0 <= c["win_prob"] <= 1.0
+    for c in bans["opponent_picks"]:
+        assert 0 <= c["idx"] < 173 and c["name"]
+
+
+def test_next_move_reports_a_pick_move_without_a_ban_panel(app, httpd,
+                                                           policy_ckpt):
+    S.load_predictor(Path(policy_ckpt))
+    body = json.dumps({"picks": [None] * 10,
+                       "bans": [11, 12, 13, 14, 15, 16],
+                       "first_pick": 0})
+    status, d = _post(httpd, "/api/next-move", body)
+    assert status == 200, d
+    assert d["state"]["kind"] == "pick"
+    assert d["state"]["move_idx"] == 6
+    assert d["bans"] is None
+    # the ban panel can be skipped entirely for speed
+    status, d = _post(httpd, "/api/next-move",
+                      json.dumps({"picks": [None] * 10, "bans": [],
+                                  "rollout": False}))
+    assert status == 200 and d["bans"] is None
+
+
+def test_next_move_honours_first_pick(app, httpd, policy_ckpt):
+    S.load_predictor(Path(policy_ckpt))
+    status, d = _post(httpd, "/api/next-move", _empty_board(first_pick=1))
+    assert status == 200, d
+    assert d["state"]["side"] == 1 and d["state"]["first_pick"] == 1
+
+
+def test_next_move_rejects_a_masked_model(app, httpd):
+    S.load_predictor(S.find_best_ckpt()[0])
+    status, d = _post(httpd, "/api/next-move", _empty_board())
+    assert status == 400 and "not a next-move policy" in d["error"]
+
+
+def test_suggest_rejects_a_policy_model(app, httpd, policy_ckpt):
+    S.load_predictor(Path(policy_ckpt))
+    status, d = _post(httpd, "/api/suggest",
+                      json.dumps({"picks": [None] * 10, "bans": []}))
+    assert status == 400 and "next-move" in d["error"]
+
+
+def test_next_move_rejects_an_illegal_board(app, httpd, policy_ckpt):
+    S.load_predictor(Path(policy_ckpt))
+    # same champion picked twice
+    picks = [None] * 10
+    picks[0] = picks[5] = next(iter(app["mapping"]))
+    status, d = _post(httpd, "/api/next-move",
+                      json.dumps({"picks": picks, "bans": []}))
+    assert status == 400 and "twice" in d["error"]

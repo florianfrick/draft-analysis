@@ -15,9 +15,34 @@
     <button id="btn-upload" title="upload a .pt file from this machine">From file…</button>
   </div>
   <div class="spacer"></div>
+  <label class="muted fp-label" title="who has first pick (mirrors the whole
+    draft order; ignored while a real game is loaded)">first pick
+    <select id="first-pick">
+      <option value="0">blue</option>
+      <option value="1">red</option>
+    </select>
+  </label>
   <button id="btn-reset">Reset draft</button>
   <input id="file-input" type="file" accept=".pt" class="hidden">
 </header>
+
+<section id="nextmove" class="hidden">
+  <div class="nm-head">
+    <span id="nm-turn"></span>
+    <span id="nm-meta" class="muted"></span>
+    <span class="spacer"></span>
+    <label class="muted nm-opt" title="simulate the rest of the draft for
+      each ban candidate (about a second on CPU)">
+      <input type="checkbox" id="nm-rollout" checked> ban rollout
+    </label>
+  </div>
+  <div id="nm-warning" class="nm-warn hidden"></div>
+  <div class="nm-chips" id="nm-chips"></div>
+  <div id="nm-bans" class="hidden">
+    <div class="nm-sub" id="nm-ban-sub">Ban candidates</div>
+    <div class="nm-ban-list" id="nm-ban-list"></div>
+  </div>
+</section>
 
 <div id="wt-bar">
   <span class="wt-title">Real draft</span>
@@ -74,11 +99,13 @@
 </main>
 
 <footer class="muted">
-  5 role-conditioned suggestions per role &amp; team (banned &amp; picked
-  champions excluded, flex picks flagged) · highlighted slot = next move
-  in a standard pro draft (highlight only, nothing enforced) · champion
-  art from Riot's dDragon CDN (needs internet once) · local only ·
-  active model (pretraining or pro-finetune) shown in the header
+  Masked model (pretraining / finetune): 5 role-conditioned suggestions per
+  role &amp; team, flex picks flagged. Next-move policy: one ranked list for
+  the side on the clock, plus ban candidates ranked by how likely the
+  opponent was to take them. Banned &amp; picked champions are always
+  excluded · highlighted slot = next move in a standard pro draft
+  (highlight only, nothing enforced) · champion art from Riot's dDragon CDN
+  (needs internet once) · local only
 </footer>
 
 <div id="picker" class="hidden">

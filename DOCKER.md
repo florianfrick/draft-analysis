@@ -62,7 +62,7 @@ docker compose run --rm dev python model/policy/evaluate.py \
 
 Run each file separately — several of them collide on module names
 (`pipeline`, `model`) if collected in one pytest process. All of these pass in
-the image (140 tests total):
+the image (177 passed, 1 skipped):
 
 ```bash
 for t in "data/pro play/test_eval_protocol.py" \
@@ -73,6 +73,7 @@ for t in "data/pro play/test_eval_protocol.py" \
          "model/policy/test_policy.py" \
          "model/policy/test_ban_search.py" \
          "model/policy/test_datasets_aug.py" \
+         "model/policy/test_infer.py" \
          "frontend/test_server.py"; do
   echo "=== $t"
   docker compose run --rm -T dev python -m pytest "$t" -q | tail -2
@@ -110,6 +111,17 @@ local:
 ```bash
 docker compose run --rm -T -p 127.0.0.1:8777:8777 dev \
     python frontend/server.py --host 0.0.0.0 --port 8777
+```
+
+For the next-move UI, load a policy checkpoint and let the value model default
+resolve (newest `model/finetune/ckpt/value_*/best.pt`), or pin it with
+`--value`:
+
+```bash
+docker compose run --rm -T -p 127.0.0.1:8777:8777 dev \
+    python frontend/server.py --host 0.0.0.0 --port 8777 \
+    --ckpt model/policy/ckpt/run_20261025_000606_ablF-stage1/best_policy.pt \
+    --value model/finetune/ckpt/value_20261030_180102/best.pt
 ```
 
 The `127.0.0.1:` prefix on the publish spec is what keeps it off the network —

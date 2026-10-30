@@ -59,8 +59,12 @@ CKPT_PATTERNS = (                 # what the dropdown offers (no torch.load)
     ("pretrain", str(ROOT / "model" / "pretraining" / "ckpt"
                      / "run_*" / "*.pt")),
     ("finetune", str(ROOT / "model" / "finetune" / "ckpt" / "run_*" / "*.pt")),
+    ("policy", str(ROOT / "model" / "policy" / "ckpt"
+                   / "run_*" / "best_policy.pt")),
+    ("value", str(ROOT / "model" / "finetune" / "ckpt" / "value_*" / "best.pt")),
     ("uploaded", str(ROOT / "model" / "uploaded" / "*.pt")),
 )
+VALUE_GLOB = str(ROOT / "model" / "finetune" / "ckpt" / "value_*" / "best.pt")
 UPLOAD_DIR = ROOT / "model" / "uploaded"
 MAX_UPLOAD_BYTES = 512 * 1024 * 1024      # generous; ckpts are 20-150 MB
 LOAD_LOCK = threading.Lock()              # serialize runtime model swaps
@@ -71,9 +75,11 @@ DDRAGON_CACHE = FRONTEND_DIR / ".cache" / ("champion_%s.json" % DDRAGON_VERSION)
 # real pro games for the walkthrough (cached pro_drafts.pt)
 PRO_DRAFTS_PT = ROOT / "data" / "pro play" / "pro_drafts.pt"
 sys.path.insert(0, str(MODEL_DIR))
+sys.path.insert(0, str(MODEL_DIR / "policy"))     # so `import infer` works
 
 from soloq_model import (SoloQPretrainedModel, ROLE_FLEX_ID,  # noqa: E402
                          NUM_ROLES, load_encoder_state)
+import infer  # noqa: E402  (model/policy/infer.py: next-move + ban ranking)
 
 ROLE_ROWS = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"]
 N_SLOTS = 10
@@ -178,11 +184,31 @@ def find_best_ckpt():
     return Path(best_path), float(best_score[0])
 
 
+def find_value_ckpt():
+    """Newest value checkpoint, or None (the frontend works without one)."""
+    hits = sorted(glob.glob(VALUE_GLOB))
+    if not hits:
+        return None
+    return Path(max(hits, key=lambda p: Path(p).stat().st_mtime))
+
+
+def peek_kind(payload):
+    """Which family a payload belongs to, from its state-dict key names."""
+    state = payload.get("model") or {}
+    for key in state:
+        if key.startswith("policy_head."):
+            return "policy"
+        if key.startswith("heads."):
+            return "finetune"
+    return "pretrain"
+
+
 class Predictor:
     """Wraps the loaded checkpoint; one forward -> top-5 per empty slot."""
 
-    def __init__(self, ckpt_path, device="cpu"):
-        payload = torch.load(str(ckpt_path), map_location="cpu")
+    def __init__(self, ckpt_path, device="cpu", payload=None):
+        payload = payload if payload is not None else torch.load(
+            str(ckpt_path), map_location="cpu")
         cfg = payload["config"]
         self.num_champs = int(cfg["num_champs"])
         state = payload["model"]
@@ -210,6 +236,7 @@ class Predictor:
         self.device = torch.device(device)
         self.model.to(self.device)
         self.ckpt_path = str(ckpt_path)
+        self.metric = "champ top5"
         self.val_top5 = float(payload.get("metrics", {})
                               .get("champ_top5", -1))
         self.epoch = payload.get("metrics", {}).get("epoch")
@@ -355,9 +382,12 @@ def model_info(pred):
             "path": _rel(p),
             "val_top5": pred.val_top5,
             "epoch": pred.epoch,
-            "kind": pred.kind}
-    if pred.stage is not None:
+            "kind": pred.kind,
+            "metric": getattr(pred, "metric", "champ top5")}
+    if getattr(pred, "stage", None) is not None:
         info["stage"] = pred.stage
+    if getattr(pred, "value_path", None):
+        info["value_ckpt"] = _rel(pred.value_path)
     return info
 
 
@@ -401,10 +431,24 @@ def list_checkpoints():
 
 
 def load_predictor(path, device=None):
-    """Build a new Predictor first, then swap it in (old one stays on
-    failure) - concurrent /api/suggest requests keep a valid model."""
+    """Build a new model first, then swap it in (the old one stays on
+    failure) - concurrent requests keep a valid model.
+
+    One file can hold three different model families, so the payload is
+    read once here and dispatched: a policy checkpoint becomes a
+    `PolicyPredictor` (next-move + ban ranking), everything else stays a
+    masked `Predictor`.
+    """
+    device = device or APP.get("device", "cpu")
     with LOAD_LOCK:
-        pred = Predictor(path, device=device or APP.get("device", "cpu"))
+        payload = torch.load(str(path), map_location="cpu")
+        kind = peek_kind(payload)
+        if kind == "policy":
+            pred = infer.PolicyPredictor(
+                path, device=device, payload=payload,
+                value_path=APP.get("value_path"))
+        else:
+            pred = Predictor(path, device=device, payload=payload)
         APP["predictor"] = pred
     return pred
 
@@ -557,6 +601,8 @@ class Handler(BaseHTTPRequestHandler):
         route = self.path.split("?")[0]
         if route == "/api/suggest":
             self._handle_suggest()
+        elif route == "/api/next-move":
+            self._handle_next_move()
         elif route == "/api/load":
             self._handle_load()
         elif route == "/api/upload":
@@ -567,11 +613,15 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_suggest(self):
         try:
             payload = self._read_json()
+            pred = APP["predictor"]               # one stable reference
+            if pred.kind == "policy":
+                raise ValueError(
+                    "the active model is a next-move policy; the UI uses "
+                    "/api/next-move for it")
             picks = payload["picks"]              # len 10, riot id or None
             bans = payload.get("bans", [])        # riot ids
             mapping, names = APP["mapping"], APP["names_by_idx"]
             bans_idx = [mapping[b] for b in bans if b in mapping]
-            pred = APP["predictor"]               # one stable reference
             res = pred.suggest(picks, bans_idx, mapping)
         except (ValueError, KeyError, json.JSONDecodeError) as exc:
             self._send(400, {"error": str(exc)})
@@ -588,6 +638,70 @@ class Handler(BaseHTTPRequestHandler):
                         cand["flex"] = True
                     lst.append(cand)
                 out[team][role] = lst
+        self._send(200, out)
+
+    def _handle_next_move(self):
+        """POST {picks, bans, first_pick, rollout} -> next move + bans.
+
+        `picks` is the UI's 10-slot pick-order board (riot ids or null) and
+        `bans` the flat ban list. The board is mapped to indices here and
+        handed to infer.PolicyPredictor; every champion index it returns is
+        translated back to a name so the client never needs the mapping.
+        """
+        try:
+            payload = self._read_json()
+            pred = APP["predictor"]
+            if pred.kind != "policy":
+                raise ValueError(
+                    "the active model is %s, not a next-move policy - load a "
+                    "best_policy.pt to use this panel" % pred.kind)
+            mapping, names = APP["mapping"], APP["names_by_idx"]
+            picks = payload.get("picks") or [None] * 10
+            bans = payload.get("bans") or []
+            first_pick = 1 if int(payload.get("first_pick", 0)) else 0
+            picks_idx = [None if p is None else mapping[p] for p in picks]
+            bans_idx = [mapping[b] for b in bans]
+            res = pred.next_move(picks_idx, bans_idx, first_pick=first_pick,
+                                 k=int(payload.get("k", 8)))
+        except (ValueError, KeyError, TypeError, IndexError,
+                json.JSONDecodeError) as exc:
+            self._send(400, {"error": str(exc)})
+            return
+
+        out = {
+            "model": model_info(pred),
+            "state": {k: res[k] for k in ("move_idx", "kind", "side", "phase",
+                                          "first_pick", "warning", "complete")},
+            "suggestions": [{"idx": c["idx"], "prob": c["prob"],
+                             "name": names[c["idx"]]}
+                            for c in res["suggestions"]],
+            "roles": res["roles"],
+            "bans": None,
+        }
+        if res["kind"] == "ban" and payload.get("rollout", True):
+            try:
+                bans_res = pred.ban_candidates(
+                    picks_idx, bans_idx, first_pick=first_pick,
+                    k=int(payload.get("ban_k", 4)))
+            except Exception as exc:  # noqa: BLE001 - panel is optional
+                bans_res = None
+                out["bans_error"] = "ban ranking failed: %s" % exc
+            if bans_res:
+                out["bans"] = {
+                    "side": bans_res["side"],
+                    "opponent": bans_res["opponent"],
+                    "ranked_by": bans_res["ranked_by"],
+                    "win_prob_available": bans_res["win_prob_available"],
+                    "opponent_picks": [
+                        {"idx": c["idx"], "name": names[c["idx"]],
+                         "prob": c["prob"]}
+                        for c in bans_res["opponent_picks"]],
+                    "candidates": [
+                        {"idx": c["idx"], "name": names[c["idx"]],
+                         "denial": c["denial"], "win_prob": c["win_prob"],
+                         "rank": c["rank"]}
+                        for c in bans_res["candidates"]],
+                }
         self._send(200, out)
 
     def _handle_load(self):
@@ -652,22 +766,30 @@ def main():
     ap.add_argument("--device", default="cpu",
                     help="cpu keeps GPU free; cuda also fine")
     ap.add_argument("--ckpt", default="",
-                    help="checkpoint .pt path - pretraining best.pt or a "
-                         "finetune best_mask/best_win/latest.pt "
-                         "(default: best pretraining by val champ_top5)")
+                    help="checkpoint .pt path - pretraining best.pt, a "
+                         "finetune best_mask/best_win.pt, or a policy "
+                         "best_policy.pt (default: best pretraining by val "
+                         "champ_top5)")
+    ap.add_argument("--value", default="",
+                    help="prefix value checkpoint used to score simulated "
+                         "drafts in the ban panel (default: newest under "
+                         "model/finetune/ckpt/value_*/best.pt)")
     args = ap.parse_args()
 
     mapping, names_by_idx, champions = load_champ_data()
+    value_path = args.value or str(find_value_ckpt() or "")
+    APP.update(device=args.device, value_path=value_path or None)
     if args.ckpt:
         ckpt = resolve_ckpt_path(args.ckpt, confine=False)
     else:
         ckpt, val = find_best_ckpt()
         print("best pretraining ckpt: %s (val top-5 %s)" % (ckpt, val))
-    predictor = Predictor(ckpt, device=args.device)
+    predictor = load_predictor(ckpt, device=args.device)
     print("checkpoint: %s (%s)" % (ckpt, predictor.kind))
+    if getattr(predictor, "value_path", None):
+        print("value: %s" % predictor.value_path)
     APP.update(mapping=mapping, names_by_idx=names_by_idx,
-               champions=champions, predictor=predictor,
-               device=args.device)
+               champions=champions, predictor=predictor)
     print("champions: %d, device: %s" % (len(mapping), args.device))
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
