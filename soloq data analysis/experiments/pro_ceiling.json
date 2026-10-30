@@ -1,0 +1,44 @@
+[
+ {
+  "tag": "A singles",
+  "C": 0.02,
+  "auc": 0.5506729827114207,
+  "logloss": 0.6883400082588196,
+  "n_features": 173
+ },
+ {
+  "tag": "A singles",
+  "C": 0.1,
+  "auc": 0.5498213212535437,
+  "logloss": 0.6894978880882263,
+  "n_features": 173
+ },
+ {
+  "tag": "B +synergy+counter",
+  "C": 0.02,
+  "auc": 0.5346431868411013,
+  "logloss": 0.7051725387573242,
+  "n_features": 29929
+ },
+ {
+  "tag": "B +synergy+counter",
+  "C": 0.1,
+  "auc": 0.5177921989412482,
+  "logloss": 0.7762953639030457,
+  "n_features": 29929
+ },
+ {
+  "tag": "C +team identity",
+  "C": 0.02,
+  "auc": 0.5714988037928131,
+  "logloss": 0.6906878352165222,
+  "n_features": 31309
+ },
+ {
+  "tag": "C +team identity",
+  "C": 0.1,
+  "auc": 0.5604765931948512,
+  "logloss": 0.7527345418930054,
+  "n_features": 31309
+ }
+]

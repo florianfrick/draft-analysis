@@ -39,8 +39,8 @@ current SoloQ-pretrain to pro-finetune + set-attention strategy was chosen.
 - Teaches solo-carry and lane-fit priors, not coordinated pro comps. It
   over-represents comfort/blinds and under-represents pro coordination
   (swaps, dive comps, fearless depth). Pretrain-only output is SoloQ-biased.
-- No outcome weighting: losers count the same as winners. Down-weighting
-  losing drafts as mistakes is NOT implemented.
+- No outcome weighting: losers count the same as winners in the *champ* loss.
+  The outcome is now used, but only by the separate value head (Sec 5).
 - Riot position is assumed truth for role labels. Off-role games are noise.
 
 ### 2.2 Pro play (Oracle's Elixir, 2022-2026)
@@ -141,4 +141,38 @@ current SoloQ-pretrain to pro-finetune + set-attention strategy was chosen.
   (K-curve measures it); hard CE gives no partial credit; win head is
   side-neutral ("blue wins" — red queries mirror slots); econ is weak
   supervision.
+
+## 5. Revision — value path in SoloQ pretraining (2026-10-29)
+
+Supersedes "no outcome weighting" and "aux heads deferred" for the win head
+only. Bans and econ targets are still out of pretraining.
+
+- **What was wrong.** The pro value head never learned: over 100 epochs /
+  8,000 steps `win_auc` stayed in 0.4926–0.5042 and Brier sat at 0.2509–0.2514
+  against 0.24824 for a constant predictor. It was not a data limit — a
+  173-parameter logistic regression on champion identity reaches 0.5507 on pro
+  and 0.5449 on soloQ.
+- **Diagnosis.** A linear probe of the OLD encoder's pooled vector reaches
+  **AUC 0.5329** on 19,217 held-out soloQ drafts. The information was in the
+  representation; nothing downstream was trained to read it, because
+  masked-champ prediction never requires knowing who wins.
+- **Change.** `teams.{blue,red}.win` was in every shard and discarded by
+  `record_to_slots`. Pretraining now trains
+  `CE_champ + 0.3*CE_role + 1.0*BCE(blue_win)` and pools with PMA (learned
+  seeds) instead of a PAD-masked mean, since a mean over 5 slots divides
+  per-slot differences by 5 and is dominated by whichever slots are present.
+  Off by default (`with_value=False`); `--no-win` reproduces the old objective.
+- **Label rule.** `blue_win = teams.blue.win` only when it disagrees with
+  `teams.red.win`; agreeing rows dropped (72 of 384,428 on 16.20). Verified
+  identical to `store.py`'s `blue_win` on 37,820 overlapping games, so the
+  direction is not inverted.
+- **Measurement rule.** Value metrics are computed on a clean view
+  (`mask_prob=0, force_one=False`). The train-time ">= 1 mask" invariant would
+  otherwise hide one champion of the very draft being scored. `win_skill =
+  1 - brier/brier_const`; > 0 means it beats the constant.
+- **Not done, deliberately.** No bans in pretraining (unordered in the shards;
+  they are a policy-side feature). No econ aux (it already failed silently
+  once — `econ_skill` was -0.15 while the head was trained against zeros).
+  No pairwise win-rate input: measured to add nothing beyond champ strength
+  (see `plan-model-v2.md` Sec 1).
 

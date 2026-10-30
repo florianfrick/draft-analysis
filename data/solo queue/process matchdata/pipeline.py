@@ -165,10 +165,38 @@ def name_of(idx, names):
     return names[idx] if 0 <= idx < len(names) else "?"
 
 
+def blue_win_of(record):
+    """1 = blue won, 0 = red won, None = no usable result.
+
+    `teams.{blue,red}.win` is already in every shard. Only claim a result
+    when the two sides disagree: a handful of games record win=false for
+    both teams, and reading one side's flag would invent a result for them
+    (same rule as `store.py`'s `build_drafts`).
+    """
+    teams = record.get("teams") or {}
+    b = (teams.get("blue") or {}).get("win")
+    r = (teams.get("red") or {}).get("win")
+    if b is None or r is None:
+        return None
+    try:
+        b, r = int(b), int(r)
+    except (TypeError, ValueError):
+        return None
+    if b == r:
+        return None
+    return b
+
+
 def record_to_slots(record, riot_to_idx, patch_prefix=None,
                     queue_ids=RANKED_QUEUES, min_duration_s=MIN_DURATION_S,
-                    drop_surrender=False):
+                    drop_surrender=False, return_win=False):
     """Filters + canonical slots. Returns (champ_idx[10], role[10]) or None.
+
+    With `return_win`, returns (champ_idx[10], role[10], blue_win) instead,
+    where blue_win is 1/0 (the label was always in the shard; pretraining
+    simply never read it). A record whose two sides report the same result
+    still passes the slot filters - the caller decides whether an unlabelled
+    row is usable - so blue_win may be None even on a kept row.
 
     None on: wrong patch/queue, short/remake game, surrender (if dropped),
     != 10 players, missing/doubled position (incl. "Invalid"), unknown
@@ -203,35 +231,52 @@ def record_to_slots(record, riot_to_idx, patch_prefix=None,
             role_ids.append(ROLE_TO_ID[pos])
     if len(set(champ_idx)) != N_SLOTS:
         return None
+    if return_win:
+        return champ_idx, role_ids, blue_win_of(record)
     return champ_idx, role_ids
 
 
 def scan_and_index(shard_paths, riot_to_idx, patch_prefix,
                    queue_ids=RANKED_QUEUES, min_duration_s=MIN_DURATION_S,
-                   drop_surrender=False, limit=None):
+                   drop_surrender=False, limit=None, with_win=False):
     """One streaming pass -> kept/skipped counts + slot rows + provenance.
 
     Rows fit RAM easily (~20 bytes/draft -> ~2 MB per 100k drafts); the raw
     shards are never fully loaded.
+
+    With `with_win`, also returns `wins` aligned to `rows`, and drops rows
+    whose two sides report the same result (they carry no label). That count
+    is reported separately as `skipped_no_win` so it never hides inside the
+    ordinary skip count.
     """
-    rows, index = [], []
-    kept = skipped = 0
+    rows, wins, index = [], [], []
+    kept = skipped = skipped_no_win = 0
     for sp, ln, rec in iter_records(shard_paths):
         out = record_to_slots(rec, riot_to_idx, patch_prefix, queue_ids,
-                              min_duration_s, drop_surrender)
+                              min_duration_s, drop_surrender, return_win=with_win)
         if out is None:
             skipped += 1
         else:
+            if with_win and out[2] is None:
+                skipped_no_win += 1
+                if limit is not None and kept + skipped + skipped_no_win >= limit:
+                    break
+                continue
             kept += 1
-            rows.append(out)
+            if with_win:
+                rows.append((out[0], out[1]))
+                wins.append(out[2])
+            else:
+                rows.append(out)
             index.append((str(sp), ln))
-        if limit is not None and kept + skipped >= limit:
+        if limit is not None and kept + skipped + skipped_no_win >= limit:
             break
-    return {"kept": kept, "skipped": skipped, "rows": rows, "index": index}
+    return {"kept": kept, "skipped": skipped, "skipped_no_win": skipped_no_win,
+            "rows": rows, "wins": (wins if with_win else None), "index": index}
 
 
 def apply_masking(champ, role, num_champs, mask_prob=0.15, role_keep_prob=0.1,
-                  role_only_prob=0.10, generator=None):
+                  role_only_prob=0.10, generator=None, force_one=True):
     """Train masking -> (champ_ids, role_ids, role_masked, is_masked, clab, rlab).
 
     Champ masked w.p. mask_prob, then >= 1 champ mask forced per draft.
@@ -242,6 +287,11 @@ def apply_masking(champ, role, num_champs, mask_prob=0.15, role_keep_prob=0.1,
     learn P(role | champ + context) - i.e. "x champion is most likely y role".
     Without this the role head only ever trains with the champ hidden and can
     never learn champion->role affinities.
+
+    `force_one=False` disables the "at least one mask" rule. Use it for the
+    clean value evaluation: the forced mask is a train-time invariant, but a
+    value head must be measured on the draft as it actually is, so the probe
+    and the clean val pass need a view with zero masked champions.
 
     Labels: champ truth on is_masked slots else IGNORE_INDEX; role truth on
     (is_masked | role-only) slots else IGNORE_INDEX. pad_mask by collate.
@@ -259,7 +309,7 @@ def apply_masking(champ, role, num_champs, mask_prob=0.15, role_keep_prob=0.1,
             return torch.randint(n, (k,))
         return torch.randint(n, (k,), generator=generator)
     is_m = _rand(N_SLOTS) < mask_prob
-    if not bool(is_m.any()):
+    if force_one and not bool(is_m.any()):
         is_m[_randint(N_SLOTS, 1)] = True
     keep = (_rand(N_SLOTS) < role_keep_prob) & is_m
     role_masked_champ = is_m & ~keep
@@ -284,10 +334,18 @@ class SoloQDraftDataset(Dataset):
     Train mode applies fresh random masking per access (generator seeded by
     index + epoch so workers stay deterministic); eval mode returns one
     fixed view when mask_prob is set, unmasked when mask_prob=0.
+
+    `wins` (optional, aligned to `rows`) adds a `win_label` per sample - 1 if
+    blue won. Masked modelling never needs it; the value head does. Passing
+    None leaves the batch exactly as before, so every existing caller keeps
+    working unchanged.
     """
 
     def __init__(self, rows, num_champs, mask_prob=0.15, role_keep_prob=0.1, role_only_prob=0.10,
-                 seed=0, epoch=0):
+                 seed=0, epoch=0, wins=None, force_one=True):
+        if wins is not None and len(wins) != len(rows):
+            raise ValueError("wins (%d) must align with rows (%d)"
+                             % (len(wins), len(rows)))
         self.rows = rows
         self.num_champs = num_champs
         self.mask_prob = mask_prob
@@ -295,6 +353,8 @@ class SoloQDraftDataset(Dataset):
         self.role_only_prob = role_only_prob
         self.seed = seed
         self.epoch = epoch
+        self.wins = wins
+        self.force_one = force_one
 
     def __len__(self):
         return len(self.rows)
@@ -308,12 +368,17 @@ class SoloQDraftDataset(Dataset):
         g = torch.Generator().manual_seed((self.seed + idx * 7919 +
                                            self.epoch * 104729) % (2 ** 63 - 1))
         cids, rids, rm, is_m, clab, rlab = apply_masking(
-            champ, role, self.num_champs, self.mask_prob, self.role_keep_prob, self.role_only_prob, g)
-        return {
+            champ, role, self.num_champs, self.mask_prob, self.role_keep_prob,
+            self.role_only_prob, g, force_one=self.force_one)
+        out = {
             "champ_ids": cids, "role_ids": rids, "role_masked": rm,
             "is_masked": is_m, "champ_labels": clab, "role_labels": rlab,
             "pad_mask": torch.zeros(N_SLOTS, dtype=torch.bool),
         }
+        if self.wins is not None:
+            out["win_label"] = torch.tensor(int(self.wins[idx]),
+                                            dtype=torch.long)
+        return out
 
 
 def soloq_collate(samples):

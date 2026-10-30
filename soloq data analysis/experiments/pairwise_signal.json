@@ -1,0 +1,38 @@
+[
+ {
+  "tag": "A singles C=0.03",
+  "auc": 0.5449281448608703,
+  "logloss": 0.6890758872032166,
+  "n_features": 173
+ },
+ {
+  "tag": "A singles C=0.1",
+  "auc": 0.5449485662704355,
+  "logloss": 0.6890810132026672,
+  "n_features": 173
+ },
+ {
+  "tag": "B singles+synergy C=0.03",
+  "auc": 0.5353180251692723,
+  "logloss": 0.6965929269790649,
+  "n_features": 15051
+ },
+ {
+  "tag": "B singles+synergy C=0.1",
+  "auc": 0.5325463943343858,
+  "logloss": 0.7028743028640747,
+  "n_features": 15051
+ },
+ {
+  "tag": "C singles+syn+ctr C=0.03",
+  "auc": 0.5436410466478929,
+  "logloss": 0.7044599652290344,
+  "n_features": 29929
+ },
+ {
+  "tag": "C singles+syn+ctr C=0.1",
+  "auc": 0.5405597285987336,
+  "logloss": 0.7196258902549744,
+  "n_features": 29929
+ }
+]
