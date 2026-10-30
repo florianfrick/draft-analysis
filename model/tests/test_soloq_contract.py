@@ -4,7 +4,15 @@ Decisions frozen: no team embedding / no team_ids tensor, champ vocab
 REAL+MASK+PAD = 175, role head exactly 5-way, BERT-style 90/10 role masks on
 champ-masked slots PLUS role-only masks (champ visible, role hidden) teaching
 P(role | champ), hard CE (graded-credit limitation noted in README),
->= 1 champ mask per draft, no auxiliary heads.
+>= 1 champ mask per draft.
+
+Revised: an OPT-IN value path (PMA pooling + blue-win head) is now part of
+the contract, but only when the model is built with `with_value=True`. The
+default model must stay exactly as before, so `win_logit` is still forbidden
+by default. This was a deliberate change, not drift: the shards always
+carried `teams.{blue,red}.win`, pretraining never read it, and the downstream
+value head consequently sat at the base rate for 8k steps (AUC 0.497, Brier
+0.2510 against 0.2482 for a constant).
 """
 import importlib.util
 import pathlib
@@ -168,11 +176,24 @@ def validate_batch_dict(batch, num_real_champs=NUM_REAL_CHAMPS, allow_partial=Tr
     return B
 
 
-def validate_forward_outputs(out, batch, num_real_champs=NUM_REAL_CHAMPS):
-    """Assert README Sec.4 + invariants 6-7 (exact shapes, finite, dup-mask)."""
+def validate_forward_outputs(out, batch, num_real_champs=NUM_REAL_CHAMPS,
+                             expect_win=False):
+    """Assert README Sec.4 + invariants 6-7 (exact shapes, finite, dup-mask).
+
+    `expect_win=True` requires the opt-in value path and checks it; the
+    default keeps asserting its absence, so a model built without
+    `with_value=True` can never quietly grow a value head.
+    """
     B = batch["champ_ids"].shape[0]
     C = num_real_champs
-    assert "champ_logits" in out and "role_logits" in out and "win_logit" not in out
+    assert "champ_logits" in out and "role_logits" in out
+    if expect_win:
+        assert "win_logit" in out, "with_value=True must emit win_logit"
+        wl = out["win_logit"]
+        assert wl.shape == (B, 1), wl.shape
+        assert torch.isfinite(wl.float()).all(), "win_logit must be finite"
+    else:
+        assert "win_logit" not in out
     assert "aux_preds" not in out, "aux heads deferred"
     cl, rl = out["champ_logits"], out["role_logits"]
     assert cl.shape == (B, N_SLOTS, C), cl.shape
@@ -347,4 +368,135 @@ def test_future_model_grad_and_invariance():
         unperm[:, BLUE_SLOTS] = unperm[:, BLUE_SLOTS][:, inv]
         assert torch.allclose(out[key], unperm, atol=1e-5), \
             f"{key} not permutation-equivariant within team"
+
+
+# ---------------------------------------------------------------------------
+# Opt-in value path: PMA readout + blue-win head
+# ---------------------------------------------------------------------------
+
+def _build_value_model(model_cls, seeds=4):
+    return model_cls(num_champs=NUM_REAL_CHAMPS, embed_dim=32, num_heads=4,
+                     num_intra_layers=1, num_cross_layers=1,
+                     with_value=True, value_seeds=seeds)
+
+
+def _swap_teams(b):
+    """Mirror blue<->red: same draft, win label flipped."""
+    out = dict(b)
+    for k in ("champ_ids", "role_ids", "role_masked", "is_masked",
+              "champ_labels", "role_labels", "pad_mask"):
+        t = b[k]
+        out[k] = torch.cat([t[:, RED_SLOTS], t[:, BLUE_SLOTS]], dim=1)
+    if "win_label" in b:
+        out["win_label"] = 1 - b["win_label"]
+    return out
+
+
+def test_value_path_off_by_default():
+    """The default model must not grow a value head (contract preserved)."""
+    mod = _load_soloq_module()
+    model = _build_model(_get_model_cls(mod))
+    assert model.with_value is False
+    assert model.win_head is None and model.pma is None
+    out = model(make_synthetic_batch(batch_size=2, seed=11))
+    validate_forward_outputs(out, make_synthetic_batch(batch_size=2, seed=11))
+
+
+def test_value_path_forward_contract():
+    mod = _load_soloq_module()
+    model = _build_value_model(_get_model_cls(mod)).eval()
+    b = make_synthetic_batch(batch_size=3, seed=12)
+    b["win_label"] = torch.tensor([0, 1, 1], dtype=torch.long)
+    with torch.no_grad():
+        out = model(b)
+    validate_forward_outputs(out, b, expect_win=True)
+    # value_vector is the documented 4D layout
+    z = model.value_vector(b)
+    assert z.shape == (3, 32 * 4), z.shape
+    assert torch.isfinite(z).all()
+
+
+def test_value_path_gradients_flow():
+    mod = _load_soloq_module()
+    model = _build_value_model(_get_model_cls(mod))
+    model.train()
+    b = make_synthetic_batch(batch_size=2, seed=13)
+    b["win_label"] = torch.tensor([0, 1], dtype=torch.long)
+    out = model(b)
+    loss = (out["champ_logits"].sum() + out["role_logits"].sum()
+            + out["win_logit"].sum())
+    loss.backward()
+    assert model.pma.seeds.grad is not None
+    assert model.pma.seeds.grad.abs().sum() > 0
+    assert model.win_head[1].weight.grad is not None
+
+
+def test_value_readout_is_siamese_and_permutation_invariant():
+    """Swapping teams swaps the two pooled halves; permuting slots does nothing."""
+    mod = _load_soloq_module()
+    model = _build_value_model(_get_model_cls(mod)).eval()
+    b = make_synthetic_batch(batch_size=2, seed=14)
+    b["win_label"] = torch.tensor([0, 1], dtype=torch.long)
+    D = 32
+    with torch.no_grad():
+        z = model.value_vector(b)              # [B, 4D]
+        vb, vr = z[:, :D], z[:, D:2 * D]
+        # side swap: blue's vector must become red's and vice versa
+        zs = model.value_vector(_swap_teams(b))
+        vbs, vrs = zs[:, :D], zs[:, D:2 * D]
+        assert torch.allclose(vb, vrs, atol=1e-5), "PMA is not Siamese"
+        assert torch.allclose(vr, vbs, atol=1e-5), "PMA is not Siamese"
+        # within-team permutation must leave the pooled vector identical
+        perm = torch.randperm(5)
+        bp = dict(b)
+        bp["champ_ids"] = b["champ_ids"].clone()
+        bp["role_ids"] = b["role_ids"].clone()
+        for k in ("champ_ids", "role_ids", "is_masked", "pad_mask"):
+            bp[k] = b[k].clone()
+            bp[k][:, BLUE_SLOTS] = bp[k][:, BLUE_SLOTS][:, perm]
+        assert torch.allclose(z, model.value_vector(bp), atol=1e-5), \
+            "PMA readout must be permutation-invariant within a team"
+
+
+def test_pma_handles_all_pad_team():
+    """A team with no picks must pool to exactly zero, never NaN."""
+    mod = _load_soloq_module()
+    model = _build_value_model(_get_model_cls(mod)).eval()
+    b = make_synthetic_batch(batch_size=2, seed=15)
+    b["champ_ids"] = b["champ_ids"].clone()
+    b["pad_mask"] = b["pad_mask"].clone()
+    b["champ_ids"][1, BLUE_SLOTS] = CHAMP_PAD_ID
+    b["pad_mask"][1, BLUE_SLOTS] = True
+    with torch.no_grad():
+        z = model.value_vector(b)
+    assert torch.isfinite(z).all(), "all-PAD team produced NaN in the readout"
+    D = 32
+    assert torch.allclose(z[1, :D], torch.zeros(D)), \
+        "an empty team must pool to zero"
+    # red still has five picks, so its half must NOT be zero
+    assert z[1, D:2 * D].abs().sum() > 0, "non-empty team pooled to zero"
+
+
+def test_load_encoder_state_tolerates_value_keys():
+    mod = _load_soloq_module()
+    cls = _get_model_cls(mod)
+    src = _build_value_model(cls)
+    # same trunk shape, no value path: only the value keys may be dropped
+    dst = cls(num_champs=NUM_REAL_CHAMPS, embed_dim=32, num_heads=4,
+              num_intra_layers=1, num_cross_layers=1, with_value=False)
+    res = mod.load_encoder_state(dst, src.state_dict())
+    assert res["dropped"], "value keys should have been dropped"
+    assert all(k.startswith(("pma.", "win_head.")) for k in res["dropped"])
+    # a real mismatch must still be loud
+    bad = dict(src.state_dict())
+    first = next(iter(bad))
+    bad["bogus." + first] = bad[first]
+    with pytest.raises(RuntimeError):
+        mod.load_encoder_state(dst, bad)
+    # a shape mismatch must also stay loud, not be silently filtered
+    wrong = cls(num_champs=NUM_REAL_CHAMPS, embed_dim=64, num_heads=4,
+                num_intra_layers=1, num_cross_layers=1, with_value=False)
+    with pytest.raises(RuntimeError):
+        mod.load_encoder_state(wrong, src.state_dict())
+
 

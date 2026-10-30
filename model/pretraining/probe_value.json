@@ -1,0 +1,22 @@
+{
+ "ckpt": "pretraining\\ckpt\\run_20261029_153912_v2-D512-p8\\best_value.pt",
+ "eval_base_rate": 0.4705729302180361,
+ "probes": [
+  {
+   "readout": "mean",
+   "dim": 2048,
+   "auc": 0.5477565946906227,
+   "brier": 0.255348353157145,
+   "brier_const": 0.2491340475640474
+  },
+  {
+   "readout": "pma",
+   "dim": 2048,
+   "auc": 0.5520537690084382,
+   "brier": 0.2528775049807912,
+   "brier_const": 0.2491340475640474
+  }
+ ],
+ "trained_head_auc": 0.5597170713604078,
+ "verdict": "representation carries outcome signal - head/training was the bottleneck"
+}
