@@ -1,0 +1,66 @@
+{
+ "policy": "model/policy/ckpt/run_20261025_000606_ablF-stage1/best_policy.pt",
+ "value": "model/finetune/ckpt/value_20261030_180102/best.pt",
+ "verify": "model/finetune/ckpt/run_20261017_185016_stage1-full/best_win.pt",
+ "split": "test",
+ "phase": "bans2",
+ "propose": "policy",
+ "topk": 4,
+ "value_bans": false,
+ "arms": {
+  "proposed": {
+   "mean_v": 0.47592195868492126,
+   "n": 12756,
+   "mean_verify": 0.6136267781257629
+  },
+  "observed": {
+   "mean_v": 0.47599443793296814,
+   "n": 12756,
+   "mean_verify": 0.6147671937942505
+  },
+  "random": {
+   "mean_v": 0.4762362241744995,
+   "n": 12756,
+   "mean_verify": 0.6125656366348267
+  }
+ },
+ "delta_proposed_minus_observed": {
+  "mean": -7.251793431350961e-05,
+  "ci_lo": -0.0005464303540065885,
+  "ci_hi": 0.0003908270737156272,
+  "frac_positive": 0.4398714303970337,
+  "n": 12756
+ },
+ "delta_proposed_minus_random": {
+  "mean": -0.00031429185764864087,
+  "ci_lo": -0.0007875479059293866,
+  "ci_hi": 0.0001736350095598027,
+  "frac_positive": 0.44073376059532166,
+  "n": 12756
+ },
+ "delta_observed_minus_random": {
+  "mean": -0.00024177397426683456,
+  "ci_lo": -0.0006519356975331903,
+  "ci_hi": 0.00017553239013068378,
+  "frac_positive": 0.3635151982307434,
+  "n": 12756
+ },
+ "agreement_with_observed": 0.04492003843188286,
+ "shortlist_spread": 0.028634777292609215,
+ "proposal_changes_the_draft": 0.8785669207572937,
+ "proposal_hamming": 2.4651143550872803,
+ "verify_delta_proposed_minus_observed": {
+  "mean": -0.0011404978577047586,
+  "ci_lo": -0.004117949400097132,
+  "ci_hi": 0.0019740532152354717,
+  "frac_positive": 0.43932268023490906,
+  "n": 12756
+ },
+ "verify_delta_proposed_minus_random": {
+  "mean": 0.0010610588360577822,
+  "ci_lo": -0.0019292159704491496,
+  "ci_hi": 0.003954041749238968,
+  "frac_positive": 0.4430072009563446,
+  "n": 12756
+ }
+}

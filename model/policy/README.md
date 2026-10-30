@@ -196,3 +196,62 @@ To use in the frontend: the `Predictor` class in `frontend/server.py`
 needs a new code path that builds a `build_prefix`-style batch from
 the UI's draft state and calls the policy head. The existing masked-
 draft suggestion path can remain for comp-completion queries.
+
+## Ban decisions: `ban_search.py` vs `ban_propose.py`
+
+Two different framings of "which champion should I ban", and the second
+one supersedes the first.
+
+**`ban_search.py`** fits an additive `W[role, champ]` and scores each
+legal ban by its negamax value. It is structurally incapable of ranking
+phase-1 bans (a symmetric additive V gives every ban the same value -
+proved, and observed as `spread 0.00000` over 19,131 decisions), and on
+phase 2 it found the human ban within 0.0046 of optimal with a 0.9
+winrate-point spread. Useful as a diagnostic; not a decision tool.
+
+**`ban_propose.py`** implements the rule "ban what they are about to
+take", with the policy proposing and a value function verifying:
+
+1. roll the policy forward from my ban to the opponent's first pick,
+   with *both* teams playing the policy (the stated premise);
+2. shortlist = their most likely picks;
+3. ban the top one, then let the rollout finish the draft;
+4. score the completed drafts (V), and compare against the human ban
+   and a random legal ban.
+
+The rollout is what makes this work at all: `V` reads the *picked*
+slots, so a ban on a fixed board changes nothing. Here the arms are
+different completed drafts, which is the regime V was trained for
+(0.5426 AUC on complete drafts).
+
+Measured on the test split (12,756 phase-2 decisions, policy
+`ablF-stage1`, value `value_20261030_180102`):
+
+| arm | V | verifier |
+|---|---|---|
+| proposed | 0.4759 | 0.6136 |
+| observed (human) | 0.4760 | 0.6148 |
+| random legal | 0.4762 | 0.6126 |
+
+`proposed - observed = -0.00007 [-0.00055, +0.00039]` under V and
+`-0.00114 [-0.00412, +0.00197]` under an independently trained second
+value model. The proposal changes the simulated draft in 87.9% of
+decisions (mean 2.47 champion slots), so this is a real null, not a
+no-op. Selecting on V instead (`--propose value`) yields +0.0173, which
+bounds V's resolution well below that - the effect is genuinely near
+zero, not unmeasurable.
+
+The reason is structural: **under the premise "the opponent drafts like
+me", both teams want the same champions**, so denying one to them
+denies it to me. A symmetric self-play rollout cannot produce a ban
+advantage. The asymmetry has to come from somewhere - opponent-specific
+champion pools (player specialties), not from a better search over the
+same symmetric model. That is also why phase 1 is not a target: pros
+ban specialists and game plans there, which is exactly the
+opponent-specific information a symmetric model lacks.
+
+`ban_intent.py` measures the premise directly: observed phase-2 bans
+land in the opponent's predicted top-5 at 29.6% vs 8.3% for a frequency
+baseline (3.6x), so humans do follow this rule - but only for a
+minority of bans, and phase-1 bans show no lift at all.
+
