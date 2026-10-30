@@ -60,10 +60,12 @@ def _load_module_by_path(name, path):
 
 sys.path.insert(0, str(MODEL_DIR))
 from soloq_model import SoloQPretrainedModel  # noqa: E402
+from soloq_model import load_encoder_state  # noqa: E402
 from model import PolicyValueModel  # noqa: E402
 
 PRO_PIPE = _load_module_by_path("pro_pipeline", PRO_DIR / "pipeline.py")
 PRO_DATA = _load_module_by_path("pro_datasets", PRO_DIR / "datasets.py")
+EP = _load_module_by_path("eval_protocol", PRO_DIR / "eval_protocol.py")
 SQ_PIPE = _load_module_by_path("soloq_pipeline",
                                SOLOQ_PROC_DIR / "pipeline.py")
 
@@ -81,7 +83,10 @@ def parse_args(argv=None):
                     help="soloQ checkpoint path or 'auto'")
     ap.add_argument("--state-dim", type=int, default=64)
     ap.add_argument("--head-dropout", type=float, default=0.0)
-    ap.add_argument("--n-econ", type=int, default=6)
+    ap.add_argument("--n-econ", type=int, default=0,
+                    help="width of the aux economy regression; 0 = off "
+                         "(default). The head scored econ_skill -0.15 and "
+                         "nothing downstream consumes it")
     ap.add_argument("--no-patch", action="store_true",
                     help="disable patch conditioning (ablation; default on)")
     # data sampling / augmentation
@@ -96,8 +101,11 @@ def parse_args(argv=None):
     ap.add_argument("--no-swap-aug", dest="swap_aug", action="store_false",
                     help="disable blue/red mirror augmentation")
     # losses
-    ap.add_argument("--value-weight", type=float, default=0.5,
-                   help="weight on win BCE (lower = focus on policy)")
+    ap.add_argument("--value-weight", type=float, default=0.0,
+                    help="weight on win BCE; 0 = no value head at all "
+                         "(default). This head measured test win_auc 0.4969 "
+                         "and is worse than a constant once the draft fills - "
+                         "use model/finetune/value.py for V instead")
     ap.add_argument("--econ-weight", type=float, default=0.1)
     # optimisation
     ap.add_argument("--epochs", type=int, default=100,
@@ -157,7 +165,10 @@ def build_encoder(payload):
         num_heads=cfg["num_heads"],
         num_intra_layers=cfg["num_intra"],
         num_cross_layers=cfg["num_cross"], dropout=cfg.get("dropout", 0.0))
-    enc.load_state_dict(payload["model"])
+    # The pretrained checkpoint may carry the opt-in value path (pma.*,
+    # win_head.*); the policy builds its own value head, so drop those keys
+    # instead of failing on "unexpected keys".
+    load_encoder_state(enc, payload["model"])
     return enc, cfg
 
 
@@ -165,6 +176,12 @@ def load_pro_rows(args):
     rows, stats = PRO_PIPE.build_rows(limit=args.limit_drafts)
     PRO_PIPE.assign_weights(rows, args.half_life)
     splits = PRO_PIPE.split_series_by_date(rows)
+    # Validation must sit in the condition test is in. Test is 100% patches
+    # unseen in train; the raw val window is only 81.5%, and the familiar
+    # share is systematically easier, which inflated val and made the
+    # val->test drop look like model degradation.
+    splits["val"], honest_info = EP.patch_honest_val(rows, splits)
+    args.patch_honest_val = honest_info
     return rows, splits
 
 
@@ -219,7 +236,9 @@ def policy_loss(out, batch):
 
 
 def value_loss(out, batch):
-    """BCE on blue-win logit."""
+    """BCE on blue-win logit; zero when the head is off."""
+    if "value_logit" not in out:
+        return next(iter(out.values())).sum() * 0.0
     if batch["win_label"].numel() == 0:
         return out["value_logit"].sum() * 0.0
     return F.binary_cross_entropy_with_logits(
@@ -232,8 +251,10 @@ def econ_loss(out, batch, econ_mean, econ_std):
     build_prefix always emits all 6 raw targets, so slice the target to
     the head's width: --n-econ may select a prefix of them.
     """
+    if "econ_pred" not in out:
+        return next(iter(out.values())).sum() * 0.0
     if "econ_target" not in batch or "has_econ" not in batch:
-        return out.get("econ_pred", torch.zeros(1)).sum() * 0.0
+        return out["econ_pred"].sum() * 0.0
     if int(batch["has_econ"].sum()) == 0:
         return out["econ_pred"].sum() * 0.0
     n = out["econ_pred"].shape[1]
@@ -241,6 +262,24 @@ def econ_loss(out, batch, econ_mean, econ_std):
     err = (out["econ_pred"] - tgt) ** 2
     w = batch["has_econ"].unsqueeze(1)
     return (err * w).sum() / (w.sum() * err.shape[1])
+
+
+def _value_str(m):
+    """Optional value/econ suffix for log lines.
+
+    Both heads are off by default now, so the reporting has to degrade to
+    nothing instead of KeyError - and a missing metric must never print as
+    a 0.0 that reads like a measurement.
+    """
+    parts = []
+    if "win_auc" in m:
+        parts.append("win_auc %.4f brier %.4f skill %+.4f"
+                     % (m["win_auc"], m["win_brier"],
+                        m.get("win_skill", float("nan"))))
+    if "econ_rmse" in m:
+        parts.append("econ_rmse %.3f skill %+.3f"
+                     % (m["econ_rmse"], m.get("econ_skill", float("nan"))))
+    return (" | " + " ".join(parts)) if parts else ""
 
 
 def batch_auc(logits, labels):
@@ -257,11 +296,26 @@ def batch_auc(logits, labels):
 
 
 @torch.no_grad()
-def evaluate(model, loaders, args, device, econ_mean, econ_std):
-    """Val: next-move top-k accuracy, win AUC, econ RMSE, popularity baselines."""
+def evaluate(model, loaders, args, device, econ_mean, econ_std,
+             move_rank=None, rep=None, base_rep=None):
+    """Val: next-move top-k accuracy, win AUC, econ RMSE, popularity baselines.
+
+    `move_rank` (from EP.move_popularity_ranks, fit on TRAIN) adds the
+    baseline on identical examples. The baseline-relative score
+    `rel_top5 = top5 / base_top5` is what checkpoint selection uses: the raw
+    top-5 moves with the window's difficulty, so on a harder window it selects
+    the wrong epoch. Measured on this corpus the baseline alone goes 0.1903
+    (val) -> 0.1243 (test).
+
+    Pass `rep` (an EP.RankReport) to also accumulate every example's rank with
+    its patch / league / move index / ban-vs-pick, which is what
+    `EP.stratified` turns into the per-slice report. `base_rep` accumulates the
+    same slices for the train-fitted move table, so every slice shows its `rel`.
+    """
     model.eval()
     # Next-move metrics
     top = {1: 0.0, 5: 0.0, 10: 0.0}
+    base_top = {1: 0.0, 5: 0.0, 10: 0.0}
     ban_top = {1: 0.0, 5: 0.0}
     pick_top = {1: 0.0, 5: 0.0}
     n_total = 0
@@ -292,6 +346,12 @@ def evaluate(model, loaders, args, device, econ_mean, econ_std):
         n = tc.numel()
         for k in top:
             top[k] += float((ranks < k).sum())
+        if move_rank is not None:
+            m_idx = batch["move_idx"].tolist()
+            for k in base_top:
+                base_top[k] += sum(
+                    1 for m, c in zip(m_idx, tc.tolist())
+                    if move_rank[m][c] < k)
         # Split by ban vs pick
         if bool(is_ban.any()):
             for k in ban_top:
@@ -301,12 +361,25 @@ def evaluate(model, loaders, args, device, econ_mean, econ_std):
             for k in pick_top:
                 pick_top[k] += float((ranks[~is_ban] < k).sum())
             n_pick += int((~is_ban).sum())
+        if rep is not None:
+            metas = batch.get("meta") or [{}] * int(ranks.numel())
+            patches = [md.get("patch") for md in metas]
+            leagues = [md.get("league") for md in metas]
+            kinds = ["ban" if b else "pick" for b in is_ban.tolist()]
+            rep.add(ranks.tolist(), patches, leagues,
+                    batch["move_idx"].tolist(), kinds)
+            if base_rep is not None and move_rank is not None:
+                base_rep.add([move_rank[m][c] for m, c in
+                              zip(batch["move_idx"].tolist(), tc.tolist())],
+                             patches, leagues, batch["move_idx"].tolist(),
+                             kinds)
 
         loss_sum += float(policy_loss(out, batch)) * n
         n_total += n
 
-        val_logits.append(out["value_logit"].squeeze(-1).float().cpu())
-        val_labels.append(batch["win_label"].cpu())
+        if "value_logit" in out:
+            val_logits.append(out["value_logit"].squeeze(-1).float().cpu())
+            val_labels.append(batch["win_label"].cpu())
         # build_prefix now always emits econ_target/has_econ (the econ
         # head used to have no labels at all), so gate on the head
         # existing too, or n_econ=0 runs would KeyError here.
@@ -335,6 +408,12 @@ def evaluate(model, loaders, args, device, econ_mean, econ_std):
     out_m["policy_loss"] = loss_sum / max(1, n_total)
     for k in top:
         out_m["top%d" % k] = top[k] / max(1, n_total)
+    if move_rank is not None:
+        for k in base_top:
+            out_m["base_top%d" % k] = base_top[k] / max(1, n_total)
+        # the selection score: comparable across windows of different difficulty
+        out_m["rel_top5"] = EP.baseline_relative(
+            out_m["top5"], out_m["base_top5"])
     out_m["ban_top1"] = ban_top[1] / max(1, n_ban)
     out_m["ban_top5"] = ban_top[5] / max(1, n_ban)
     out_m["pick_top1"] = pick_top[1] / max(1, n_pick)
@@ -343,19 +422,30 @@ def evaluate(model, loaders, args, device, econ_mean, econ_std):
     out_m["n_ban"] = n_ban
     out_m["n_pick"] = n_pick
 
-    # Value metrics
-    val_logits = torch.cat(val_logits)
-    val_labels = torch.cat(val_labels)
-    out_m["win_auc"] = batch_auc(val_logits, val_labels)
-    out_m["win_brier"] = float(
-        ((torch.sigmoid(val_logits) - val_labels.float()) ** 2).mean())
-    out_m["win_base_rate"] = float(val_labels.float().mean())
-    out_m["econ_rmse"] = (econ_err / max(1, econ_n)) ** 0.5
+    # Value metrics - only when a value head was trained, and always next
+    # to the constant-predictor baseline so the number cannot flatter
+    # itself (the old report had win_brier with nothing to compare it to).
+    has_value = bool(val_logits)
+    if has_value:
+        val_logits = torch.cat(val_logits)
+        val_labels = torch.cat(val_labels)
+        out_m["win_auc"] = batch_auc(val_logits, val_labels)
+        out_m["win_brier"] = float(
+            ((torch.sigmoid(val_logits) - val_labels.float()) ** 2).mean())
+        out_m["win_base_rate"] = float(val_labels.float().mean())
+        out_m["win_brier_const"] = float(
+            ((out_m["win_base_rate"] - val_labels.float()) ** 2).mean())
+        if out_m["win_brier_const"] > 0:
+            out_m["win_skill"] = 1.0 - out_m["win_brier"] / \
+                out_m["win_brier_const"]
+    if econ_n:
+        out_m["econ_rmse"] = (econ_err / econ_n) ** 0.5
     # Decompose MSE = var(residual) + bias^2. The bias is the patch drift,
     # which no draft-only model can predict. `econ_rmse_const` is what the
     # best constant predictor scores on this split, so econ_rmse_centered
     # < econ_rmse_const means the head has real signal. econ_skill is the
-    # resulting R^2.
+    # resulting R^2. Nothing is emitted when the head is off, so a 0.0 can
+    # never be mistaken for a measurement.
     if econ_cnt:
         mse = econ_err / econ_cnt
         bias = econ_pred_sum / econ_cnt - econ_tgt_sum / econ_cnt
@@ -365,11 +455,8 @@ def evaluate(model, loaders, args, device, econ_mean, econ_std):
         out_m["econ_rmse_centered"] = centered ** 0.5
         out_m["econ_rmse_const"] = var_t ** 0.5
         out_m["econ_skill"] = 1.0 - centered / var_t
-    else:
-        out_m["econ_rmse_centered"] = 0.0
-        out_m["econ_rmse_const"] = 0.0
-        out_m["econ_skill"] = 0.0
-    out_m["n_win"] = int(val_labels.numel())
+    if has_value:
+        out_m["n_win"] = int(val_labels.numel())
 
     return out_m
 
@@ -515,6 +602,9 @@ def train(args):
         encoder, embed_dim=embed_dim, state_dim=args.state_dim,
         n_econ=args.n_econ, dropout=args.head_dropout,
         n_patches=n_patches,
+        # --value-weight 0 means no value head at all, so the checkpoint
+        # carries no value_head.* keys and nothing reports win_auc.
+        with_value=args.value_weight > 0,
     ).to(device)
 
     # Freeze encoder per --unfreeze-stage
@@ -551,6 +641,13 @@ def train(args):
         patch_index=patch_index, prefix_mode="all", swap_aug=False)
     print("train examples/epoch %d (prefix_mode=%s, swap_aug=%s)"
           % (len(tr_ds), args.prefix_mode, args.swap_aug))
+
+    # Per-move popularity baseline, fit on train only. Used for the
+    # baseline-relative selection score.
+    move_rank = EP.move_popularity_ranks(rows, splits["train"],
+                                         cfg["num_champs"])
+    print("baseline: per-move popularity over %d train drafts"
+          % len(splits["train"]))
 
     # Weighted sampler for recency. `weights()` is aligned with
     # __len__, so in random-prefix mode it is one weight per game.
@@ -665,7 +762,7 @@ def train(args):
     run_dir.mkdir(parents=True, exist_ok=True)
     print("checkpoints ->", run_dir)
 
-    global_step, best_top5, best_auc = 0, -1.0, -1.0
+    global_step, best_top5, best_auc, best_sel = 0, -1.0, -1.0, -1.0
     t0 = time.time()
     rehearse_gen = torch.Generator().manual_seed(args.seed + 999)
 
@@ -742,30 +839,35 @@ def train(args):
 
         if epoch % args.eval_every == 0:
             metrics = evaluate(model, {"val": va_loader}, args,
-                               device, emu, esd)
+                               device, emu, esd, move_rank)
             metrics["epoch"] = epoch
             if run is not None:
                 import wandb
                 wandb.log({"val/" + k: v for k, v in metrics.items()},
                           step=global_step)
             print("val ep %d: top1 %.4f top5 %.4f top10 %.4f "
-                  "ban@5 %.4f pick@5 %.4f win_auc %.4f brier %.4f "
-                  "econ_rmse %.3f skill %.3f (%.0fs)" %
+                  "ban@5 %.4f pick@5 %.4f | base@5 %.4f rel %.2fx%s "
+                  "(%.0fs)" %
                   (epoch, metrics["top1"], metrics["top5"],
                    metrics["top10"], metrics["ban_top5"],
-                   metrics["pick_top5"], metrics["win_auc"],
-                   metrics["win_brier"], metrics["econ_rmse"],
-                   metrics["econ_skill"], time.time() - t0))
+                   metrics["pick_top5"], metrics.get("base_top5", float("nan")),
+                   metrics.get("rel_top5", float("nan")),
+                   _value_str(metrics), time.time() - t0))
 
             extra = {"init_ckpt": ckpt_spec,
                      "patch": payload.get("patch"),
                      "econ_mean": econ_mean, "econ_std": econ_std,
                      "n_patches": n_patches, "patch_vocab": patch_vocab}
-            if metrics["top5"] > best_top5:
+            # Select on the baseline-relative score, not the raw top-5:
+            # raw top-5 tracks the window's difficulty, so a harder window
+            # picks the wrong epoch.
+            sel = metrics.get("rel_top5", metrics["top5"])
+            if sel > best_sel:
+                best_sel = sel
                 best_top5 = metrics["top5"]
                 save_ckpt(run_dir / "best_policy.pt", model, args, cfg,
                           metrics, global_step, extra)
-            if metrics["win_auc"] > best_auc:
+            if metrics.get("win_auc", -1.0) > best_auc:
                 best_auc = metrics["win_auc"]
                 save_ckpt(run_dir / "best_value.pt", model, args, cfg,
                           metrics, global_step, extra)
@@ -773,24 +875,45 @@ def train(args):
                       dict(metrics), global_step, extra)
 
     # Test report
-    report = {}
+    report = {"protocol": {"patch_honest_val": getattr(args, "patch_honest_val",
+                                                       None),
+                           "focus_patch": EP.FOCUS_PATCH,
+                           "selection": "rel_top5 (val)",
+                           "n_val": len(splits["val"]),
+                           "n_test": len(splits["test"]),
+                           "n_train": len(splits["train"])}}
+    # Strong null: the per-move frequency table of the test split itself,
+    # leave-one-out. The train-era table is stale on a new patch, so this is
+    # the bar that decides whether the policy beats "just use this patch's
+    # move frequencies".
+    self_ref = EP.self_move_topk(rows, splits["test"], cfg["num_champs"],
+                                 k=(1, 5))
+    report["same_patch_reference"] = dict(self_ref, split="test")
     for name in ("best_policy.pt", "best_value.pt"):
         path = run_dir / name
         if not path.exists():
             continue
         blob = torch.load(str(path), map_location="cpu", weights_only=False)
         model.load_state_dict(blob["model"])
-        tm = evaluate(model, {"val": te_loader}, args, device, emu, esd)
+        rep = EP.RankReport(ks=(1, 5, 10))
+        base_rep = EP.RankReport(ks=(1, 5, 10))
+        tm = evaluate(model, {"val": te_loader}, args, device, emu, esd,
+                      move_rank, rep, base_rep)
         report[name] = tm
-        print("TEST %s: top1 %.4f top5 %.4f win_auc %.4f brier %.4f "
-              "econ_rmse %.3f skill %.3f" % (name, tm["top1"], tm["top5"],
-                                             tm["win_auc"], tm["win_brier"],
-                                             tm["econ_rmse"],
-                                             tm["econ_skill"]))
+        report[name]["stratified"] = EP.stratified(
+            rep, base_rep=base_rep, focus=EP.FOCUS_PATCH,
+            self_ref=self_ref,
+            label="test next-move (prefix -> next ban/pick)")
+        print("TEST %s: top1 %.4f top5 %.4f base@5 %.4f rel %.2fx%s"
+              % (name, tm["top1"], tm["top5"], tm.get("base_top5", float("nan")),
+                 tm.get("rel_top5", float("nan")), _value_str(tm)))
+        print(EP.format_stratified(report[name]["stratified"], indent=2))
     with open(run_dir / "test_report.json", "w", encoding="utf-8") as f:
         json.dump(report, f, indent=1)
-    print("done: best policy top5 %.4f, best win AUC %.4f (%s)"
-          % (best_top5, best_auc, run_dir))
+    print("done: best policy top5 %.4f%s (%s)"
+          % (best_top5,
+             "" if best_auc < 0 else ", best win AUC %.4f" % best_auc,
+             run_dir))
     if run is not None:
         import wandb
         wandb.finish()
@@ -803,7 +926,7 @@ def main():
     out = HERE / "last_run.json"
     with open(out, "w", encoding="utf-8") as f:
         json.dump({"best_val_top5": best_top5,
-                   "best_val_win_auc": best_auc,
+                   "best_val_win_auc": best_auc if best_auc >= 0 else None,
                    "args": vars(args)}, f, indent=1)
     print("wrote", out)
 

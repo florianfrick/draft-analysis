@@ -148,17 +148,18 @@ class PolicyValueModel(nn.Module):
 
     Outputs:
       policy_logits [B, C] (legality-masked, -inf on taken/unavailable)
-      value_logit [B, 1] (blue-win logit)
+      value_logit [B, 1] (blue-win logit; absent when with_value=False)
       econ_pred [B, n_econ] (if n_econ > 0)
     """
 
     def __init__(self, encoder, embed_dim=256, state_dim=64,
-                 n_econ=6, dropout=0.0, n_patches=0):
+                 n_econ=6, dropout=0.0, n_patches=0, with_value=True):
         super().__init__()
         self.encoder = encoder
         self.embed_dim = embed_dim
         self.n_econ = n_econ
         self.n_patches = n_patches
+        self.with_value = with_value
 
         # Ban context: banned champs attend into slot vectors
         self.ban_context = BanContext(embed_dim, num_heads=4,
@@ -181,15 +182,24 @@ class PolicyValueModel(nn.Module):
             nn.Linear(embed_dim, NUM_REAL_CHAMPS),
         )
 
-        # Value head: pooled + state -> blue-win logit
+        # Value head: pooled + state -> blue-win logit.
+        # OFF by default in new runs (--value-weight 0): measured test
+        # win_auc 0.4969 across all 20 prefixes, flat 0.5015 on moves 0-6
+        # (Brier exactly at the base rate) and anti-correlated once the
+        # draft fills - see model/policy/diagnose_value.py. The usable
+        # value function is model/finetune/value.py on the encoder's PMA
+        # path. Kept constructible so old checkpoints still load.
         value_in_dim = pooled_dim + state_dim
-        self.value_head = nn.Sequential(
-            nn.LayerNorm(value_in_dim),
-            nn.Linear(value_in_dim, embed_dim * 2),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(embed_dim * 2, 1),
-        )
+        if with_value:
+            self.value_head = nn.Sequential(
+                nn.LayerNorm(value_in_dim),
+                nn.Linear(value_in_dim, embed_dim * 2),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(embed_dim * 2, 1),
+            )
+        else:
+            self.value_head = None
 
         # Optional econ head
         if n_econ > 0:
@@ -281,17 +291,17 @@ class PolicyValueModel(nn.Module):
         policy_logits = self._apply_legality(policy_logits, batch)
 
         # 5. Value head: pooled + state -> blue-win logit
-        value_input = torch.cat([pooled, state], dim=-1)
-        value_logit = self.value_head(value_input)  # [B, 1]
-
         out = {
             "policy_logits": policy_logits,  # [B, C]
-            "value_logit": value_logit,     # [B, 1]
         }
+        if self.value_head is not None:
+            out["value_logit"] = self.value_head(
+                torch.cat([pooled, state], dim=-1))  # [B, 1]
 
         # 6. Optional econ head
         if self.econ_head is not None:
-            out["econ_pred"] = self.econ_head(value_input)  # [B, n_econ]
+            out["econ_pred"] = self.econ_head(
+                torch.cat([pooled, state], dim=-1))  # [B, n_econ]
 
         return out
 

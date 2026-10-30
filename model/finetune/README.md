@@ -4,6 +4,41 @@ Loads a SoloQ-pretrained encoder and finetunes it on the 46.6k pro drafts
 (`data/pro play/pro_drafts.pt`) while training outcome heads for the value
 function used by search (Stage 2: MCTS/lookahead).
 
+> **Value function status.** There are three value paths and they are not
+> equivalent. Measured on the same patch-honest test split:
+>
+> | path | test AUC | verdict |
+> |---|---|---|
+> | logistic role x champ additive (`model/policy/ban_search.py`) | 0.5456 | best; structurally flat in ban1 |
+> | `PoolOutcomeHeads.win` (this stage) | 0.5172 | weak, complete drafts only |
+> | `PolicyValueModel.value_head` | 0.4969 | broken at every depth - head removed from new runs |
+>
+> The econ head is **off by default** (`--econ-weight 0`): it scored
+> econ_skill -0.09 to -0.15 and nothing downstream reads `econ_pred`.
+> `value.py` (below) is the attempt to do better than all three on partial
+> states; it currently reaches 0.5124 on all prefixes and 0.5194 at move 19,
+> so the additive model still wins. See `ckpt/value_*/value_report.json`.
+
+## Prefix value stage (`value.py`)
+
+Separate from the masked-modelling stage: fine-tunes the *pretrained* value
+path (`pma` + `win_head`, test AUC 0.5597 in the pretraining probe) on pro
+prefix states, trunk frozen, with an optional ban pool so V can see bans at
+all (the encoder cannot - `_encode` reads champ_ids/role_ids/pad_mask only).
+
+```text
+python model/finetune/value.py --init-ckpt auto --epochs 12
+python model/finetune/value.py --unfreeze cross --lr-trunk 2e-5
+python model/finetune/value.py --score-ckpt ckpt/value_x/best.pt
+pytest model/finetune/test_value.py -q                       # 18 tests ~3s
+```
+
+The ban residual block is zero-initialised, so at step 0 the logit is exactly
+the pretrained head - which makes "what do bans buy us" a clean ablation
+(`no_ban_residual` in the report) and keeps the pretrained weights usable.
+Reports AUC / Brier / skill-vs-constant by phase, by move index, by patch,
+plus complete-draft AUC for comparison against the other two paths.
+
 ## Run
 
 ```text

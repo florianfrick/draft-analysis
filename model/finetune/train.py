@@ -56,9 +56,11 @@ def _load_module_by_path(name, path):
 
 sys.path.insert(0, str(MODEL_DIR))
 from soloq_model import SoloQPretrainedModel  # noqa: E402
+from soloq_model import load_encoder_state  # noqa: E402
 from model import ProDraftModel  # noqa: E402
 
 PRO_PIPE = _load_module_by_path("pro_pipeline", PRO_DIR / "pipeline.py")
+EP = _load_module_by_path("eval_protocol", PRO_DIR / "eval_protocol.py")
 PRO_DATA = _load_module_by_path("pro_datasets", PRO_DIR / "datasets.py")
 SQ_PIPE = _load_module_by_path("soloq_pipeline",
                                SOLOQ_PROC_DIR / "pipeline.py")
@@ -80,7 +82,10 @@ def parse_args(argv=None):
     # losses
     ap.add_argument("--lambda-role", type=float, default=0.3)
     ap.add_argument("--win-weight", type=float, default=1.0)
-    ap.add_argument("--econ-weight", type=float, default=0.3)
+    ap.add_argument("--econ-weight", type=float, default=0.0,
+                    help="aux economy regression weight; 0 = off (default). "
+                         "The head scored econ_skill -0.09 to -0.15 and "
+                         "nothing downstream reads econ_pred")
     # optimisation
     ap.add_argument("--epochs0", type=int, default=3,
                     help="heads-only epochs")
@@ -132,7 +137,9 @@ def build_encoder(payload):
         num_heads=cfg["num_heads"],
         num_intra_layers=cfg["num_intra"],
         num_cross_layers=cfg["num_cross"], dropout=cfg.get("dropout", 0.0))
-    enc.load_state_dict(payload["model"])
+    # Tolerate the pretraining value path (pma.*, win_head.*): this stage adds
+    # its own win head, so those keys are dropped rather than raising.
+    load_encoder_state(enc, payload["model"])
     return enc, cfg
 
 
@@ -140,6 +147,9 @@ def load_pro_rows(args):
     rows, stats = PRO_PIPE.build_rows(limit=args.limit_drafts)
     PRO_PIPE.assign_weights(rows, args.half_life)
     splits = PRO_PIPE.split_series_by_date(rows)
+    # Val must sit in the condition test is in: test is 100% patches unseen in
+    # train, the raw val window only 81.5%, and the familiar share is easier.
+    splits["val"], args.patch_honest_val = EP.patch_honest_val(rows, splits)
     return rows, splits
 
 
@@ -226,13 +236,22 @@ def batch_auc(logits, labels):
 
 
 @torch.no_grad()
-def evaluate(model, loaders, base, args, device, econ_mean, econ_std):
+def evaluate(model, loaders, base, args, device, econ_mean, econ_std,
+             slot_rank=None, rep=None, base_rep=None):
     """Val: masked top-k on FULL drafts, win AUC on full+partial drafts,
-    econ RMSE (standardized), popularity baselines on masked slots."""
+    econ RMSE (standardized), popularity baselines on masked slots.
+
+    Pass `rep` (an EP.RankReport) to accumulate the per-example rank of the
+    hidden champion together with its patch / league / slot / role visibility,
+    which is what `EP.stratified` needs to report the model per slice instead
+    of as one pooled number. `base_rep` accumulates the same slices for the
+    train-fitted popularity table, so every slice shows its own `rel`.
+    """
     model.eval()
     out_m, n_mask = {}, 0
     agg_c = agg_r = 0.0
     top = {1: 0.0, 5: 0.0, 10: 0.0}
+    base_top = {1: 0.0, 5: 0.0}
     cond_hits = cond_n = 0
     role_hits5 = role_hits1 = 0
     for batch in loaders["val_mask"]:
@@ -251,27 +270,53 @@ def evaluate(model, loaders, base, args, device, econ_mean, econ_std):
         rk = (cl > truth[:, None]).sum(1)
         for k in top:
             top[k] += float((rk < k).sum())
+        # (draft, slot) of every masked example, in the same order as `rk`
+        di, si = m.nonzero(as_tuple=True)
+        if slot_rank is not None:
+            # per-slot popularity on exactly these masked slots: slot -> role
+            # is fixed in pro drafts, so this null already knows the role
+            for k in base_top:
+                base_top[k] += sum(1 for s_, c_ in zip(si.tolist(),
+                                                      ct.tolist())
+                                   if slot_rank[s_][c_] < k)
         vis = ~batch["role_masked"][m]
         cond_n += int(vis.sum())
         if bool(vis.any()):
             role_hits5 += int((rk[vis] < 5).sum())
             role_hits1 += int((rk[vis] < 1).sum())
         n_mask += cnt
+        if rep is not None:
+            metas = batch.get("meta") or [{}] * int(m.shape[0])
+            patches = [metas[int(d)].get("patch") for d in di.tolist()]
+            leagues = [metas[int(d)].get("league") for d in di.tolist()]
+            kinds = ["role_visible" if not bool(v) else "role_hidden"
+                     for v in vis.tolist()]
+            rep.add(rk.tolist(), patches, leagues, si.tolist(), kinds)
+            if base_rep is not None and slot_rank is not None:
+                base_rep.add([slot_rank[s_][c_] for s_, c_ in
+                              zip(si.tolist(), ct.tolist())],
+                             patches, leagues, si.tolist(), kinds)
     out_m["mask_loss"] = (agg_c + args.lambda_role * agg_r) / max(1, n_mask)
     for k in top:
         out_m["champ_top%d" % k] = top[k] / max(1, n_mask)
+    if slot_rank is not None:
+        for k in base_top:
+            out_m["base_champ_top%d" % k] = base_top[k] / max(1, n_mask)
+        out_m["rel_champ_top5"] = EP.baseline_relative(
+            out_m["champ_top5"], out_m["base_champ_top5"])
     out_m["role_cond_top5"] = role_hits5 / max(1, cond_n)
     out_m["role_cond_top1"] = role_hits1 / max(1, cond_n)
     out_m["n_masked"] = n_mask
     # win + econ heads over full AND partial drafts
     logits_all, labels_all, econ_err, econ_n = [], [], 0.0, 0
+    want_econ = econ_mean is not None and econ_std is not None
     for batch in loaders["val_aux"]:
         batch = {k: v.to(device) if torch.is_tensor(v) else v
                  for k, v in batch.items()}
         out = model(batch)
         logits_all.append(out["win_logits"][:, 1].float().cpu())
         labels_all.append(batch["win_label"].cpu())
-        if int(batch["has_econ"].sum()):
+        if want_econ and int(batch["has_econ"].sum()):
             tgt = (batch["econ_target"] -
                    econ_mean) / econ_std.to(batch["econ_target"].device)
             err = (out["econ_pred"] - tgt) ** 2
@@ -283,7 +328,16 @@ def evaluate(model, loaders, base, args, device, econ_mean, econ_std):
     out_m["win_brier"] = float(
         ((torch.sigmoid(logits_all) - labels_all.float()) ** 2).mean())
     out_m["win_base_rate"] = float(labels_all.float().mean())
-    out_m["econ_rmse"] = (econ_err / max(1, econ_n)) ** 0.5
+    # Always report the constant-predictor baseline next to the head.
+    # Without it "win_brier 0.2904" looked like a result when the base
+    # rate scores 0.2483 - i.e. the head was worse than a coin.
+    out_m["win_brier_const"] = float(
+        ((out_m["win_base_rate"] - labels_all.float()) ** 2).mean())
+    if out_m["win_brier_const"] > 0:
+        out_m["win_skill"] = 1.0 - out_m["win_brier"] / \
+            out_m["win_brier_const"]
+    if econ_n:
+        out_m["econ_rmse"] = (econ_err / econ_n) ** 0.5
     out_m["n_win"] = int(labels_all.numel())
     return out_m
 
@@ -378,6 +432,13 @@ def train(args):
     econ_mean, econ_std = fit_econ_stats(rows, splits["train"],
                                          len(PRO_PIPE.ECON_KEYS))
     emu, esd = econ_mean.to(device), econ_std.to(device)
+    if args.econ_weight <= 0:
+        # Econ head off: no loss, no metrics. It scored econ_skill -0.09
+        # to -0.15 and nothing downstream consumes econ_pred, so training
+        # and reporting it was pure cost. Pass None so `evaluate` skips it
+        # rather than printing a 0.0 that reads like a measurement.
+        emu = esd = None
+        print("econ head: OFF (--econ-weight 0)")
 
     def pro_loader(idxs, mask_prob, epoch, shuffle, econ_p):
         ds = PRO_DATA.ProMaskedDraftDataset(
@@ -403,6 +464,8 @@ def train(args):
                                shuffle=True, collate_fn=PRO_DATA.pro_collate,
                                num_workers=0,
                                pin_memory=torch.cuda.is_available())
+    slot_rank = EP.slot_popularity_ranks(rows, splits["train"],
+                                         num_champs)
     va_mask = pro_loader(splits["val"], 0.15, 0, False, 0.0)
     # aux val/test mix full + random-subset drafts (econ_mask_prob) so the
     # win metrics cover the partial-draft distribution MCTS will query
@@ -430,7 +493,7 @@ def train(args):
 
     stages = [(0, args.epochs0, args.lr_head), (1, args.epochs1, None),
               (2, args.epochs2, None)]
-    global_step, best_top5, best_auc = 0, -1.0, -1.0
+    global_step, best_top5, best_auc, best_sel = 0, -1.0, -1.0, -1.0
     t0 = time.time()
     # rehearsal share applied per batch with prob rehearse_frac
     rehearse_gen = torch.Generator().manual_seed(args.seed + 999)
@@ -480,8 +543,10 @@ def train(args):
                     out = model(batch)
                     m_loss, _, _ = masked_losses(
                         out, batch, args.lambda_role)
-                    loss = m_loss + args.win_weight * win_loss(out, batch) \
-                        + args.econ_weight * econ_loss(out, batch, emu, esd)
+                    loss = m_loss + args.win_weight * win_loss(out, batch)
+                    if args.econ_weight > 0:
+                        loss = loss + args.econ_weight * econ_loss(
+                            out, batch, emu, esd)
                 # rehearsal: soloQ masked CE keeps old objective alive.
                 # Stage 0 freezes the encoder entirely (head-only), so the
                 # rehearsal gradient would be a no-op there; run it only
@@ -526,23 +591,34 @@ def train(args):
                            sched.get_last_lr()[0]))
             metrics = evaluate(model,
                                {"val_mask": va_mask, "val_aux": va_aux},
-                               None, args, device, emu, esd)
+                               None, args, device, emu, esd, slot_rank)
             metrics["epoch"] = epoch
             metrics["stage"] = stage
             if run is not None:
                 import wandb
                 wandb.log({"val/" + k: v for k, v in metrics.items()},
                           step=global_step)
-            print("val stage %d ep %d: mask_top5 %.4f win_auc %.4f "
-                  "brier %.4f econ_rmse %.4f (%.0fs)" %
-                  (stage, epoch, metrics["champ_top5"], metrics["win_auc"],
-                   metrics["win_brier"], metrics["econ_rmse"],
+            print("val stage %d ep %d: mask_top5 %.4f base@5 %.4f "
+                  "rel %.2fx win_auc %.4f brier %.4f (const %.4f) "
+                  "skill %+.4f%s (%.0fs)" %
+                  (stage, epoch, metrics["champ_top5"],
+                   metrics.get("base_champ_top5", float("nan")),
+                   metrics.get("rel_champ_top5", float("nan")),
+                   metrics["win_auc"], metrics["win_brier"],
+                   metrics["win_brier_const"],
+                   metrics.get("win_skill", float("nan")),
+                   ("" if "econ_rmse" not in metrics
+                    else " econ_rmse %.4f" % metrics["econ_rmse"]),
                    time.time() - t0))
             extra = {"init_ckpt": ckpt_spec, "stage": stage,
                      "patch": payload.get("patch"),
                      "econ_mean": econ_mean, "econ_std": econ_std,
                      "platt": (1.0, 0.0)}
-            if metrics["champ_top5"] > best_top5:
+            # baseline-relative, not raw: raw top-5 tracks the window's
+            # difficulty (the baseline itself moves 0.42 -> 0.37 val->test)
+            sel = metrics.get("rel_champ_top5", metrics["champ_top5"])
+            if sel > best_sel:
+                best_sel = sel
                 best_top5 = metrics["champ_top5"]
                 vl, vy = collect_val_logits(model, va_aux, device)
                 extra["platt"] = fit_platt(vl, vy)
@@ -559,19 +635,40 @@ def train(args):
 
 
     # held-out test report on both best checkpoints
-    report = {}
+    report = {"protocol": {"patch_honest_val": getattr(args, "patch_honest_val",
+                                                       None),
+                           "focus_patch": EP.FOCUS_PATCH,
+                           "selection": "rel_champ_top5 (val)",
+                           "n_val": len(splits["val"]),
+                           "n_test": len(splits["test"]),
+                           "n_train": len(splits["train"])}}
+    # The strong null for composition: the per-slot frequency table of THIS
+    # split's own rows, leave-one-out. On a new patch the train-era table is
+    # stale, so this is the bar that decides whether the model adds anything.
+    self_ref = EP.self_slot_topk(rows, splits["test"], num_champs, k=(1, 5))
+    report["same_patch_reference"] = dict(self_ref, split="test")
     for name in ("best_mask.pt", "best_win.pt"):
         path = run_dir / name
         if not path.exists():
             continue
         blob = torch.load(str(path), map_location="cpu", weights_only=False)
         model.load_state_dict(blob["model"])
+        rep = EP.RankReport(ks=(1, 5, 10))
+        base_rep = EP.RankReport(ks=(1, 5, 10))
         tm = evaluate(model, {"val_mask": te_mask, "val_aux": te_aux},
-                      None, args, device, emu, esd)
+                      None, args, device, emu, esd, slot_rank, rep, base_rep)
         report[name] = tm
-        print("TEST %s: mask_top5 %.4f win_auc %.4f brier %.4f "
-              "econ_rmse %.4f" % (name, tm["champ_top5"], tm["win_auc"],
-                                  tm["win_brier"], tm["econ_rmse"]))
+        report[name]["stratified"] = EP.stratified(
+            rep, base_rep=base_rep, focus=EP.FOCUS_PATCH,
+            self_ref=self_ref,
+            label="test composition (masked slot, one hidden champ)")
+        print("TEST %s: mask_top5 %.4f win_auc %.4f brier %.4f (const %.4f)"
+              " skill %+.4f%s"
+              % (name, tm["champ_top5"], tm["win_auc"], tm["win_brier"],
+                 tm["win_brier_const"], tm.get("win_skill", float("nan")),
+                 ("" if "econ_rmse" not in tm
+                  else " econ_rmse %.4f" % tm["econ_rmse"])))
+        print(EP.format_stratified(report[name]["stratified"], indent=2))
     with open(run_dir / "test_report.json", "w", encoding="utf-8") as f:
         json.dump(report, f, indent=1)
     print("done: best mask top5 %.4f, best win AUC %.4f (%s)"
