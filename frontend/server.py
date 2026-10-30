@@ -632,6 +632,13 @@ def main():
     global APP
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=8777)
+    # Default stays loopback-only: this server has no auth and exposes the
+    # draft model, so binding it to a routable interface must be opt-in.
+    # Needed only when running inside a container, where the published port
+    # arrives on eth0 rather than on the container's own loopback.
+    ap.add_argument("--host", default="127.0.0.1",
+                    help="bind address; 127.0.0.1 (default) is local-only, "
+                         "use 0.0.0.0 only inside a container")
     ap.add_argument("--device", default="cpu",
                     help="cpu keeps GPU free; cuda also fine")
     ap.add_argument("--ckpt", default="",
@@ -653,8 +660,10 @@ def main():
                device=args.device)
     print("champions: %d, device: %s" % (len(mapping), args.device))
 
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    print("frontend: http://127.0.0.1:%d (local only)" % args.port)
+    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    print("frontend: http://%s:%d%s"
+          % (args.host, args.port,
+             " (local only)" if args.host == "127.0.0.1" else ""))
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -1,0 +1,55 @@
+# Keep the build context small. Everything below is mounted at run time
+# instead, so excluding it from the context costs nothing and keeps `docker
+# build` from shipping ~9GB of checkpoints and CSVs to the daemon.
+
+# --- data: mounted, never copied (1.6GB) ------------------------------------
+data/
+soloq data analysis/store/
+**/*.parquet
+**/*.duckdb
+**/*.duckdb.wal
+**/*.csv
+**/*.csv.gz
+**/*.jsonl
+**/*.jsonl.gz
+
+# --- checkpoints / weights (7.8GB) ------------------------------------------
+**/*.pt
+**/*.pth
+**/*.ckpt
+**/*.bin
+**/*.safetensors
+**/*.onnx
+
+# --- run outputs ------------------------------------------------------------
+**/wandb/
+**/wandb_runs/
+**/*.log
+**/*.err
+**/last_run.json
+**/test_report.json
+**/eval_protocol.json
+
+# --- vcs / editor / agent state --------------------------------------------
+.git/
+.gitignore
+.workbuddy-ai/
+.vscode/
+.idea/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+.DS_Store
+Thumbs.db
+
+# --- secrets ---------------------------------------------------------------
+.env
+*w_key.txt
+*wandb_key.txt
+
+# --- docker's own files ----------------------------------------------------
+Dockerfile
+docker-compose.yml
+.dockerignore
+DOCKER.md

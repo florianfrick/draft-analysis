@@ -1,0 +1,30 @@
+# Runtime environment for the LoL draft models.
+#
+# The torch pin is a CUDA build, not the default PyPI wheel. PyPI's `torch`
+# for Linux is the CUDA-bundled one, but pinning the +cu126 local version makes
+# the intent explicit and guarantees we get the same CUDA runtime the host
+# driver (12.6) supports. `--extra-index-url` lets every *other* package still
+# resolve from PyPI; only torch needs the special index.
+#
+# Verified on: python 3.13.12, torch 2.14.1+cu126, driver 12.6.
+# To move to a different CUDA, change both the index URL and the local tag.
+--extra-index-url https://download.pytorch.org/whl/cu126
+
+torch==2.14.1+cu126
+
+# --- data / analysis (pro pipeline, soloq store, pairwise experiments) ------
+numpy==2.3.4
+pandas==2.3.3
+pyarrow==22.0.0
+scipy==1.16.3
+scikit-learn==1.7.2
+duckdb==1.4.1
+
+# --- training / tracking ----------------------------------------------------
+wandb==0.22.3
+
+# --- data collection (Riot API client) --------------------------------------
+aiohttp==3.13.2
+
+# --- tests ------------------------------------------------------------------
+pytest==8.4.2

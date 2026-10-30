@@ -25,6 +25,21 @@ draft prediction (patch 16.20).
 
 ## Setup (keys + data stay local, never committed)
 
+### Environment: Docker
+
+The Python environment is pinned in `Dockerfile` + `requirements.txt` (python
+3.13, torch 2.14.1+cu126, numpy/pandas/pyarrow/scipy/sklearn/duckdb/wandb).
+Use it instead of a machine-level install — the local interpreter's
+`site-packages` got wiped once and took the whole toolchain with it.
+
+```bash
+docker compose build dev        # once
+docker compose run --rm dev     # shell in the project, data bind-mounted
+```
+
+See `DOCKER.md` for tests, training, long runs and GPU checks. Everything below
+also works verbatim on the host if you already have the pinned versions.
+
 1. Copy `.env.example` to `.env` and fill in:
    - `RIOT_API_KEY` — Riot dev key (https://developer.riotgames.com,
      expires every 24h). Used by `data/solo queue/collect_*.py` via
@@ -139,5 +154,6 @@ Pick Phase 2:	R4
 
 
 
-Data (26.20 for world's analysis):
-
+Best Model So Far:
+- policy/run_20261025_000606_ablF-stage1
+  + pretraining/run_20261029_153912_v2-D512-p8

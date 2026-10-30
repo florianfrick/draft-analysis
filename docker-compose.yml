@@ -1,0 +1,46 @@
+# Environment for the LoL draft models. See DOCKER.md for usage.
+#
+# The whole repo is bind-mounted at /workspace so edits are live and anything
+# the container writes (checkpoints, test_report.json, wandb runs) lands on the
+# host. Data and checkpoints are never baked into the image.
+
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: lol-draft:dev
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      # keeps the HuggingFace/torch download caches off the bind mount and
+      # alive across `docker compose run --rm` invocations
+      - torch-cache:/root/.cache
+    # Riot + W&B keys. Optional so the container still starts without a .env.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # W&B writes runs/ inside the project (already gitignored) instead of
+      # into the container filesystem where it would vanish
+      WANDB_DIR: /workspace
+      WANDB_START_METHOD: thread
+      PYTHONUNBUFFERED: "1"
+    # DataLoader workers + torch allocator need more than the 64MB default
+    shm_size: 2gb
+    # PID 1 reaper, so Ctrl-C on a training run actually kills the process
+    # group instead of leaving orphans holding the GPU
+    init: true
+    tty: true
+    stdin_open: true
+    command: bash
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  torch-cache:
