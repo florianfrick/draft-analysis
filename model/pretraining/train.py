@@ -160,6 +160,11 @@ def parse_args(argv=None):
                     "step 0 and gives every champion 18 tag dimensions "
                     "instead of one embedding row - the ablation is this "
                     "flag, not a rewrite")
+    ap.add_argument("--holdout-champs", type=int, default=0,
+                    help="hold N champions (the ones with the fewest training "
+                    "appearances) out of the train split entirely, keeping "
+                    "them in val: the cold-start test for --champ-attrs. "
+                    "0 = off")
     # bookkeeping
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--log-every", type=int, default=20)
@@ -290,6 +295,24 @@ def split_indices(n, val_frac, seed):
     perm = torch.randperm(n, generator=g).tolist()
     n_val = max(1, int(n * val_frac))
     return perm[n_val:], perm[:n_val]
+
+
+def holdout_champions(train_rows, num_champs, n):
+    """The `n` champions with the fewest training appearances (ties: lower id).
+
+    Computed on the split *before* any draft is dropped, so the comparator can
+    rebuild exactly the same set from the same split. Used for the cold-start
+    test: a held-out champion gets no gradient on its embedding row or its
+    champ-head row, which is the situation of a champion released after the
+    data was collected. Without the attribute adapter such a champion is
+    unpredictable by construction; the question is what the tag row buys.
+    """
+    count = torch.zeros(num_champs, dtype=torch.long)
+    for champ_ids, _roles in train_rows:
+        for c in champ_ids:
+            count[int(c)] += 1
+    order = sorted(range(num_champs), key=lambda c: (int(count[c]), c))
+    return set(order[:n])
 
 
 def make_loader(rows, num_champs, batch_size, shuffle, mask_prob, seed,
@@ -720,6 +743,22 @@ def train(args):
     val_rows = [rows[i] for i in va_idx]
     train_wins = [wins[i] for i in tr_idx] if wins is not None else None
     val_wins = [wins[i] for i in va_idx] if wins is not None else None
+    if args.holdout_champs:
+        # Cold-start experiment: these champions never appear in a training
+        # draft, so neither their embedding row nor their champ-head row is
+        # ever updated. They stay in val, where they are the test set.
+        hold = holdout_champions(train_rows, num_champs, args.holdout_champs)
+        before = len(train_rows)
+        pairs = list(zip(train_rows, train_wins if train_wins is not None
+                         else [None] * len(train_rows)))
+        pairs = [(r, w) for r, w in pairs
+                 if not any(int(c) in hold for c in r[0])]
+        train_rows = [r for r, _ in pairs]
+        if train_wins is not None:
+            train_wins = [w for _, w in pairs]
+        print("holdout: %d champions never trained (%d train drafts dropped, "
+              "%d -> %d); they stay in val"
+              % (len(hold), before - len(train_rows), before, len(train_rows)))
     if not args.no_win and train_wins is None:
         sys.exit("--lambda-win needs win labels but none were loaded; "
                  "rerun with --rescan")

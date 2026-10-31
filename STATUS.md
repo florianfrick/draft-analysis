@@ -208,9 +208,10 @@ The repo is now shaped for these four P3 items (`plan-model-v2.md` §P3):
    gold@15 rho +0.34 (3.9 sigma), `damage_output` vs damage/min +0.63
    (7.3 sigma), `scaling` vs long-short win rate +0.35 (4.0 sigma), and
    `magic_share` vs damage/min -0.02 (i.e. damage *type* is orthogonal to
-   damage *volume*, which is what the axis split was for). **Not yet
-   measured:** whether the adapter improves champ top-5. That needs one
-   pretraining run with and one without.
+   damage *volume*, which is what the axis split was for). **Measured
+   2026-10-31:** no gain distinguishable from noise, and the cold-start
+   claim does not hold as wired - see
+   [P3.1 measured](#p31-measured-the-adapter-trains-the-cold-start-does-not).
 2. **Soft-label distillation.** Hook: `policy_loss` in
    `model/policy/train.py`. Target: ListNet / KL against LLM rankings on a few
    thousand states; `build_prefix` already produces the states.
@@ -220,8 +221,67 @@ The repo is now shaped for these four P3 items (`plan-model-v2.md` §P3):
 4. **Patch-day cold start.** `data/patch notes/` corpus -> champion priority
    prior, bridging the patch reset that `by_patch` currently exposes.
 
-The frontend now serves both model families (done 2026-10-30):
+### P3.1 measured: the adapter trains, the cold start does not
 
+Two experiments, both fixed-budget pairs that differ only in `--no-champ-attrs`.
+Setup: 100k drafts (95k train / 5k val), D=256, 2 intra + 1 cross layer, batch
+512, 2500 steps (14 epochs), value head **off** so the masked objective is the
+only one moving, seeds 0 and 1. Every checkpoint scored on one val view with a
+fixed mask seed (`model/pretraining/compare_attrs.py`), so the pair can be
+compared with a paired test rather than two independent percentages.
+
+**A. Plain ablation, all 173 champions.** `champ_top5`:
+
+| arm | seed 0 | seed 1 |
+|---|---|---|
+| attributes off | 0.2600 | 0.2628 |
+| attributes on | 0.2618 | 0.2662 |
+| delta | +0.18 pp | +0.34 pp |
+
+Paired McNemar on the same 8,464 masked slots: p = 0.49 and p = 0.34. The
+seed-to-seed spread within an arm (0.28 and 0.44 pp) is larger than the
+between-arm difference, so **the point estimate (+0.26 pp) is not
+distinguishable from zero at this budget.** The adapter is not dead - its
+weight norm reaches 3.3-3.5, so it is doing real work; it just does not buy
+accuracy on champions that already have data. The only group with a
+consistent sign is the *common* champions (+0.66 / +0.57 pp), which is the
+opposite of where the mechanism is supposed to act.
+
+**B. Cold start, 20 champions held out of training entirely** (`--holdout-champs
+20`; they never appear in a train draft, so neither their embedding row nor
+their head row is ever a target, but they stay in val):
+
+| | off | on |
+|---|---|---|
+| held-out `champ_top5` (n=351) | 0.00% | 0.00% |
+| mean rank of the held-out champion (of 173) | 155.2 | 154.8 |
+
+Random would be rank 86. The model puts a champion it has never seen **below
+random**, and the adapter moves that by 0.4 ranks. Two compounding reasons,
+both structural rather than a training artefact:
+
+1. **The output head is untied, and the softmax denominator trains it.** Every
+   logit in the denominator receives gradient, so the row for a champion that
+   is never a target is pushed *down*, not left at init. Rank 155 is the
+   result.
+2. **The adapter conditions the input, not the output.** The slot embedding of
+   a masked slot is the MASK vector; the predicted champion's logit is
+   `W_c · h`, and `W_c` is the one thing that never sees `attrs_c`. The
+   attribute row of the champion being *predicted* never enters the
+   computation.
+
+So the table helps predict *other* champions from an attribute-rich context,
+but it cannot give a new champion a row on patch day - which was the headline
+justification. The fix is to let the output read the attributes as well:
+`logits_c += (W_a @ attrs_c) · h` with `W_a` zero-initialised (additive, keeps
+the untied head, degrades exactly to today's model at init), or tie the head to
+the embedding table. The first is the smaller change and the one to try.
+
+Verdict on the adapter: keep it (zero cost at init, no measurable harm, and it
+is the only path to the cold-start prior), but do not expect it to move
+`champ_top5` on an existing champion pool.
+
+The frontend now serves both model families (done 2026-10-30):
 - **Masked path** (`/api/suggest`): the `Predictor` class, role-conditioned
   MASK queries for every empty role slot on both teams. Accepts pretraining
   and finetune checkpoints only — a policy checkpoint is rejected with
