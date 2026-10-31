@@ -101,14 +101,23 @@ def read_pro():
                 try:
                     gold = float(rec["golddiffat15"])
                 except (TypeError, ValueError):
-                    continue
+                    gold = None
                 pos = (rec.get("position") or "").strip().lower() or "?"
-                s["gold15_sum"] += gold
-                s["gold15_n"] += 1
-                pos_gold[pos]["sum"] += gold
-                pos_gold[pos]["n"] += 1
-                s["gold15_pos_%s_sum" % pos] += gold
-                s["gold15_pos_%s_n" % pos] += 1
+                if gold is not None:
+                    s["gold15_sum"] += gold
+                    s["gold15_n"] += 1
+                    pos_gold[pos]["sum"] += gold
+                    pos_gold[pos]["n"] += 1
+                    s["gold15_pos_%s_sum" % pos] += gold
+                    s["gold15_pos_%s_n" % pos] += 1
+                try:
+                    dmg = float(rec["damagetochampions"])
+                except (TypeError, ValueError):
+                    continue
+                if gl > 0:
+                    s["dmg_sum"] += dmg
+                    s["min_sum"] += gl / 60.0
+                    s["dmg_n"] += 1
     pos_mean = {p: v["sum"] / v["n"] for p, v in pos_gold.items() if v["n"]}
     return stats, seen_rows, pos_mean
 
@@ -222,6 +231,19 @@ def main():
             cy.append(g)
         print("%-14s vs gold@15 (control):            rho=%+.3f"
               % (ctl, spearman(cx, cy)))
+
+    # --- damage output: damage to champions per minute.
+    # Role-confounded by design - the axis is "damage in this champion's role",
+    # so a support scoring low is the axis working, not a defect.
+    dmg_rows = [(name, s["dmg_sum"] / s["min_sum"]) for name, s in stats.items()
+                if name in rows and s["dmg_n"] >= 3 * MIN_GAMES
+                and s["min_sum"] > 0]
+    for axis in ("damage_output", "magic_share"):
+        xs = [rows[n][axes.index(axis)] for n, _ in dmg_rows]
+        ys = [v for _, v in dmg_rows]
+        rho = spearman(xs, ys)
+        print("%-14s vs damage/min:                rho=%+.3f  n=%d  (%+.1f sigma)"
+              % (axis, rho, len(xs), rho * math.sqrt(len(xs) - 1)))
 
     # --- scaling: win rate in long games minus short games.
     # This one is confounded and the report says so: the set of games that

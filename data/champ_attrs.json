@@ -1,10 +1,16 @@
 {
  "anchors": {
+  "damage_output": {
+   "0": "negligible: a healer or a pure enabler",
+   "1": "low: a tank's or support's contribution",
+   "2": "solid: a bruiser's or utility mage's share",
+   "3": "primary: the team's damage comes from here"
+  },
   "dive": {
    "0": "cannot reach a backline at all",
    "1": "needs a teammate to set it up",
    "2": "can get in and out on its own",
-   "3": "elite backline access and kill pressure (Zed, Talon, Kha'Zix)"
+   "3": "elite backline access in a fight (Zed, Talon, Kha'Zix)"
   },
   "engage": {
    "0": "no way to start a fight",
@@ -24,7 +30,7 @@
    "2": "can shove and rotate on its own",
    "3": "permapush, permanently holds the wave (Ziggs, Malzahar, Anivia)"
   },
-  "magic_damage": {
+  "magic_share": {
    "0": "pure physical (true damage counts as neither)",
    "1": "mostly physical, one magic spell",
    "2": "genuinely mixed",
@@ -48,6 +54,12 @@
    "2": "solid: a displacement, a real shield, a zone",
    "3": "elite disengage that cancels a dive (Janna Q/R, Poppy W)"
   },
+  "pick_potential": {
+   "0": "no way to catch a lone target",
+   "1": "one short-range or unreliable catch tool",
+   "2": "a real catch tool (charm, hook, sleep, kidnap)",
+   "3": "isolates and kills one target from range (Zed, Blitzcrank, Zoe)"
+  },
   "poke": {
    "0": "melee, no ranged chip",
    "1": "incidental ranged damage",
@@ -65,6 +77,12 @@
    "1": "falls off noticeably after two items",
    "2": "stable: strong at every stage",
    "3": "late-game win condition (Kog'Maw, Vayne, Kassadin, Kayle)"
+  },
+  "side_laning": {
+   "0": "cannot be alone in a lane",
+   "1": "can push a wave, then must group",
+   "2": "can hold a side lane with vision",
+   "3": "dedicated split pusher who forces an answer (Fiora, Jax, Yorick)"
   },
   "sustain": {
    "0": "no healing or shielding for the team",
@@ -91,8 +109,11 @@
   "range",
   "objective_speed",
   "tankiness",
-  "magic_damage",
-  "sustain"
+  "magic_share",
+  "sustain",
+  "damage_output",
+  "side_laning",
+  "pick_potential"
  ],
  "champions": {
   "1": {
@@ -109,7 +130,10 @@
     1,
     0,
     3,
-    0
+    0,
+    2,
+    1,
+    2
    ],
    "confidence": "high",
    "idx": 0,
@@ -129,7 +153,10 @@
     2,
     0,
     2,
-    1
+    1,
+    3,
+    3,
+    0
    ],
    "confidence": "high",
    "idx": 9,
@@ -149,6 +176,9 @@
     1,
     0,
     3,
+    0,
+    3,
+    1,
     0
    ],
    "confidence": "high",
@@ -167,6 +197,9 @@
     2,
     0,
     3,
+    2,
+    2,
+    0,
     2,
     2,
     0
@@ -189,7 +222,10 @@
     1,
     0,
     3,
-    0
+    0,
+    2,
+    1,
+    3
    ],
    "confidence": "high",
    "idx": 86,
@@ -209,6 +245,9 @@
     2,
     1,
     0,
+    0,
+    2,
+    2,
     0
    ],
    "confidence": "high",
@@ -229,7 +268,10 @@
     1,
     0,
     3,
-    0
+    0,
+    3,
+    2,
+    2
    ],
    "confidence": "high",
    "idx": 88,
@@ -249,7 +291,10 @@
     2,
     3,
     2,
-    2
+    2,
+    2,
+    2,
+    1
    ],
    "confidence": "high",
    "idx": 89,
@@ -269,7 +314,10 @@
     2,
     0,
     1,
-    1
+    1,
+    3,
+    2,
+    3
    ],
    "confidence": "high",
    "idx": 90,
@@ -289,7 +337,10 @@
     3,
     0,
     1,
-    1
+    1,
+    3,
+    3,
+    0
    ],
    "confidence": "high",
    "idx": 10,
@@ -309,7 +360,10 @@
     2,
     0,
     2,
-    0
+    0,
+    2,
+    1,
+    1
    ],
    "confidence": "high",
    "idx": 91,
@@ -329,7 +383,10 @@
     1,
     3,
     2,
-    0
+    0,
+    0,
+    0,
+    2
    ],
    "confidence": "high",
    "idx": 92,
@@ -349,6 +406,9 @@
     1,
     0,
     3,
+    0,
+    3,
+    1,
     0
    ],
    "confidence": "high",
@@ -369,7 +429,10 @@
     1,
     3,
     3,
-    0
+    0,
+    1,
+    1,
+    2
    ],
    "confidence": "high",
    "idx": 94,
@@ -389,7 +452,10 @@
     3,
     1,
     0,
-    2
+    2,
+    3,
+    3,
+    0
    ],
    "confidence": "high",
    "idx": 95,
@@ -409,6 +475,9 @@
     2,
     0,
     3,
+    0,
+    3,
+    2,
     0
    ],
    "confidence": "high",
@@ -429,7 +498,10 @@
     1,
     0,
     3,
-    3
+    3,
+    0,
+    0,
+    0
    ],
    "confidence": "high",
    "idx": 97,
@@ -449,6 +521,9 @@
     2,
     0,
     0,
+    0,
+    3,
+    1,
     0
    ],
    "confidence": "high",
@@ -469,7 +544,10 @@
     1,
     3,
     2,
-    0
+    0,
+    0,
+    0,
+    2
    ],
    "confidence": "high",
    "idx": 11,
@@ -489,7 +567,10 @@
     2,
     2,
     2,
-    1
+    1,
+    2,
+    1,
+    2
    ],
    "confidence": "high",
    "idx": 99,
@@ -509,7 +590,10 @@
     2,
     1,
     0,
-    1
+    1,
+    3,
+    1,
+    3
    ],
    "confidence": "high",
    "idx": 100,
@@ -529,7 +613,10 @@
     2,
     2,
     0,
-    1
+    1,
+    2,
+    2,
+    2
    ],
    "confidence": "high",
    "idx": 101,
@@ -549,7 +636,10 @@
     1,
     1,
     1,
-    0
+    0,
+    2,
+    2,
+    1
    ],
    "confidence": "high",
    "idx": 102,
@@ -569,7 +659,10 @@
     1,
     0,
     3,
-    0
+    0,
+    2,
+    1,
+    2
    ],
    "confidence": "high",
    "idx": 103,
@@ -589,7 +682,10 @@
     2,
     0,
     3,
-    0
+    0,
+    2,
+    2,
+    1
    ],
    "confidence": "high",
    "idx": 12,
@@ -609,7 +705,10 @@
     2,
     1,
     3,
-    1
+    1,
+    3,
+    2,
+    2
    ],
    "confidence": "high",
    "idx": 104,
@@ -629,7 +728,10 @@
     1,
     0,
     0,
-    0
+    0,
+    2,
+    2,
+    1
    ],
    "confidence": "high",
    "idx": 105,
@@ -649,7 +751,10 @@
     1,
     0,
     3,
-    0
+    0,
+    3,
+    1,
+    2
    ],
    "confidence": "high",
    "idx": 106,
@@ -669,6 +774,9 @@
     1,
     0,
     3,
+    0,
+    3,
+    1,
     0
    ],
    "confidence": "high",
@@ -689,7 +797,10 @@
     2,
     3,
     2,
-    1
+    1,
+    2,
+    3,
+    0
    ],
    "confidence": "high",
    "idx": 13,
@@ -709,7 +820,10 @@
     2,
     1,
     1,
-    1
+    1,
+    2,
+    2,
+    3
    ],
    "confidence": "high",
    "idx": 108,
@@ -729,7 +843,10 @@
     1,
     0,
     3,
-    0
+    0,
+    3,
+    1,
+    3
    ],
    "confidence": "high",
    "idx": 109,
@@ -749,7 +866,10 @@
     1,
     0,
     3,
-    0
+    0,
+    2,
+    1,
+    1
    ],
    "confidence": "high",
    "idx": 110,
@@ -769,7 +889,10 @@
     2,
     0,
     2,
-    0
+    0,
+    3,
+    1,
+    1
    ],
    "confidence": "high",
    "idx": 111,
@@ -789,7 +912,10 @@
     1,
     0,
     3,
-    3
+    3,
+    1,
+    0,
+    1
    ],
    "confidence": "high",
    "idx": 112,
@@ -809,6 +935,9 @@
     2,
     0,
     0,
+    0,
+    2,
+    1,
     0
    ],
    "confidence": "high",
@@ -821,7 +950,7 @@
     2,
     2,
     1,
-    2,
+    1,
     2,
     2,
     2,
@@ -829,7 +958,10 @@
     1,
     2,
     2,
-    0
+    0,
+    2,
+    2,
+    1
    ],
    "confidence": "high",
    "idx": 113,
@@ -849,7 +981,10 @@
     1,
     3,
     2,
-    2
+    2,
+    1,
+    0,
+    1
    ],
    "confidence": "high",
    "idx": 114,
@@ -869,7 +1004,10 @@
     2,
     1,
     0,
-    0
+    0,
+    3,
+    2,
+    1
    ],
    "confidence": "high",
    "idx": 115,
@@ -889,7 +1027,10 @@
     1,
     0,
     3,
-    3
+    3,
+    0,
+    0,
+    0
    ],
    "confidence": "high",
    "idx": 15,
@@ -909,6 +1050,9 @@
     1,
     0,
     3,
+    0,
+    3,
+    1,
     0
    ],
    "confidence": "high",
@@ -929,7 +1073,10 @@
     1,
     0,
     3,
-    0
+    0,
+    2,
+    1,
+    2
    ],
    "confidence": "high",
    "idx": 117,
@@ -949,7 +1096,10 @@
     2,
     2,
     0,
-    1
+    1,
+    2,
+    3,
+    2
    ],
    "confidence": "high",
    "idx": 118,
@@ -969,7 +1119,10 @@
     2,
     0,
     0,
-    0
+    0,
+    2,
+    2,
+    1
    ],
    "confidence": "high",
    "idx": 119,
@@ -989,6 +1142,9 @@
     1,
     0,
     3,
+    0,
+    2,
+    2,
     0
    ],
    "confidence": "high",
@@ -1009,6 +1165,9 @@
     2,
     0,
     1,
+    0,
+    3,
+    2,
     0
    ],
    "confidence": "high",
@@ -1029,7 +1188,10 @@
     2,
     2,
     2,
-    3
+    3,
+    2,
+    2,
+    2
    ],
    "confidence": "high",
    "idx": 18,
@@ -1049,7 +1211,10 @@
     2,
     2,
     0,
-    2
+    2,
+    2,
+    3,
+    0
    ],
    "confidence": "high",
    "idx": 1,
@@ -1069,7 +1234,10 @@
     2,
     3,
     3,
-    2
+    2,
+    1,
+    0,
+    1
    ],
    "confidence": "high",
    "idx": 19,
@@ -1089,6 +1257,9 @@
     3,
     1,
     1,
+    1,
+    3,
+    2,
     1
    ],
    "confidence": "high",
@@ -1109,7 +1280,10 @@
     1,
     3,
     2,
-    0
+    0,
+    0,
+    0,
+    1
    ],
    "confidence": "high",
    "idx": 121,
@@ -1129,7 +1303,10 @@
     1,
     0,
     0,
-    0
+    0,
+    2,
+    1,
+    1
    ],
    "confidence": "high",
    "idx": 122,
@@ -1149,7 +1326,10 @@
     3,
     0,
     1,
-    1
+    1,
+    2,
+    1,
+    0
    ],
    "confidence": "high",
    "idx": 123,
@@ -1168,6 +1348,9 @@
     2,
     1,
     0,
+    1,
+    0,
+    3,
     1,
     0
    ],
@@ -1189,7 +1372,10 @@
     1,
     0,
     0,
-    0
+    0,
+    1,
+    1,
+    2
    ],
    "confidence": "high",
    "idx": 21,
@@ -1208,6 +1394,9 @@
     2,
     2,
     0,
+    1,
+    0,
+    3,
     1,
     0
    ],
@@ -1229,6 +1418,9 @@
     2,
     0,
     0,
+    0,
+    3,
+    1,
     0
    ],
    "confidence": "high",
@@ -1249,7 +1441,10 @@
     1,
     3,
     2,
-    2
+    2,
+    1,
+    2,
+    1
    ],
    "confidence": "high",
    "idx": 126,
@@ -1269,7 +1464,10 @@
     3,
     1,
     0,
-    2
+    2,
+    3,
+    3,
+    0
    ],
    "confidence": "high",
    "idx": 22,
@@ -1289,7 +1487,10 @@
     2,
     1,
     0,
-    1
+    1,
+    2,
+    2,
+    2
    ],
    "confidence": "high",
    "idx": 127,
@@ -1309,6 +1510,9 @@
     2,
     1,
     1,
+    1,
+    3,
+    2,
     1
    ],
    "confidence": "high",
@@ -1329,7 +1533,10 @@
     1,
     0,
     2,
-    2
+    2,
+    2,
+    1,
+    1
    ],
    "confidence": "high",
    "idx": 129,
@@ -1349,6 +1556,9 @@
     1,
     0,
     0,
+    0,
+    2,
+    1,
     0
    ],
    "confidence": "high",
@@ -1369,7 +1579,10 @@
     1,
     0,
     0,
-    0
+    0,
+    3,
+    2,
+    3
    ],
    "confidence": "high",
    "idx": 131,
@@ -1389,6 +1602,9 @@
     3,
     2,
     2,
+    0,
+    3,
+    3,
     0
    ],
    "confidence": "high",
@@ -1409,6 +1625,9 @@
     1,
     2,
     0,
+    1,
+    2,
+    3,
     1
    ],
    "confidence": "high",
@@ -1429,7 +1648,10 @@
     1,
     1,
     3,
-    1
+    1,
+    2,
+    2,
+    2
    ],
    "confidence": "high",
    "idx": 133,
@@ -1449,7 +1671,10 @@
     1,
     0,
     1,
-    0
+    0,
+    3,
+    1,
+    3
    ],
    "confidence": "high",
    "idx": 134,
@@ -1469,7 +1694,10 @@
     1,
     0,
     3,
-    1
+    1,
+    1,
+    1,
+    2
    ],
    "confidence": "high",
    "idx": 24,
@@ -1489,7 +1717,10 @@
     2,
     2,
     1,
-    1
+    1,
+    2,
+    1,
+    3
    ],
    "confidence": "high",
    "idx": 135,
@@ -1509,7 +1740,10 @@
     1,
     0,
     3,
-    2
+    2,
+    1,
+    0,
+    0
    ],
    "confidence": "high",
    "idx": 25,
@@ -1529,7 +1763,10 @@
     2,
     2,
     0,
-    1
+    1,
+    2,
+    2,
+    0
    ],
    "confidence": "high",
    "idx": 136,
@@ -1549,7 +1786,10 @@
     1,
     0,
     3,
-    3
+    3,
+    1,
+    0,
+    1
    ],
    "confidence": "high",
    "idx": 137,
@@ -1569,7 +1809,10 @@
     2,
     0,
     3,
-    0
+    0,
+    2,
+    1,
+    1
    ],
    "confidence": "high",
    "idx": 138,
@@ -1589,7 +1832,10 @@
     1,
     2,
     3,
-    1
+    1,
+    1,
+    3,
+    0
    ],
    "confidence": "high",
    "idx": 26,
@@ -1609,7 +1855,10 @@
     1,
     0,
     3,
-    1
+    1,
+    3,
+    1,
+    3
    ],
    "confidence": "high",
    "idx": 27,
@@ -1629,7 +1878,10 @@
     2,
     0,
     1,
-    0
+    0,
+    3,
+    1,
+    1
    ],
    "confidence": "high",
    "idx": 28,
@@ -1649,7 +1901,10 @@
     1,
     3,
     3,
-    1
+    1,
+    1,
+    1,
+    2
    ],
    "confidence": "high",
    "idx": 2,
@@ -1669,6 +1924,9 @@
     2,
     0,
     3,
+    0,
+    3,
+    1,
     0
    ],
    "confidence": "high",
@@ -1689,7 +1947,10 @@
     2,
     3,
     2,
-    1
+    1,
+    2,
+    2,
+    2
    ],
    "confidence": "high",
    "idx": 30,
@@ -1709,7 +1970,10 @@
     1,
     3,
     2,
-    0
+    0,
+    1,
+    0,
+    2
    ],
    "confidence": "high",
    "idx": 31,
@@ -1729,7 +1993,10 @@
     1,
     3,
     2,
-    0
+    0,
+    1,
+    1,
+    1
    ],
    "confidence": "high",
    "idx": 32,
@@ -1749,7 +2016,10 @@
     1,
     0,
     3,
-    0
+    0,
+    2,
+    1,
+    1
    ],
    "confidence": "high",
    "idx": 33,
@@ -1769,7 +2039,10 @@
     1,
     0,
     1,
-    0
+    0,
+    2,
+    1,
+    2
    ],
    "confidence": "high",
    "idx": 34,
@@ -1789,7 +2062,10 @@
     1,
     0,
     3,
-    3
+    3,
+    0,
+    0,
+    0
    ],
    "confidence": "high",
    "idx": 139,
@@ -1809,7 +2085,10 @@
     2,
     3,
     1,
-    2
+    2,
+    2,
+    2,
+    0
    ],
    "confidence": "high",
    "idx": 35,
@@ -1829,7 +2108,10 @@
     2,
     0,
     0,
-    1
+    1,
+    3,
+    1,
+    0
    ],
    "confidence": "high",
    "idx": 140,
@@ -1849,7 +2131,10 @@
     1,
     0,
     3,
-    3
+    3,
+    0,
+    0,
+    0
    ],
    "confidence": "high",
    "idx": 36,
@@ -1869,7 +2154,10 @@
     1,
     1,
     3,
-    0
+    0,
+    3,
+    2,
+    1
    ],
    "confidence": "high",
    "idx": 37,
@@ -1889,6 +2177,9 @@
     2,
     1,
     1,
+    1,
+    2,
+    3,
     1
    ],
    "confidence": "high",
@@ -1909,7 +2200,10 @@
     1,
     0,
     3,
-    0
+    0,
+    2,
+    2,
+    2
    ],
    "confidence": "high",
    "idx": 3,
@@ -1929,7 +2223,10 @@
     1,
     0,
     2,
-    3
+    3,
+    0,
+    0,
+    0
    ],
    "confidence": "high",
    "idx": 39,
@@ -1949,7 +2246,10 @@
     1,
     1,
     1,
-    1
+    1,
+    3,
+    3,
+    0
    ],
    "confidence": "high",
    "idx": 40,
@@ -1969,7 +2269,10 @@
     1,
     2,
     2,
-    1
+    1,
+    0,
+    0,
+    3
    ],
    "confidence": "high",
    "idx": 141,
@@ -1989,7 +2292,10 @@
     2,
     0,
     2,
-    0
+    0,
+    2,
+    1,
+    1
    ],
    "confidence": "high",
    "idx": 41,
@@ -2009,6 +2315,9 @@
     2,
     2,
     0,
+    1,
+    2,
+    3,
     1
    ],
    "confidence": "high",
@@ -2028,6 +2337,9 @@
     0,
     1,
     2,
+    1,
+    1,
+    1,
     1,
     1
    ],
@@ -2049,7 +2361,10 @@
     1,
     1,
     2,
-    2
+    2,
+    0,
+    0,
+    1
    ],
    "confidence": "high",
    "idx": 144,
@@ -2069,7 +2384,10 @@
     2,
     0,
     0,
-    0
+    0,
+    2,
+    1,
+    1
    ],
    "confidence": "high",
    "idx": 145,
@@ -2089,7 +2407,10 @@
     1,
     0,
     3,
-    2
+    2,
+    1,
+    1,
+    0
    ],
    "confidence": "high",
    "idx": 42,
@@ -2101,14 +2422,17 @@
     2,
     1,
     0,
+    1,
+    1,
     2,
+    2,
+    1,
+    1,
     1,
     2,
     2,
     1,
     1,
-    1,
-    2,
     2
    ],
    "confidence": "high",
@@ -2129,7 +2453,10 @@
     1,
     3,
     3,
-    2
+    2,
+    0,
+    0,
+    0
    ],
    "confidence": "high",
    "idx": 43,
@@ -2149,7 +2476,10 @@
     1,
     0,
     3,
-    0
+    0,
+    3,
+    1,
+    2
    ],
    "confidence": "high",
    "idx": 44,
@@ -2169,7 +2499,10 @@
     3,
     3,
     1,
-    2
+    2,
+    2,
+    3,
+    0
    ],
    "confidence": "high",
    "idx": 45,
@@ -2189,7 +2522,10 @@
     1,
     1,
     3,
-    2
+    2,
+    0,
+    0,
+    1
    ],
    "confidence": "high",
    "idx": 147,
@@ -2209,7 +2545,10 @@
     2,
     0,
     0,
-    0
+    0,
+    3,
+    1,
+    1
    ],
    "confidence": "high",
    "idx": 148,
@@ -2229,6 +2568,9 @@
     2,
     2,
     0,
+    1,
+    2,
+    2,
     1
    ],
    "confidence": "high",
@@ -2249,7 +2591,10 @@
     1,
     2,
     3,
-    2
+    2,
+    2,
+    1,
+    1
    ],
    "confidence": "high",
    "idx": 46,
@@ -2269,7 +2614,10 @@
     2,
     0,
     0,
-    0
+    0,
+    2,
+    1,
+    1
    ],
    "confidence": "high",
    "idx": 47,
@@ -2289,7 +2637,10 @@
     2,
     3,
     2,
-    0
+    0,
+    1,
+    2,
+    1
    ],
    "confidence": "high",
    "idx": 149,
@@ -2309,7 +2660,10 @@
     1,
     2,
     3,
-    2
+    2,
+    3,
+    2,
+    1
    ],
    "confidence": "high",
    "idx": 150,
@@ -2329,7 +2683,10 @@
     1,
     0,
     3,
-    0
+    0,
+    2,
+    1,
+    2
    ],
    "confidence": "high",
    "idx": 151,
@@ -2349,6 +2706,9 @@
     2,
     0,
     0,
+    0,
+    3,
+    1,
     0
    ],
    "confidence": "high",
@@ -2369,7 +2729,10 @@
     1,
     3,
     3,
-    1
+    1,
+    0,
+    0,
+    2
    ],
    "confidence": "high",
    "idx": 153,
@@ -2389,7 +2752,10 @@
     1,
     2,
     2,
-    0
+    0,
+    0,
+    0,
+    3
    ],
    "confidence": "high",
    "idx": 48,
@@ -2409,7 +2775,10 @@
     1,
     3,
     2,
-    0
+    0,
+    1,
+    1,
+    1
    ],
    "confidence": "high",
    "idx": 49,
@@ -2429,7 +2798,10 @@
     1,
     0,
     3,
-    0
+    0,
+    3,
+    2,
+    1
    ],
    "confidence": "high",
    "idx": 50,
@@ -2449,7 +2821,10 @@
     1,
     0,
     0,
-    1
+    1,
+    2,
+    1,
+    3
    ],
    "confidence": "high",
    "idx": 154,
@@ -2469,7 +2844,10 @@
     2,
     1,
     1,
-    0
+    0,
+    2,
+    2,
+    2
    ],
    "confidence": "high",
    "idx": 51,
@@ -2489,7 +2867,10 @@
     1,
     3,
     3,
-    1
+    1,
+    1,
+    1,
+    2
    ],
    "confidence": "high",
    "idx": 52,
@@ -2509,6 +2890,9 @@
     1,
     2,
     0,
+    1,
+    2,
+    2,
     1
    ],
    "confidence": "high",
@@ -2529,7 +2913,10 @@
     2,
     2,
     0,
-    0
+    0,
+    2,
+    2,
+    2
    ],
    "confidence": "high",
    "idx": 54,
@@ -2549,7 +2936,10 @@
     2,
     2,
     0,
-    0
+    0,
+    2,
+    2,
+    1
    ],
    "confidence": "high",
    "idx": 5,
@@ -2569,7 +2959,10 @@
     2,
     1,
     3,
-    1
+    1,
+    2,
+    1,
+    3
    ],
    "confidence": "high",
    "idx": 55,
@@ -2589,6 +2982,9 @@
     1,
     0,
     3,
+    1,
+    2,
+    1,
     1
    ],
    "confidence": "high",
@@ -2609,7 +3005,10 @@
     1,
     2,
     0,
-    0
+    0,
+    2,
+    2,
+    1
    ],
    "confidence": "high",
    "idx": 57,
@@ -2621,7 +3020,7 @@
     0,
     2,
     0,
-    2,
+    1,
     2,
     1,
     0,
@@ -2629,7 +3028,10 @@
     1,
     0,
     3,
-    0
+    0,
+    3,
+    1,
+    1
    ],
    "confidence": "high",
    "idx": 58,
@@ -2649,7 +3051,10 @@
     2,
     1,
     1,
-    1
+    1,
+    2,
+    2,
+    2
    ],
    "confidence": "high",
    "idx": 59,
@@ -2669,6 +3074,9 @@
     3,
     0,
     1,
+    0,
+    3,
+    2,
     0
    ],
    "confidence": "high",
@@ -2689,6 +3097,9 @@
     1,
     1,
     3,
+    0,
+    2,
+    1,
     0
    ],
    "confidence": "high",
@@ -2709,7 +3120,10 @@
     2,
     0,
     3,
-    0
+    0,
+    3,
+    1,
+    1
    ],
    "confidence": "high",
    "idx": 62,
@@ -2729,7 +3143,10 @@
     1,
     0,
     3,
-    0
+    0,
+    3,
+    1,
+    3
    ],
    "confidence": "high",
    "idx": 6,
@@ -2749,7 +3166,10 @@
     1,
     0,
     3,
-    0
+    0,
+    2,
+    1,
+    2
    ],
    "confidence": "high",
    "idx": 155,
@@ -2769,7 +3189,10 @@
     1,
     3,
     2,
-    0
+    0,
+    1,
+    1,
+    2
    ],
    "confidence": "high",
    "idx": 63,
@@ -2781,7 +3204,7 @@
     1,
     3,
     0,
-    2,
+    1,
     3,
     1,
     0,
@@ -2789,6 +3212,9 @@
     1,
     0,
     3,
+    0,
+    2,
+    2,
     0
    ],
    "confidence": "high",
@@ -2809,7 +3235,10 @@
     2,
     2,
     2,
-    1
+    1,
+    2,
+    3,
+    0
    ],
    "confidence": "high",
    "idx": 65,
@@ -2829,7 +3258,10 @@
     2,
     0,
     3,
-    1
+    1,
+    2,
+    1,
+    2
    ],
    "confidence": "high",
    "idx": 66,
@@ -2849,7 +3281,10 @@
     2,
     2,
     2,
-    1
+    1,
+    2,
+    3,
+    0
    ],
    "confidence": "high",
    "idx": 67,
@@ -2869,7 +3304,10 @@
     2,
     1,
     1,
-    0
+    0,
+    3,
+    2,
+    1
    ],
    "confidence": "high",
    "idx": 156,
@@ -2889,7 +3327,10 @@
     1,
     3,
     1,
-    0
+    0,
+    1,
+    1,
+    1
    ],
    "confidence": "high",
    "idx": 68,
@@ -2909,6 +3350,9 @@
     2,
     2,
     3,
+    2,
+    2,
+    2,
     2
    ],
    "confidence": "high",
@@ -2929,6 +3373,9 @@
     2,
     2,
     0,
+    1,
+    2,
+    2,
     1
    ],
    "confidence": "high",
@@ -2949,7 +3396,10 @@
     1,
     1,
     3,
-    2
+    2,
+    3,
+    2,
+    0
    ],
    "confidence": "high",
    "idx": 7,
@@ -2969,7 +3419,10 @@
     1,
     1,
     0,
-    0
+    0,
+    2,
+    2,
+    2
    ],
    "confidence": "high",
    "idx": 70,
@@ -2989,6 +3442,9 @@
     1,
     0,
     3,
+    1,
+    2,
+    1,
     1
    ],
    "confidence": "low",
@@ -3009,18 +3465,37 @@
     2,
     0,
     2,
-    0
+    0,
+    3,
+    1,
+    1
    ],
    "confidence": "low",
    "idx": 159,
    "name": "Yunara"
   },
   "805": {
-   "attrs": null,
-   "confidence": "unknown",
+   "attrs": [
+    1,
+    0,
+    1,
+    3,
+    1,
+    2,
+    1,
+    3,
+    0,
+    1,
+    0,
+    3,
+    0,
+    3,
+    2,
+    3
+   ],
+   "confidence": "low",
    "idx": 160,
-   "name": "Locke",
-   "note": "Riot id 805 - no reliable kit knowledge"
+   "name": "Locke"
   },
   "81": {
    "attrs": [
@@ -3035,6 +3510,9 @@
     2,
     1,
     0,
+    1,
+    0,
+    2,
     1,
     0
    ],
@@ -3056,7 +3534,10 @@
     1,
     3,
     3,
-    1
+    1,
+    2,
+    2,
+    2
    ],
    "confidence": "high",
    "idx": 72,
@@ -3076,7 +3557,10 @@
     3,
     2,
     2,
-    1
+    1,
+    2,
+    3,
+    0
    ],
    "confidence": "high",
    "idx": 73,
@@ -3096,7 +3580,10 @@
     1,
     1,
     3,
-    0
+    0,
+    3,
+    2,
+    2
    ],
    "confidence": "high",
    "idx": 74,
@@ -3116,7 +3603,10 @@
     1,
     1,
     3,
-    0
+    0,
+    2,
+    1,
+    1
    ],
    "confidence": "high",
    "idx": 75,
@@ -3136,7 +3626,10 @@
     2,
     2,
     0,
-    2
+    2,
+    2,
+    2,
+    0
    ],
    "confidence": "high",
    "idx": 76,
@@ -3156,6 +3649,9 @@
     1,
     2,
     0,
+    2,
+    2,
+    2,
     2
    ],
    "confidence": "high",
@@ -3176,6 +3672,9 @@
     1,
     1,
     3,
+    1,
+    2,
+    1,
     1
    ],
    "confidence": "high",
@@ -3196,7 +3695,10 @@
     2,
     1,
     3,
-    1
+    1,
+    3,
+    3,
+    0
    ],
    "confidence": "high",
    "idx": 163,
@@ -3216,7 +3718,10 @@
     1,
     0,
     3,
-    2
+    2,
+    0,
+    0,
+    1
    ],
    "confidence": "high",
    "idx": 164,
@@ -3236,7 +3741,10 @@
     1,
     3,
     3,
-    0
+    0,
+    0,
+    0,
+    2
    ],
    "confidence": "high",
    "idx": 77,
@@ -3256,7 +3764,10 @@
     1,
     0,
     3,
-    0
+    0,
+    2,
+    1,
+    2
    ],
    "confidence": "high",
    "idx": 165,
@@ -3276,7 +3787,10 @@
     2,
     0,
     1,
-    1
+    1,
+    3,
+    2,
+    0
    ],
    "confidence": "high",
    "idx": 166,
@@ -3296,7 +3810,10 @@
     1,
     3,
     1,
-    1
+    1,
+    1,
+    1,
+    2
    ],
    "confidence": "high",
    "idx": 167,
@@ -3316,7 +3833,10 @@
     1,
     0,
     3,
-    1
+    1,
+    3,
+    1,
+    2
    ],
    "confidence": "high",
    "idx": 8,
@@ -3336,7 +3856,10 @@
     1,
     0,
     3,
-    0
+    0,
+    2,
+    1,
+    2
    ],
    "confidence": "high",
    "idx": 78,
@@ -3355,6 +3878,9 @@
     2,
     1,
     0,
+    1,
+    0,
+    3,
     1,
     0
    ],
@@ -3376,18 +3902,37 @@
     1,
     0,
     3,
-    3
+    3,
+    0,
+    0,
+    0
    ],
    "confidence": "high",
    "idx": 169,
    "name": "Milio"
   },
   "904": {
-   "attrs": null,
-   "confidence": "unknown",
+   "attrs": [
+    1,
+    0,
+    0,
+    1,
+    2,
+    2,
+    1,
+    1,
+    0,
+    2,
+    2,
+    0,
+    1,
+    2,
+    2,
+    1
+   ],
+   "confidence": "low",
    "idx": 170,
-   "name": "Zaahen",
-   "note": "Riot id 904 - no reliable kit knowledge"
+   "name": "Zaahen"
   },
   "91": {
    "attrs": [
@@ -3403,7 +3948,10 @@
     1,
     0,
     0,
-    0
+    0,
+    3,
+    2,
+    3
    ],
    "confidence": "high",
    "idx": 79,
@@ -3423,7 +3971,10 @@
     1,
     0,
     3,
-    0
+    0,
+    3,
+    1,
+    1
    ],
    "confidence": "high",
    "idx": 171,
@@ -3443,6 +3994,9 @@
     2,
     1,
     0,
+    1,
+    2,
+    2,
     1
    ],
    "confidence": "high",
@@ -3463,7 +4017,10 @@
     1,
     1,
     1,
-    0
+    0,
+    3,
+    2,
+    3
    ],
    "confidence": "high",
    "idx": 172,
@@ -3483,6 +4040,9 @@
     3,
     0,
     2,
+    0,
+    3,
+    1,
     0
    ],
    "confidence": "high",
@@ -3503,7 +4063,10 @@
     1,
     3,
     2,
-    2
+    2,
+    1,
+    2,
+    1
    ],
    "confidence": "high",
    "idx": 82,
@@ -3515,7 +4078,7 @@
     1,
     3,
     0,
-    2,
+    1,
     2,
     1,
     0,
@@ -3523,7 +4086,10 @@
     1,
     0,
     3,
-    1
+    1,
+    3,
+    1,
+    2
    ],
    "confidence": "high",
    "idx": 83,
@@ -3531,22 +4097,25 @@
   }
  },
  "low_confidence": {
+  "Locke": "kit given as 'AP mid, melee, mobile assassin' - tagged from that one line, everything except mobility/dive/pick is a guess",
   "Mel": "released after my reliable knowledge cutoff; read as a ranged mage",
-  "Yunara": "released after my reliable knowledge cutoff; read as a marksman"
+  "Yunara": "released after my reliable knowledge cutoff; read as a marksman",
+  "Zaahen": "kit given as 'AD melee top bruiser' - tagged from that one line, everything except damage type is a guess"
  },
  "notes": {
+  "Blitzcrank": "dive 1 but pick 3: the hook catches a straggler, it does not get him through a frontline",
+  "Janna": "magic_share 2 but damage_output 0: the ratio is meaningless when nothing is dealt, which is exactly why the two axes are separate",
   "Kassadin": "lane_priority 0 is the point of the champion, not an oversight",
   "Kennen": "engage 3 is R-only, but R alone is enough to start a fight",
-  "Master Yi": "magic_damage 1: Wuju Style is true damage, which counts as neither",
-  "Thresh": "engage 3 and peel 3 both: hook starts fights, lantern+flay end them",
-  "Yuumi": "mobility 1 on purpose - she moves by attaching, not by dashing"
+  "Malphite": "engage 3 but pick 1: R starts a teamfight, it cannot isolate one target",
+  "Master Yi": "magic_share 1: Wuju Style is true damage, which counts as neither physical nor magic",
+  "Thresh": "engage 3 and peel 3: hook starts fights, lantern+flay ends them; damage_output 0 is the point of the champion",
+  "Yuumi": "mobility 1 - she moves by attaching, not by dashing; magic_share 3 with damage_output 0 means 'magic type, no volume'",
+  "Zoe": "pick 3 via the bubble at max range; dive 1 because she has no way to follow it up herself"
  },
  "num_champs": 173,
  "patch": "16.20",
  "provenance": "hand-tagged from kit knowledge at patch 16.20; no model queried at build time",
  "scale": "ordinal 0..3; divide by 3 before use",
- "unknown": {
-  "Locke": "Riot id 805 - no reliable kit knowledge",
-  "Zaahen": "Riot id 904 - no reliable kit knowledge"
- }
+ "unknown": {}
 }
