@@ -460,3 +460,41 @@ def test_next_move_rejects_an_illegal_board(app, httpd, policy_ckpt):
     status, d = _post(httpd, "/api/next-move",
                       json.dumps({"picks": picks, "bans": []}))
     assert status == 400 and "twice" in d["error"]
+
+
+def _banned_board(app, n=6):
+    """A legal board at move n: n bans, nothing picked."""
+    bans = list(app["mapping"])[:n]
+    return json.dumps({"picks": [None] * 10, "bans": bans, "first_pick": 0})
+
+
+def test_explain_returns_evidence_without_an_llm_key(app, httpd, policy_ckpt,
+                                                     monkeypatch):
+    """No key must degrade to retrieval, not to an error: the evidence is the
+    part that has to be right, and it is useful on its own."""
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    S.load_predictor(Path(policy_ckpt))
+    status, d = _post(httpd, "/api/explain", _banned_board(app))
+    assert status == 200, d
+    assert d["llm"]["configured"] is False
+    assert d["explanation"] is None
+    assert "LLM_API_KEY" in d["llm"]["reason"]
+    ret = d["retrieval"]
+    assert ret["n_indexed"] > 1000
+    assert ret["games"], "expected comparable boards from the pro corpus"
+    for g in ret["games"]:
+        assert g["gameid"] and g["next_kind"] in ("ban", "pick")
+        assert isinstance(g["next_champ"], str) and g["next_champ"]
+        assert 0.0 <= g["overlap"] <= 1.0
+    overlaps = [g["overlap"] for g in ret["games"]]
+    assert overlaps == sorted(overlaps, reverse=True)
+    # the board echo is what the prompt is built from, so it must be complete
+    assert d["board"]["move_idx"] == 6
+    assert len(d["board"]["bans"]) == 6
+
+
+def test_explain_rejects_a_masked_model(app, httpd):
+    ckpt, _score = S.find_best_ckpt()
+    S.APP["predictor"] = S.Predictor(ckpt, device="cpu")
+    status, d = _post(httpd, "/api/explain", _empty_board())
+    assert status == 400 and "policy" in d["error"]

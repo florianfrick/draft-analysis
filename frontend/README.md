@@ -108,6 +108,46 @@ the whole panel re-runs for the next move.
   champion twice) is rejected by the endpoint and shown as a board warning
   rather than silently repaired.
 
+### Explaining a recommendation (`/api/explain`)
+
+`POST /api/explain` takes the same body as `/api/next-move` and adds three
+things on top of the top-k: **comparable boards from the pro corpus**, **the
+patch notes for the candidates**, and — if `LLM_API_KEY` is set — **prose that
+must cite one of those two**.
+
+```bash
+curl -s localhost:8777/api/explain -H 'Content-Type: application/json' \
+  -d '{"picks":[null,null,null,null,null,null,null,null,null,null],
+       "bans":[1,2,3,4,5,6],"first_pick":0}'
+```
+
+- **Retrieval** (`frontend/llm.py: ProIndex`) scans all 46,813 pro drafts. Each
+  row keeps its final draft as one 173-bit integer, so the coarse pass is a
+  `bit_count()` sweep (~20 ms); the top 600 are then re-ranked on the champions
+  that were on the board **at the query move**, not on the final draft. A row
+  that shares champions with you *later* is not evidence about this decision.
+  Rows are filtered to the same move index and first-pick side; if that leaves
+  fewer than `k_games`, the side filter is dropped and `relaxed_side` says so.
+- **Patch notes** come from `data/patch notes/clean/patch_<M>_<m>.md`, the
+  draft-relevant subset. `patch` in the body overrides which patch is used;
+  the default is the newest patch in the corpus.
+- **Grounding** is enforced, not requested. Every `evidence` item must resolve:
+  a `game` id must be one of the retrieved games, a `patch` line must appear
+  verbatim in the notes that were handed to the model. Unresolvable items are
+  dropped, the call is retried once with the failures fed back, and a second
+  failure returns the answer with `unverified` populated and `ok: false`.
+  A fabricated citation never reaches the UI silently.
+- **No key is not an error.** Without `LLM_API_KEY` the endpoint returns
+  `explanation: null` plus `llm.reason` and the full retrieval — which is the
+  part that has to be right anyway.
+- **Cache**: answers are keyed on board + candidates + retrieved games + model
+  + prompt version, written to `frontend/.cache/explain/` (git-ignored).
+  `"force": true` bypasses it; `PROMPT_VERSION` in `llm.py` invalidates it when
+  the answer schema changes.
+- Env: `LLM_API_KEY`, `LLM_BASE_URL` (default `https://api.openai.com/v1`, any
+  OpenAI-compatible endpoint works), `LLM_MODEL` (default `gpt-4o-mini`),
+  `LLM_TIMEOUT` (default 45 s). See `.env.example`.
+
 ### Masked mode (pretraining / finetune checkpoint)
 
 - **Likely roles**: below each strip, every picked champion gets its predicted

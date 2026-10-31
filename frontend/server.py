@@ -81,6 +81,7 @@ from soloq_model import (SoloQPretrainedModel, ROLE_FLEX_ID,  # noqa: E402
                          NUM_ROLES, load_encoder_state,
                          attr_matrix_for_config)
 import infer  # noqa: E402  (model/policy/infer.py: next-move + ban ranking)
+import llm    # noqa: E402  (frontend/llm.py: retrieval + grounded explanation)
 
 ROLE_ROWS = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"]
 N_SLOTS = 10
@@ -93,6 +94,19 @@ DDRAGON_NAME_FIX = {"Wukong": "MonkeyKing", "Nunu & Willump": "Nunu",
 
 _ICON_LOCK = threading.Lock()
 _ICON_CACHE = None
+
+_INDEX_LOCK = threading.Lock()
+_PRO_INDEX = None
+
+
+def pro_index():
+    """The 46,813-draft retrieval index, built once per process (~1 s)."""
+    global _PRO_INDEX
+    if _PRO_INDEX is None:
+        with _INDEX_LOCK:
+            if _PRO_INDEX is None:
+                _PRO_INDEX = llm.ProIndex.load(PRO_DRAFTS_PT)
+    return _PRO_INDEX
 
 
 def icon_url(name):
@@ -605,6 +619,8 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_suggest()
         elif route == "/api/next-move":
             self._handle_next_move()
+        elif route == "/api/explain":
+            self._handle_explain()
         elif route == "/api/load":
             self._handle_load()
         elif route == "/api/upload":
@@ -704,6 +720,71 @@ class Handler(BaseHTTPRequestHandler):
                          "rank": c["rank"]}
                         for c in bans_res["candidates"]],
                 }
+        self._send(200, out)
+
+    def _handle_explain(self):
+        """POST {picks, bans, first_pick, k, k_games, patch, force} ->
+        top-k, retrieved evidence, and prose when an LLM key is configured.
+
+        Without a key this still returns the evidence. That ordering is
+        deliberate: the retrieval is the part that has to be right either
+        way, and it is the part a coach can use on its own.
+        """
+        try:
+            payload = self._read_json()
+            pred = APP["predictor"]
+            if pred.kind != "policy":
+                raise ValueError(
+                    "/api/explain needs a next-move policy checkpoint; the "
+                    "active model is %r" % pred.kind)
+            mapping, names = APP["mapping"], APP["names_by_idx"]
+            picks = payload.get("picks") or [None] * 10
+            bans = payload.get("bans") or []
+            first_pick = 1 if int(payload.get("first_pick", 0)) else 0
+            picks_idx = [None if p is None else mapping[p] for p in picks]
+            bans_idx = [mapping[b] for b in bans]
+            res = pred.next_move(picks_idx, bans_idx, first_pick=first_pick,
+                                 k=int(payload.get("k", 5)))
+            index = pro_index()
+        except (ValueError, KeyError, TypeError, IndexError,
+                json.JSONDecodeError) as exc:
+            self._send(400, {"error": str(exc)})
+            return
+        except Exception as exc:  # noqa: BLE001 - corpus missing/unreadable
+            self._send(500, {"error": "cannot build the draft index: %s" % exc})
+            return
+
+        board = {
+            "move_idx": int(res["move_idx"]),
+            "side": "blue" if int(res["side"]) == 0 else "red",
+            "first_pick": first_pick,
+            "first_pick_side": "red" if first_pick else "blue",
+            "patch": payload.get("patch") or index.latest_patch,
+            "bans": [names[i] for i in bans_idx],
+            "blue": [names[i] for i in picks_idx[:5] if i is not None],
+            "red": [names[i] for i in picks_idx[5:] if i is not None],
+            "champ_ids": [i for i in picks_idx if i is not None] + bans_idx,
+        }
+        suggestions = [(names[c["idx"]], float(c["prob"]))
+                       for c in res["suggestions"]]
+        try:
+            explained = llm.explain(
+                board, suggestions, index, client=llm.client_from_env(),
+                k_games=int(payload.get("k_games", 5)),
+                force=bool(payload.get("force")), names=names)
+        except Exception as exc:  # noqa: BLE001 - one panel, not the server
+            self._send(500, {"error": "explain failed: %s" % exc})
+            return
+        out = {
+            "model": model_info(pred),
+            "state": {k: res[k] for k in ("move_idx", "kind", "side", "phase",
+                                          "first_pick", "warning", "complete")},
+            "suggestions": [{"idx": c["idx"], "prob": c["prob"],
+                             "name": names[c["idx"]]}
+                            for c in res["suggestions"]],
+            "board": board,
+        }
+        out.update(explained)
         self._send(200, out)
 
     def _handle_load(self):
