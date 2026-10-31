@@ -201,6 +201,51 @@ h [B,10,D]  ->  PMA(seeds=4) over blue slots  -> v_blue [B,D]
   `teams.red.win`; agreeing rows are dropped (72 of 384,428 on 16.20). Verified
   identical to `store.py`'s `blue_win` on 37,820 overlapping games.
 
+### 4.4 Kit-attribute residual (`attr_matrix`, P3.1)
+
+Off unless a matrix is passed; on by default in pretraining (`--no-champ-attrs`
+reverts). It changes the *input* to the encoder, so it is documented here.
+
+```text
+x = champ_lookup(champ_ids) + role_lookup(role_ids)
+    + Linear_K->D(champ_attrs[champ_ids])      # zero-initialised
+-> LayerNorm(D)
+```
+
+- **The table.** `data/champ_attrs.json`, built by `data/build_champ_attrs.py`:
+  173 champions x 18 axes (engage, peel, poke, dive, scaling, lane_priority,
+  hard_cc, mobility, range, objective_speed, tankiness, magic_share, sustain,
+  damage_output, side_laning, pick_potential, kiting, healing), ordinal 0-3,
+  divided by 3 so every axis is 0-1. The ordinal scale is deliberate: a
+  hand-tagged column has about half a level of real resolution, and
+  standardising 18 three-valued columns would invent precision.
+- **Why it is a residual, not a concatenation.** Concatenating would change
+  `embed_dim` and therefore every downstream weight; a zero-init `Linear(K,D)`
+  added to the summed embedding keeps the shape, so an old checkpoint loads
+  into an attribute-enabled encoder with the adapter at zero and computes
+  *bit-identical* outputs (`tests/test_champ_attrs_embed.py` asserts equality,
+  not closeness). "Attributes on/off" is then one flag, and a difference
+  between two runs is the adapter learning rather than a different
+  initialisation.
+- **What it buys.** The axes are shared across champions, so a tag learned on
+  one champion transfers to another with little data; and a champion released
+  after the training data was collected has no useful embedding row but does
+  have a tag row, which is the cold-start difference between a prior and a
+  random vector. 18 x D + D parameters (~4.9k at D=256).
+- **MASK and PAD are zero rows**, so an empty or masked slot contributes
+  nothing to the residual - invariant 5 (PAD discipline) still holds.
+- **The matrix is a non-persistent buffer**, i.e. data, not a parameter: it is
+  absent from the state dict and the checkpoint stores only `attr_dim`. That
+  keeps checkpoints small and portable, and makes a table revision loud: a
+  checkpoint whose `attr_dim` disagrees with the JSON refuses to load rather
+  than silently reinterpreting its own inputs.
+- **Loading asymmetry.** `load_encoder_state()` tolerates *missing*
+  `embed.attr_proj.*` (absent == zero-initialised, so a pre-P3.1 checkpoint
+  resumes into an attribute model unchanged) but refuses to *drop* them (a
+  trained adapter disappearing is a different model, not a config choice).
+  Every stage rebuilds the encoder through `attr_matrix_for_config(cfg)`, so
+  `attr_dim` in the checkpoint config decides, and a stage cannot forget it.
+
 ## 5. Invariants checklist (what tests enforce)
 
 1. Shapes/dtypes/ranges: every key in Sec 3 matches table (incl. `role_masked Bool [B,10]`, no `team_ids`/`win_label`).

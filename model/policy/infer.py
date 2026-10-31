@@ -47,7 +47,8 @@ for _p in (str(HERE), str(MODEL_DIR)):        # `model` -> policy/model.py
 
 from model import PolicyValueModel                             # noqa: E402
 from soloq_model import (SoloQPretrainedModel, CHAMP_PAD_ID,   # noqa: E402
-                         ROLE_FLEX_ID, NUM_ROLES, load_encoder_state)
+                         ROLE_FLEX_ID, NUM_ROLES, load_encoder_state,
+                         attr_matrix_for_config)
 
 N_MOVES = 20
 TEAM_SIZE = 5
@@ -235,7 +236,8 @@ def load_policy_model(path, device="cpu", payload=None):
     enc = SoloQPretrainedModel(
         num_champs=cfg["num_champs"], embed_dim=cfg["embed_dim"],
         num_heads=cfg["num_heads"], num_intra_layers=cfg["num_intra"],
-        num_cross_layers=cfg["num_cross"], dropout=cfg.get("dropout", 0.0))
+        num_cross_layers=cfg["num_cross"], dropout=cfg.get("dropout", 0.0),
+        attr_matrix=attr_matrix_for_config(cfg))
     model = PolicyValueModel(
         enc, embed_dim=cfg["embed_dim"], state_dim=cfg["state_dim"],
         n_econ=cfg.get("n_econ", 0), dropout=cfg.get("head_dropout", 0.0),
@@ -258,7 +260,8 @@ def load_value_model(path, device="cpu"):
         num_champs=cfg["num_champs"], embed_dim=cfg["embed_dim"],
         num_heads=cfg["num_heads"], num_intra_layers=cfg["num_intra"],
         num_cross_layers=cfg["num_cross"], dropout=cfg.get("dropout", 0.0),
-        with_value=True, value_seeds=cfg.get("value_seeds", 4))
+        with_value=True, value_seeds=cfg.get("value_seeds", 4),
+        attr_matrix=attr_matrix_for_config(cfg))
     model = finetune_model_module().PrefixValueModel(
         enc, ban_heads=cfg["ban_heads"], ban_seeds=cfg["ban_seeds"],
         ban_dropout=cfg["ban_dropout"], use_bans=cfg["use_bans"])

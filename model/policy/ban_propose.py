@@ -61,7 +61,7 @@ sys.path.insert(0, str(MODEL_DIR))
 import train as T  # noqa: E402  (model/policy/train.py)
 from model import PolicyValueModel  # noqa: E402
 from soloq_model import (SoloQPretrainedModel, load_encoder_state,  # noqa: E402
-                         CHAMP_PAD_ID)
+                         attr_matrix_for_config, CHAMP_PAD_ID)
 
 PRO_DATA = T.PRO_DATA
 EP = T.EP
@@ -124,7 +124,8 @@ def load_policy(path, device):
     enc = SoloQPretrainedModel(
         num_champs=cfg["num_champs"], embed_dim=cfg["embed_dim"],
         num_heads=cfg["num_heads"], num_intra_layers=cfg["num_intra"],
-        num_cross_layers=cfg["num_cross"], dropout=cfg.get("dropout", 0.0))
+        num_cross_layers=cfg["num_cross"], dropout=cfg.get("dropout", 0.0),
+        attr_matrix=attr_matrix_for_config(cfg))
     model = PolicyValueModel(
         enc, embed_dim=cfg["embed_dim"], state_dim=cfg["state_dim"],
         n_econ=cfg["n_econ"], dropout=cfg.get("head_dropout", 0.0),
@@ -145,7 +146,8 @@ def load_prefix_value(path, device):
         num_champs=cfg["num_champs"], embed_dim=cfg["embed_dim"],
         num_heads=cfg["num_heads"], num_intra_layers=cfg["num_intra"],
         num_cross_layers=cfg["num_cross"], dropout=cfg.get("dropout", 0.0),
-        with_value=True, value_seeds=cfg.get("value_seeds", 4))
+        with_value=True, value_seeds=cfg.get("value_seeds", 4),
+        attr_matrix=attr_matrix_for_config(cfg))
     model = FIN_MODEL.PrefixValueModel(
         enc, ban_heads=cfg["ban_heads"], ban_seeds=cfg["ban_seeds"],
         ban_dropout=cfg["ban_dropout"], use_bans=cfg["use_bans"]).to(device)
@@ -169,7 +171,8 @@ def load_finetune_value(path, device):
     enc = SoloQPretrainedModel(
         num_champs=cfg["num_champs"], embed_dim=cfg["embed_dim"],
         num_heads=cfg["num_heads"], num_intra_layers=cfg["num_intra"],
-        num_cross_layers=cfg["num_cross"], dropout=cfg.get("dropout", 0.0))
+        num_cross_layers=cfg["num_cross"], dropout=cfg.get("dropout", 0.0),
+        attr_matrix=attr_matrix_for_config(cfg))
     model = FIN_MODEL.ProDraftModel(enc, n_econ=cfg.get("n_econ", 6)).to(device)
     # The checkpoint holds the whole ProDraftModel (encoder.* + heads.*),
     # so it is loaded as one piece rather than into the bare encoder.

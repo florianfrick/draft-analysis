@@ -32,6 +32,8 @@ sys.path.insert(0, str(HERE.parent.parent / "data" /
 import pipeline as P                    # noqa: E402
 import train as T                       # noqa: E402  (reuses loaders/eval)
 from soloq_model import SoloQPretrainedModel  # noqa: E402
+from soloq_model import attr_matrix_for_config  # noqa: E402
+from soloq_model import load_encoder_state  # noqa: E402
 
 ROLE_ROWS = ["TOP", "JGL", "MID", "ADC", "SUP"]
 
@@ -42,8 +44,13 @@ def load_model(ckpt, device):
     model = SoloQPretrainedModel(
         num_champs=cfg["num_champs"], embed_dim=cfg["embed_dim"],
         num_heads=cfg["num_heads"], num_intra_layers=cfg["num_intra"],
-        num_cross_layers=cfg["num_cross"], dropout=cfg.get("dropout", 0.0))
-    model.load_state_dict(payload["model"])
+        num_cross_layers=cfg["num_cross"], dropout=cfg.get("dropout", 0.0),
+        attr_matrix=attr_matrix_for_config(cfg))
+    # Value head off here: this script measures masked-modelling metrics, and
+    # pretraining checkpoints carry `pma.*`/`win_head.*` (on by default since
+    # the value path landed), which a strict load rejects. load_encoder_state
+    # drops exactly those two prefixes and still raises on anything else.
+    load_encoder_state(model, payload["model"])
     model.to(device).eval()
     return model, payload
 

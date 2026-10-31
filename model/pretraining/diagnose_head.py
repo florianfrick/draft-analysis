@@ -42,7 +42,8 @@ sys.path.insert(0, str(HERE.parent))
 
 import pipeline as P  # noqa: E402
 from soloq_model import (PMAPool, SoloQPretrainedModel,  # noqa: E402
-                         load_encoder_state, mean_pool_vector)
+                         attr_matrix_for_config, load_encoder_state,
+                         mean_pool_vector)
 
 
 class ValueHead(nn.Module):
@@ -109,7 +110,8 @@ def main():
     enc = SoloQPretrainedModel(
         num_champs=cfg["num_champs"], embed_dim=cfg["embed_dim"],
         num_heads=cfg["num_heads"], num_intra_layers=cfg["num_intra"],
-        num_cross_layers=cfg["num_cross"], dropout=0.0).to(dev)
+        num_cross_layers=cfg["num_cross"], dropout=0.0,
+        attr_matrix=attr_matrix_for_config(cfg)).to(dev)
     load_encoder_state(enc, payload["model"])
     enc.eval()
 

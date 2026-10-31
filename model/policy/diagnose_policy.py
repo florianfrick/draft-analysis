@@ -89,7 +89,8 @@ def evaluate_ckpt(ckpt_path, rows, splits, num_champs, device, batch_size=512):
     encoder = T.SoloQPretrainedModel(
         num_champs=cfg["num_champs"], embed_dim=cfg["embed_dim"],
         num_heads=cfg["num_heads"], num_intra_layers=cfg["num_intra"],
-        num_cross_layers=cfg["num_cross"], dropout=0.0)
+        num_cross_layers=cfg["num_cross"], dropout=0.0,
+        attr_matrix=T.attr_matrix_for_config(cfg))
     model = PolicyValueModel(
         encoder, embed_dim=cfg["embed_dim"], state_dim=cfg.get("state_dim", 64),
         n_econ=cfg.get("n_econ", 0), dropout=0.0,

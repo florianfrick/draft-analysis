@@ -69,6 +69,7 @@ def _load_module_by_path(name, path):
 
 sys.path.insert(0, str(MODEL_DIR))
 from soloq_model import SoloQPretrainedModel  # noqa: E402
+from soloq_model import attr_matrix_for_config  # noqa: E402
 from model import PrefixValueModel  # noqa: E402
 
 PRO_PIPE = _load_module_by_path("pro_pipeline", PRO_DIR / "pipeline.py")
@@ -188,7 +189,8 @@ def build_value_encoder(payload):
         num_champs=cfg["num_champs"], embed_dim=cfg["embed_dim"],
         num_heads=cfg["num_heads"], num_intra_layers=cfg["num_intra"],
         num_cross_layers=cfg["num_cross"], dropout=cfg.get("dropout", 0.0),
-        with_value=True, value_seeds=cfg.get("value_seeds", 4))
+        with_value=True, value_seeds=cfg.get("value_seeds", 4),
+        attr_matrix=attr_matrix_for_config(cfg))
     missing, unexpected = enc.load_state_dict(payload["model"], strict=False)
     if missing or unexpected:
         raise RuntimeError(
@@ -646,7 +648,8 @@ def score_only(args):
         num_champs=cfg["num_champs"], embed_dim=cfg["embed_dim"],
         num_heads=cfg["num_heads"], num_intra_layers=cfg["num_intra"],
         num_cross_layers=cfg["num_cross"], dropout=cfg.get("dropout", 0.0),
-        with_value=True, value_seeds=cfg.get("value_seeds", 4))
+        with_value=True, value_seeds=cfg.get("value_seeds", 4),
+        attr_matrix=attr_matrix_for_config(cfg))
     model = PrefixValueModel(
         enc, ban_heads=cfg["ban_heads"], ban_seeds=cfg["ban_seeds"],
         ban_dropout=cfg["ban_dropout"], use_bans=cfg["use_bans"]).to(device)

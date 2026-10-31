@@ -32,6 +32,18 @@ Value metrics are measured on a CLEAN val view (no champion masked), because
 a 15%-masked draft caps any readout and would flatter or punish the wrong
 thing. `win_skill` = 1 - brier/brier_const; > 0 means it beats the constant.
 
+Champ attributes (P3.1, on by default; --no-champ-attrs reverts): each
+champion's embedding gets a residual from the 18-axis hand-tagged kit table
+in data/champ_attrs.json (DraftSlotEmbedding.attr_proj). The projection is
+zero-initialised, so with the same champ/role tables the model computes
+exactly what it did before - "attributes on/off" is one flag, not two
+initialisations. Two reasons it is worth 4.9k parameters: the axes are shared
+across champions, so what the model learns about "engage" transfers to a
+champion it has seen rarely; and a champion released after the training data
+was collected has no useful embedding row but does have a tag row, which is
+the difference between a cold start and a random vector. `attr_dim` goes into
+the checkpoint config and every downstream stage rebuilds the adapter from it.
+
 W&B: key read from pretraining/wandb_key.txt or WANDB_API_KEY env var;
 --no-wandb disables. Checkpoints: ckpt/run_<stamp>/{
   best.pt        best val champ_top5 (weights + config only)
@@ -64,7 +76,8 @@ sys.path.insert(0, str(PROC_DIR))
 sys.path.insert(0, str(HERE.parent))             # for soloq_model
 
 import pipeline as P                     # noqa: E402
-from soloq_model import SoloQPretrainedModel  # noqa: E402
+from soloq_model import (SoloQPretrainedModel,  # noqa: E402
+                         load_champ_attr_matrix, load_encoder_state)
 
 CKPT_ROOT = HERE / "ckpt"
 KEY_FILE = HERE / "wandb_key.txt"
@@ -140,6 +153,13 @@ def parse_args(argv=None):
     ap.add_argument("--dropout", type=float, default=0.0)
     ap.add_argument("--value-seeds", type=int, default=4,
                     help="PMA seed queries for the value readout")
+    ap.add_argument("--no-champ-attrs", action="store_true",
+                    help="disable the kit-attribute residual from "
+                    "data/champ_attrs.json (P3.1). On by default: the "
+                    "adapter is zero-initialised, so it costs nothing at "
+                    "step 0 and gives every champion 18 tag dimensions "
+                    "instead of one embedding row - the ablation is this "
+                    "flag, not a rewrite")
     # bookkeeping
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--log-every", type=int, default=20)
@@ -554,7 +574,11 @@ def save_ckpt(path, model, args, num_champs, metrics, step, epoch=None,
                           "num_heads": args.num_heads,
                           "dropout": args.dropout,
                           "with_value": not args.no_win,
-                          "value_seeds": args.value_seeds},
+                          "value_seeds": args.value_seeds,
+                          # Written from the model, not from the flag: if the
+                          # two ever disagree the model is the truth, and
+                          # every downstream stage rebuilds from this number.
+                          "attr_dim": int(getattr(model, "attr_dim", 0))},
                "metrics": metrics, "step": step, "epoch": epoch,
                "patch": args.patch}
     if resume is not None:
@@ -608,7 +632,28 @@ def restore(resume_path, model, opt, sched, scaler, args, device):
         sys.exit("--resume: architecture mismatch with %s\n  %s\n"
                  "pass the original size flags (or drop --resume to start "
                  "fresh)" % (resume_path, "\n  ".join(bad)))
-    model.load_state_dict(payload["model"])
+    # attr_dim is compared separately because the asymmetry is real:
+    #   * ckpt has no attr_dim (trained before the table existed) -> resuming
+    #     with attributes ON is fine, the adapter is zero-init so step 0 is
+    #     byte-identical; say so rather than letting it pass silently.
+    #   * ckpt HAS a trained adapter and we were asked to run without it ->
+    #     refuse. Dropping it would resume from a model that has forgotten
+    #     everything the adapter learned, and the loss curve would look like
+    #     a lr spike rather than a config mistake.
+    ck_attr, now_attr = int(cfg.get("attr_dim") or 0), int(model.attr_dim)
+    if ck_attr and ck_attr != now_attr:
+        sys.exit("--resume: %s was trained with attr_dim=%d, this run has %d"
+                 " (%s)\n  drop --no-champ-attrs to continue it, or start a "
+                 "fresh run to ablate attributes"
+                 % (resume_path, ck_attr, now_attr,
+                    "attributes off" if not now_attr else "table changed"))
+    if now_attr and not ck_attr:
+        print("resume: %s predates the attribute table -> the %d-axis "
+              "adapter starts at zero (identical to the old model at step 0)"
+              % (resume_path.name, now_attr))
+    # Tolerates a missing attr_proj (zero-init) but still raises on any other
+    # mismatch, including a checkpoint key the model cannot take.
+    load_encoder_state(model, payload["model"])
     st = payload.get("resume") or {}
     if not st:
         print("resume: %s has no training state (weights only) -> epoch/step/"
@@ -711,7 +756,15 @@ def train(args):
         num_champs=num_champs, embed_dim=args.embed_dim,
         num_heads=args.num_heads, num_intra_layers=args.num_intra,
         num_cross_layers=args.num_cross, dropout=args.dropout,
-        with_value=not args.no_win, value_seeds=args.value_seeds).to(device)
+        with_value=not args.no_win, value_seeds=args.value_seeds,
+        attr_matrix=(None if args.no_champ_attrs
+                     else load_champ_attr_matrix(num_champs))).to(device)
+    if model.attr_dim:
+        print("champ attributes: %d axes from data/champ_attrs.json "
+              "(adapter zero-init; --resume restores trained weights)"
+              % model.attr_dim)
+    else:
+        print("champ attributes: off (champion embedding only)")
     n_params = sum(p.numel() for p in model.parameters())
     print("model params: %.1fM, device: %s, amp: %s"
           % (n_params / 1e6, device, amp))

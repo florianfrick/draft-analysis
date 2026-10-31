@@ -78,7 +78,8 @@ sys.path.insert(0, str(MODEL_DIR))
 sys.path.insert(0, str(MODEL_DIR / "policy"))     # so `import infer` works
 
 from soloq_model import (SoloQPretrainedModel, ROLE_FLEX_ID,  # noqa: E402
-                         NUM_ROLES, load_encoder_state)
+                         NUM_ROLES, load_encoder_state,
+                         attr_matrix_for_config)
 import infer  # noqa: E402  (model/policy/infer.py: next-move + ban ranking)
 
 ROLE_ROWS = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"]
@@ -227,7 +228,8 @@ class Predictor:
             num_heads=cfg["num_heads"],
             num_intra_layers=cfg["num_intra"],
             num_cross_layers=cfg["num_cross"],
-            dropout=cfg.get("dropout", 0.0))
+            dropout=cfg.get("dropout", 0.0),
+            attr_matrix=attr_matrix_for_config(cfg))
         # load_encoder_state tolerates the opt-in value path (`pma.*`,
         # `win_head.*`) that pretraining checkpoints carry, and still raises
         # on a real mismatch. The frontend never needs the value head.

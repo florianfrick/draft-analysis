@@ -36,6 +36,7 @@ PRO_DIR = ROOT / "data" / "pro play"
 
 sys.path.insert(0, str(MODEL_DIR))
 from soloq_model import SoloQPretrainedModel      # noqa: E402
+from soloq_model import attr_matrix_for_config    # noqa: E402
 from soloq_model import load_encoder_state        # noqa: E402
 from model import PolicyValueModel                # noqa: E402
 
@@ -75,7 +76,8 @@ def build_model(blob, device):
     enc = SoloQPretrainedModel(
         num_champs=cfg["num_champs"], embed_dim=cfg["embed_dim"],
         num_heads=cfg["num_heads"], num_intra_layers=cfg["num_intra"],
-        num_cross_layers=cfg["num_cross"], dropout=cfg.get("dropout", 0.0))
+        num_cross_layers=cfg["num_cross"], dropout=cfg.get("dropout", 0.0),
+        attr_matrix=attr_matrix_for_config(cfg))
     model = PolicyValueModel(
         enc, embed_dim=cfg["embed_dim"], state_dim=cfg["state_dim"],
         n_econ=cfg["n_econ"], dropout=cfg.get("head_dropout", 0.0),

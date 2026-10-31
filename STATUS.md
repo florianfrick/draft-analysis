@@ -1,6 +1,6 @@
 # Project status
 
-Last updated: 2026-10-30. Scope: what is trained, what is measured, what is kept.
+Last updated: 2026-10-31. Scope: what is trained, what is measured, what is kept.
 
 Four trained artefacts remain, one per stage. Everything else (21 runs,
 ~7.6GB) was deleted; the conclusions those runs produced are recorded under
@@ -190,11 +190,27 @@ the cross-unfrozen value variant, were deleted.
 
 The repo is now shaped for these four P3 items (`plan-model-v2.md` §P3):
 
-1. **Kit-attribute embeddings.** New `data/champ_attrs.json` (`[173, K]`,
-   LLM-tagged: engage, peel, poke, dive, scaling, lane priority, damage type,
-   hard CC, mobility, range, objective speed). Hook: `DraftSlotEmbedding` in
-   `model/soloq_model.py` — concat or initialise. Champion ids already align
-   with `data/solo queue/process matchdata/champ_names.json`.
+1. **Kit-attribute embeddings — WIRED (2026-10-31).** `data/champ_attrs.json`
+   is now a real input: 173 champions x 18 axes (engage, peel, poke, dive,
+   scaling, lane priority, hard CC, mobility, range, objective speed,
+   tankiness, magic share, sustain, damage output, side laning, pick
+   potential, kiting, healing), ordinal 0-3, tagged in
+   `data/build_champ_attrs.py`. `DraftSlotEmbedding` adds a zero-initialised
+   `Linear(18, D)` on the tag row, so an attribute-enabled encoder computes
+   *bit-identical* outputs to the old one until the adapter learns, and
+   `--no-champ-attrs` is the ablation. `attr_dim` lives in the checkpoint
+   config and every stage rebuilds from it (`attr_matrix_for_config`), so no
+   loader can forget the matrix and quietly serve a zero adapter. Matrix is a
+   non-persistent buffer (checkpoints stay the same size); a re-tagged table
+   with a different axis count refuses to load. Tests:
+   `model/tests/test_champ_attrs_embed.py` (14) + `data/test_champ_attrs.py`
+   (7). External checks on held-out pro data: `lane_priority` vs adjusted
+   gold@15 rho +0.34 (3.9 sigma), `damage_output` vs damage/min +0.63
+   (7.3 sigma), `scaling` vs long-short win rate +0.35 (4.0 sigma), and
+   `magic_share` vs damage/min -0.02 (i.e. damage *type* is orthogonal to
+   damage *volume*, which is what the axis split was for). **Not yet
+   measured:** whether the adapter improves champ top-5. That needs one
+   pretraining run with and one without.
 2. **Soft-label distillation.** Hook: `policy_loss` in
    `model/policy/train.py`. Target: ListNet / KL against LLM rankings on a few
    thousand states; `build_prefix` already produces the states.

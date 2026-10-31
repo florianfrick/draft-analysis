@@ -44,7 +44,7 @@ sys.path.insert(0, str(HERE.parent))
 
 import pipeline as P  # noqa: E402
 from soloq_model import (SoloQPretrainedModel, mean_pool_vector,  # noqa: E402
-                         load_encoder_state)
+                         attr_matrix_for_config, load_encoder_state)
 
 
 def parse_args(argv=None):
@@ -89,7 +89,8 @@ def build_encoder(payload, device):
         num_cross_layers=cfg["num_cross"],
         dropout=cfg.get("dropout", 0.0),
         with_value=bool(cfg.get("with_value", False)),
-        value_seeds=cfg.get("value_seeds", 4))
+        value_seeds=cfg.get("value_seeds", 4),
+        attr_matrix=attr_matrix_for_config(cfg))
     load_encoder_state(enc, payload["model"])
     return enc.to(device), cfg
 
