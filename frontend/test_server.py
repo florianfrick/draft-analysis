@@ -1,6 +1,7 @@
 """Tests for the local frontend: checkpoint pick, suggest logic, HTTP API."""
 import glob
 import json
+import re
 import sys
 import threading
 from http.client import HTTPConnection
@@ -491,6 +492,51 @@ def test_explain_returns_evidence_without_an_llm_key(app, httpd, policy_ckpt,
     # the board echo is what the prompt is built from, so it must be complete
     assert d["board"]["move_idx"] == 6
     assert len(d["board"]["bans"]) == 6
+
+
+class _StubClient:
+    """A client in the shape `llm.explain` expects: callable + `.model`."""
+    model = "stub-1"
+
+    def __init__(self, fn):
+        self.fn = fn
+
+    def __call__(self, messages):
+        return self.fn(messages)
+
+
+def test_explain_returns_the_reasoning_the_ui_renders(app, httpd, policy_ckpt,
+                                                      monkeypatch, tmp_path):
+    """The panel shows `explanation.reasoning` plus the evidence it resolves
+    against, so both have to survive the HTTP round trip."""
+    S.load_predictor(Path(policy_ckpt))
+    monkeypatch.setattr(S.llm, "CACHE_DIR", tmp_path / "cache")
+
+    def fake_client(messages):
+        # Cite the first game the server actually retrieved and recommend its
+        # own top candidate, so the answer passes the validator: the test is
+        # about transport, not leniency. Read the *first* user turn - a retry
+        # appends the rejection note, which has neither list in it.
+        text = messages[1]["content"]
+        gid = re.search(r"^  - (\S+) \| patch", text, re.M).group(1)
+        cand = re.search(r"^  - (.+?)  [\d.]+%$", text, re.M).group(1)
+        return json.dumps({
+            "reasoning": ["Their board is light on engage.",
+                          "%s answered it with a pick-first support." % gid],
+            "recommend": cand, "why": "x", "their_answer": "Azir",
+            "risk": "Falls off.", "evidence": [{"type": "game", "id": gid}]})
+
+    monkeypatch.setattr(S.llm, "client_from_env",
+                        lambda env=None: _StubClient(fake_client))
+    status, d = _post(httpd, "/api/explain", _banned_board(app))
+    assert status == 200, d
+    exp = d["explanation"]
+    assert exp["ok"] is True, exp.get("problems")
+    assert len(exp["reasoning"]) == 2
+    assert exp["reasoning"][1].endswith("support.")
+    cited = exp["evidence"][0]["id"]
+    assert cited in {g["gameid"] for g in d["retrieval"]["games"]}
+    assert d["llm"]["configured"] is True
 
 
 def test_explain_rejects_a_masked_model(app, httpd):

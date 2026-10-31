@@ -178,6 +178,18 @@ def test_explain_reports_whether_the_patch_was_found(notes_dir):
     assert out["patch"]["notes"]["Ahri"]  # the fixture notes have Ahri
 
 
+def test_notes_are_pulled_for_every_candidate_not_just_the_top(notes_dir):
+    """Otherwise the candidate that happens to be in this patch wins the
+    argument by default."""
+    index = llm.ProIndex([make_row("g", picks(10, 11))])
+    board = {"move_idx": 2, "side": "blue", "first_pick": 0, "patch": "16.20",
+             "bans": [], "blue": ["Ahri"], "red": [], "champ_ids": [10, 11]}
+    cands = [("A%d" % i, 0.1) for i in range(6)] + [("Ahri", 0.05), ("Zed", 0.01)]
+    out = llm.explain(board, cands, index, client=None)
+    assert set(out["patch"]["notes"]) == {"Ahri", "Zed"}
+    assert "Zed" not in out["patch"]["missing"]
+
+
 def test_the_corpus_can_be_absent_entirely(tmp_path, monkeypatch):
     """A clean clone has no `data/patch notes/` at all, not just no file for
     this patch. The endpoint is supposed to keep working."""
@@ -204,7 +216,8 @@ def games_fixture():
 
 
 def test_validate_keeps_resolvable_evidence():
-    answer = {"recommend": "Ahri", "why": "Wins the mid lane.",
+    answer = {"reasoning": ["Mid priority matters here."],
+              "recommend": "Ahri", "why": "Wins the mid lane.",
               "their_answer": "Azir", "risk": "Falls off.",
               "evidence": [{"type": "game", "id": "G-1"},
                            {"type": "patch", "line": "Charm Duration : "
@@ -217,6 +230,40 @@ def test_validate_keeps_resolvable_evidence():
     assert problems == []
     assert len(clean["evidence"]) == 2
     assert clean["unverified"] == []
+
+
+def test_validate_keeps_reasoning_in_order():
+    answer = {"reasoning": ["First.", "Second.", "Third."],
+              "recommend": "Ahri", "why": "x", "evidence": []}
+    clean, problems = llm.validate(answer, games_fixture(), {}, ["Ahri"])
+    assert clean["reasoning"] == ["First.", "Second.", "Third."]
+    assert problems == []
+
+
+def test_reasoning_is_capped_and_never_mixed_into_evidence():
+    """The steps are the model's own account. They must not be presented as
+    citations, and one runaway answer must not fill the panel."""
+    answer = {"reasoning": ["step %d" % i for i in range(20)],
+              "recommend": "Ahri", "why": "x", "evidence": []}
+    clean, _ = llm.validate(answer, games_fixture(), {}, ["Ahri"])
+    assert len(clean["reasoning"]) == llm.MAX_STEPS
+    assert clean["evidence"] == [] and clean["unverified"] == []
+
+
+def test_a_single_string_reasoning_is_accepted():
+    clean, problems = llm.validate(
+        {"reasoning": "Only one step.", "recommend": "Ahri", "why": "x",
+         "evidence": []}, games_fixture(), {}, ["Ahri"])
+    assert clean["reasoning"] == ["Only one step."]
+    assert problems == []
+
+
+def test_missing_reasoning_is_a_problem():
+    clean, problems = llm.validate(
+        {"recommend": "Ahri", "why": "x", "evidence": []},
+        games_fixture(), {}, ["Ahri"])
+    assert clean["reasoning"] == []
+    assert any("no reasoning steps" in p for p in problems)
 
 
 def test_validate_drops_a_fabricated_game():
@@ -264,7 +311,9 @@ def board(**kw):
 
 
 def good_answer(**kw):
-    ans = {"recommend": "Ahri", "why": "Charm gives the pick a follow-up.",
+    ans = {"reasoning": ["The board has no engage yet.",
+                         "G-1 answered it with a pick-first support."],
+           "recommend": "Ahri", "why": "Charm gives the pick a follow-up.",
            "their_answer": "Azir", "risk": "Low damage if it stalls.",
            "evidence": [{"type": "game", "id": "G-1"}]}
     ans.update(kw)

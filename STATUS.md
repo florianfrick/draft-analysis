@@ -316,6 +316,15 @@ instead of prose nobody checked. The alternative — instructing the model to
 cite honestly and trusting it — is what produces confident citations of games
 that do not exist.
 
+**The reasoning is shown, and labelled for what it is.** The answer schema has
+a `reasoning` field (2-5 steps, in order), rendered above the pick. It is the
+model's own account written with the answer — not a transcript of hidden
+deliberation, and not something the validator can check — so it is kept out of
+`evidence`, capped at 6 x 240 chars, and the panel says plainly that only the
+citations below it are verified. What *is* checked: every cited game and patch
+line, plus anything the retry failed to fix, which is listed in amber rather
+than dropped silently.
+
 **No key is not an error.** Without `LLM_API_KEY` the endpoint still returns
 the retrieved games and patch bullets with `explanation: null`, so the evidence
 path can be inspected before anyone configures a provider. Cache is keyed on
@@ -356,6 +365,13 @@ The frontend now serves both model families (done 2026-10-30):
   **next-move policy** checkpoint — it explains a single move, so the masked
   path (which fills every empty role slot at once) is rejected with a 400
   naming the model family it found.
+- **Explanation panel** (`static/app.js: renderExplain`): "why this move?" in
+  the next-move panel, on demand rather than automatic (a call costs seconds
+  and money; the recommendation is already on screen). Shows the model's
+  numbered reasoning steps, the pick (clickable to apply), why / their answer /
+  risk, the citations resolved against the retrieved games, anything rejected
+  by the validator, and the comparable-drafts list the answer was built from.
+  Hides itself when the board changes — a stale explanation is worse than none.
 - `--host 0.0.0.0` is required when serving through the Docker port mapping.
 
 Known gap: the offline proposer is told the role of each future pick from the
@@ -376,7 +392,7 @@ docker compose run --rm dev python model/policy/evaluate.py \
     --ckpt model/policy/ckpt/run_20261025_000606_ablF-stage1/best_policy.pt
 ```
 
-Tests: run per file (16 suites, 247 tests + 1 skip). `model/policy/model.py`
+Tests: run per file (16 suites, 253 tests + 1 skip). `model/policy/model.py`
 claims the `model` module name and shadows `model/finetune/model.py` in a
 combined run, so a single `pytest model/` will fail for reasons unrelated to
 the code. `soloq data analysis/explorer/test_explorer.py` is excluded from that

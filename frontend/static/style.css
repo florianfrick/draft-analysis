@@ -242,3 +242,86 @@ footer { padding: 8px 18px; border-top: 1px solid var(--line);
 
 /* a next-move policy is role-free: the per-role tables do not apply */
 body.policy-mode .sug-table, body.policy-mode .sugs-head { display: none; }
+
+/* --- explanation panel ------------------------------------------------ */
+#explain {
+  max-width: 1400px; margin: 14px auto 0; padding: 12px 14px;
+  background: var(--panel); border: 1px solid var(--line);
+  border-left: 3px solid var(--acc); border-radius: 10px;
+}
+#explain.hidden { display: none; }
+.ex-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+#ex-title { font-size: 15px; font-weight: 600; color: var(--acc); }
+#ex-meta { font-size: 12px; }
+.ex-busy { color: var(--muted); font-size: 13px; padding: 10px 0 2px; }
+.ex-busy::after { content: '…'; animation: exdots 1.2s steps(4) infinite; }
+@keyframes exdots { 0% { opacity: .2 } 50% { opacity: 1 } 100% { opacity: .2 } }
+
+/* the model's own account */
+.ex-steps { margin: 10px 0 4px; padding-left: 22px; }
+.ex-steps li { margin-bottom: 5px; font-size: 13px; }
+.ex-steps li::marker { color: var(--acc); font-variant-numeric: tabular-nums; }
+.ex-note {
+  font-size: 11px; color: var(--muted); margin: 2px 0 10px;
+  padding-left: 22px;
+}
+
+/* the structured answer */
+.ex-answer { display: grid; grid-template-columns: 92px 1fr; gap: 6px 12px;
+  margin: 10px 0; font-size: 13px; }
+.ex-answer .k {
+  color: var(--muted); font-size: 11px; letter-spacing: .4px;
+  text-transform: uppercase; padding-top: 2px;
+}
+.ex-answer .v { line-height: 1.45; }
+.ex-pick {
+  display: inline-flex; align-items: center; gap: 7px; padding: 2px 9px 2px 3px;
+  background: #232a36; border: 1px solid var(--acc); border-radius: 8px;
+  font-weight: 600; font-size: 13px;
+}
+.ex-pick .ic { width: 26px; height: 26px; }
+.ex-pick .p { color: var(--muted); font-weight: 400; font-size: 11px; }
+
+/* evidence: what was actually checked */
+.ex-sub {
+  margin: 14px 0 6px; font-size: 12px; color: var(--muted);
+  letter-spacing: .3px; border-top: 1px solid var(--line); padding-top: 10px;
+}
+.ex-ev { display: flex; flex-direction: column; gap: 6px; }
+.ex-game {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 6px 9px; background: #232a36; border: 1px solid var(--line);
+  border-radius: 8px; font-size: 12px;
+}
+.ex-game .gid { font-family: ui-monospace, Consolas, monospace; font-size: 11px;
+  color: var(--muted); }
+.ex-game .who { font-weight: 600; }
+.ex-game .ov { color: var(--acc); font-variant-numeric: tabular-nums; }
+.ex-game .res { color: var(--muted); }
+.ex-line {
+  padding: 6px 9px; background: #232a36; border: 1px solid var(--line);
+  border-left: 3px solid #c9a94b; border-radius: 6px;
+  font-size: 12px; white-space: pre-wrap;
+}
+.ex-drop {
+  margin-top: 10px; padding: 7px 9px; font-size: 12px; border-radius: 6px;
+  background: #3a2a12; border: 1px solid #6b4a1d; color: #f0c785;
+}
+.ex-drop ul { margin: 4px 0 0; padding-left: 18px; }
+.ex-drop code { font-family: ui-monospace, Consolas, monospace; }
+.ex-empty {
+  padding: 8px 9px; font-size: 12px; border-radius: 6px; color: var(--muted);
+  background: #1a1f27; border: 1px dashed var(--line);
+}
+.ex-ret { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.ex-ret .r {
+  display: grid; grid-template-columns: 1fr 78px 54px; gap: 10px;
+  align-items: center; padding: 3px 9px; background: #1f2530;
+  border-radius: 6px;
+}
+.ex-ret .r .ov-bar { height: 5px; background: #2c3340; border-radius: 3px; }
+.ex-ret .r .ov-bar i { display: block; height: 100%; background: var(--acc);
+  border-radius: 3px; }
+.ex-ret .r .ov-n { text-align: right; color: var(--muted);
+  font-variant-numeric: tabular-nums; }
+#ex-reask.hidden, #ex-close.hidden { display: none; }

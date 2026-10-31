@@ -139,12 +139,18 @@ curl -s localhost:8777/api/explain -H 'Content-Type: application/json' \
   patch in the pro corpus. `patch.available` also separates "the notes were
   read and this champion was not changed" from "no notes for this patch", so
   `missing` is never ambiguous.
+- **Reasoning** (`explanation.reasoning`) is asked for explicitly: 2–5 steps,
+  in the order the model took them, capped at 6 × 240 chars. It is the model's
+  own account — a summary written with the answer, **not** a transcript of
+  hidden deliberation — so it is never merged into `evidence` and the UI
+  labels it. Only the citations are checked.
 - **Grounding** is enforced, not requested. Every `evidence` item must resolve:
   a `game` id must be one of the retrieved games, a `patch` line must appear
   verbatim in the notes that were handed to the model. Unresolvable items are
   dropped, the call is retried once with the failures fed back, and a second
-  failure returns the answer with `unverified` populated and `ok: false`.
-  A fabricated citation never reaches the UI silently.
+  failure returns the answer with `unverified` populated, `problems` explaining
+  each rejection, and `ok: false`. A fabricated citation never reaches the UI
+  silently.
 - **No key is not an error.** Without `LLM_API_KEY` the endpoint returns
   `explanation: null` plus `llm.reason` and the full retrieval — which is the
   part that has to be right anyway.
@@ -155,6 +161,30 @@ curl -s localhost:8777/api/explain -H 'Content-Type: application/json' \
 - Env: `LLM_API_KEY`, `LLM_BASE_URL` (default `https://api.openai.com/v1`, any
   OpenAI-compatible endpoint works), `LLM_MODEL` (default `gpt-4o-mini`),
   `LLM_TIMEOUT` (default 45 s). See `.env.example`.
+
+#### In the UI
+
+**"why this move?"** in the next-move panel opens the explanation. It is a
+button rather than automatic because a call costs seconds and, with a hosted
+model, money — and the recommendation is already on screen without it.
+
+The panel shows, top to bottom: the numbered reasoning steps, the recommended
+pick (click it to apply the move), `why` / `their answer` / `risk`, the cited
+evidence resolved against the retrieval payload (teams, league, patch, what
+they did next, overlap), anything that was **not** shown as evidence and why,
+and the full comparable-drafts list so the answer can be audited against what
+the model was given.
+
+Three states matter:
+
+- **no key** — the panel still opens and shows the comparable drafts and patch
+  coverage, with `llm.reason` saying what to set. The retrieval is the part
+  that does not need a model.
+- **stale** — the panel hides as soon as the board changes. An explanation of
+  the previous board is worse than no explanation.
+- **unverified** — if the retry did not fix a citation, the header says
+  `unverified citations` and the rejected items are listed in amber rather than
+  hidden.
 
 ### Masked mode (pretraining / finetune checkpoint)
 

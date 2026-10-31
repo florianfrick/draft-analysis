@@ -391,6 +391,7 @@ function requestSuggest() {
     resp = r;
     renderSlots(); renderRoles(); renderSuggestions(); renderTurn();
     renderNextMove();
+    renderExplain();       // hides itself if the board moved
     renderCompare();
   }, 200);
 }
@@ -474,6 +475,195 @@ function renderNextMoveError(msg) {
   const warn = document.getElementById('nm-warning');
   warn.textContent = msg;
   warn.classList.remove('hidden');
+}
+
+// ---- explanation panel -------------------------------------------------
+// The model's reasoning is requested explicitly (a `reasoning` field in the
+// answer schema) and rendered here. It is the model's own account, not a
+// transcript of hidden deliberation, so the panel labels it as such and puts
+// the citations - the only part that is actually checked - underneath it.
+
+let EXPLAIN = null;        // last /api/explain payload
+let EXPLAIN_BUSY = false;
+let EXPLAIN_SIG = null;    // board the explanation was fetched for
+
+function boardSig() {
+  return JSON.stringify([picks, bans.blue, bans.red, currentFirstPick()]);
+}
+
+function hideExplain() {
+  EXPLAIN = null;
+  EXPLAIN_BUSY = false;
+  document.getElementById('explain').classList.add('hidden');
+}
+
+function explainBody(force) {
+  return {
+    picks: picks,
+    bans: allBansFlat(),
+    first_pick: currentFirstPick(),
+    k: 8,
+    k_games: 5,
+    force: !!force
+  };
+}
+
+async function requestExplain(force) {
+  if (!isPolicyModel() || EXPLAIN_BUSY) return;
+  const sig = boardSig();
+  EXPLAIN_BUSY = true;
+  const box = document.getElementById('explain');
+  box.classList.remove('hidden');
+  document.getElementById('ex-title').textContent = 'Why this move';
+  document.getElementById('ex-meta').textContent = '';
+  document.getElementById('ex-body').innerHTML =
+    '<div class="ex-busy">asking the model</div>';
+  let d;
+  try {
+    d = await (await fetch('/api/explain', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(explainBody(force))
+    })).json();
+  } catch (e) {
+    d = { error: 'request failed: ' + e.message };
+  }
+  EXPLAIN_BUSY = false;
+  if (d.error) {
+    document.getElementById('ex-body').innerHTML =
+      `<div class="ex-drop">${esc(d.error)}</div>`;
+    return;
+  }
+  EXPLAIN = d;
+  EXPLAIN_SIG = sig;
+  renderExplain();
+}
+
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function gameById(id) {
+  const g = ((EXPLAIN && EXPLAIN.retrieval) || {}).games || [];
+  return g.find(x => x.gameid === id) || null;
+}
+
+function renderExplain() {
+  const box = document.getElementById('explain');
+  // a stale explanation is worse than none: the board moved since
+  if (!EXPLAIN || !EXPLAIN_SIG || EXPLAIN_SIG !== boardSig()) {
+    if (!EXPLAIN_BUSY) box.classList.add('hidden');
+    return;
+  }
+  box.classList.remove('hidden');
+  const ex = EXPLAIN.explanation;
+  const llm = EXPLAIN.llm || {};
+  const patch = EXPLAIN.patch || {};
+  const games = (EXPLAIN.retrieval || {}).games || [];
+
+  document.getElementById('ex-meta').textContent = ex
+    ? (ex.model || 'model') + (ex.cached ? ' · cached' : '')
+      + (ex.ok ? '' : ' · unverified citations')
+    : (llm.configured ? '' : 'no LLM configured');
+  document.getElementById('ex-reask').classList.toggle('hidden',
+    !llm.configured);
+
+  const out = [];
+
+  if (!ex) {
+    out.push(`<div class="ex-empty">${esc(llm.reason ||
+      llm.error || 'no explanation returned')}</div>`);
+  } else {
+    if (ex.reasoning && ex.reasoning.length) {
+      out.push('<ol class="ex-steps">'
+        + ex.reasoning.map(s => `<li>${esc(s)}</li>`).join('') + '</ol>');
+      out.push('<div class="ex-note">the model\'s account, in its own words —'
+        + ' only the citations below are checked</div>');
+    }
+    const cand = (resp && resp.suggestions || []).find(s => s.name === ex.recommend);
+    const pick = cand
+      ? `<button class="ex-pick" data-apply="${cand.idx}"
+           title="apply ${esc(ex.recommend)}">${imgTag(BY_IDX[cand.idx])}`
+        + `<span>${esc(ex.recommend)}</span>`
+        + `<span class="p">${(100 * cand.prob).toFixed(1)}%</span></button>`
+      : `<span class="ex-pick"><span>${esc(ex.recommend || '?')}</span></span>`;
+    out.push('<div class="ex-answer">'
+      + `<div class="k">pick</div><div class="v">${pick}</div>`
+      + `<div class="k">why</div><div class="v">${esc(ex.why)}</div>`
+      + `<div class="k">their answer</div><div class="v">${esc(ex.their_answer)}</div>`
+      + `<div class="k">risk</div><div class="v">${esc(ex.risk)}</div>`
+      + '</div>');
+
+    // evidence - resolved against the retrieval payload so the reader can see
+    // *why* it is evidence, not just an id
+    out.push('<div class="ex-sub">Cited evidence</div>');
+    const ev = ex.evidence || [];
+    if (!ev.length) {
+      out.push('<div class="ex-empty">the model cited nothing</div>');
+    } else {
+      out.push('<div class="ex-ev">');
+      ev.forEach(item => {
+        if (item.type === 'game') {
+          const g = gameById(item.id);
+          out.push('<div class="ex-game">'
+            + `<span class="gid">${esc(item.id)}</span>`
+            + (g ? `<span class="who">${esc(g.blue_team)} vs ${esc(g.red_team)}</span>`
+              + `<span class="res">${esc(g.league || '')} · ${esc(g.patch || '')}`
+              + ` · ${esc(g.date || '')}</span>`
+              + `<span class="res">next: ${esc(g.next_side)} ${esc(g.next_kind)}`
+              + ` ${esc(String(g.next_champ))}</span>`
+              + `<span class="ov">overlap ${(100 * g.overlap).toFixed(0)}%</span>`
+              : '<span class="res">not in the retrieved set</span>')
+            + '</div>');
+        } else {
+          out.push(`<div class="ex-line">${esc(item.line)}</div>`);
+        }
+      });
+      out.push('</div>');
+    }
+
+    const dropped = ex.unverified || [];
+    if (dropped.length || (ex.problems || []).length) {
+      out.push('<div class="ex-drop">'
+        + '<b>Not shown as evidence</b><ul>'
+        + dropped.map(u => `<li><code>${esc(u.id || u.line || JSON.stringify(u))}`
+          + '</code></li>').join('')
+        + (ex.problems || []).map(p => `<li>${esc(p)}</li>`).join('')
+        + '</ul></div>');
+    }
+  }
+
+  // what the model was actually shown - the audit trail for the answer above
+  out.push('<div class="ex-sub">Comparable pro drafts'
+    + (EXPLAIN.retrieval && EXPLAIN.retrieval.relaxed_side
+      ? ' <span class="muted">(first-pick side filter relaxed)</span>' : '')
+    + '</div>');
+  if (!games.length) {
+    out.push('<div class="ex-empty">no comparable board in the corpus</div>');
+  } else {
+    out.push('<div class="ex-ret">' + games.map(g =>
+      `<div class="r"><span>${esc(g.blue_team)} vs ${esc(g.red_team)}`
+      + ` <span class="muted">${esc(g.league || '')} ${esc(g.patch || '')}</span></span>`
+      + `<span class="ov-bar"><i style="width:${(100 * g.overlap).toFixed(0)}%"></i></span>`
+      + `<span class="ov-n">${(100 * g.overlap).toFixed(0)}%</span></div>`
+    ).join('') + '</div>');
+  }
+  if (patch.available === false) {
+    out.push('<div class="ex-empty" style="margin-top:10px">no patch notes on '
+      + 'this machine — the model was told not to claim anything about patch '
+      + 'changes</div>');
+  } else if (!Object.keys(patch.notes || {}).length) {
+    out.push(`<div class="ex-empty" style="margin-top:10px">patch ${esc(patch.patch || '?')}`
+      + ' was read; none of the candidates changed</div>');
+  }
+
+  document.getElementById('ex-body').innerHTML = out.join('');
+  const apply = document.querySelector('#ex-body [data-apply]');
+  if (apply && resp && resp.state && !resp.state.complete) {
+    apply.addEventListener('click', () =>
+      applyMove(resp.state.kind, resp.state.side, +apply.dataset.apply));
+  }
 }
 
 function applyMove(kind, side, idx) {
@@ -678,6 +868,11 @@ document.getElementById('first-pick').addEventListener('change', () => {
 document.getElementById('nm-rollout').addEventListener('change', () => {
   requestSuggest();
 });
+document.getElementById('nm-explain').addEventListener('click',
+  () => requestExplain(false));
+document.getElementById('ex-reask').addEventListener('click',
+  () => requestExplain(true));
+document.getElementById('ex-close').addEventListener('click', hideExplain);
 document.getElementById('picker-close').addEventListener('click', closePicker);
 document.getElementById('picker').addEventListener('click', ev => {
   if (ev.target.id === 'picker') closePicker();

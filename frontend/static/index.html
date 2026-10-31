@@ -31,6 +31,8 @@
     <span id="nm-turn"></span>
     <span id="nm-meta" class="muted"></span>
     <span class="spacer"></span>
+    <button id="nm-explain" title="ask an LLM to explain this move from
+      comparable pro drafts and the patch notes">why this move?</button>
     <label class="muted nm-opt" title="simulate the rest of the draft for
       each ban candidate (about a second on CPU)">
       <input type="checkbox" id="nm-rollout" checked> ban rollout
@@ -42,6 +44,17 @@
     <div class="nm-sub" id="nm-ban-sub">Ban candidates</div>
     <div class="nm-ban-list" id="nm-ban-list"></div>
   </div>
+</section>
+
+<section id="explain" class="hidden">
+  <div class="ex-head">
+    <span id="ex-title">Why this move</span>
+    <span id="ex-meta" class="muted"></span>
+    <span class="spacer"></span>
+    <button id="ex-reask" title="ignore the cached answer and ask again">re-ask</button>
+    <button id="ex-close" title="hide this panel">✕</button>
+  </div>
+  <div id="ex-body"></div>
 </section>
 
 <div id="wt-bar">

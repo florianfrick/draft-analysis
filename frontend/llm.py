@@ -44,11 +44,20 @@ CACHE_DIR = HERE / ".cache" / "explain"
 
 # Bump when the prompt or the answer schema changes: the cache key includes
 # it, so old answers cannot be served against a new contract.
-PROMPT_VERSION = "explain-1"
+PROMPT_VERSION = "explain-2"
 
 DEFAULT_MODEL = "gpt-4o-mini"
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 MAX_BULLET_CHARS = 700
+
+# How many candidates get their patch notes pulled into the prompt.
+NOTES_CANDIDATES = 8
+
+# The reasoning field is the model's own summary, not a hidden transcript: it
+# is asked for explicitly and returned to the user. Caps keep one runaway
+# answer from filling the panel.
+MAX_STEPS = 6
+MAX_STEP_CHARS = 240
 
 
 def phase_of(move_idx):
@@ -246,12 +255,17 @@ patch change or a statistic. If the evidence does not support a claim, say so.
 RETRIEVED GAMES, or a line copied verbatim from PATCH NOTES.
 3. You are explaining the model's recommendation, not replacing it. If you \
 disagree, put that in "risk" - do not change "recommend".
-4. Be concrete about mechanism (what the pick does to the draft), not about \
+4. "reasoning" is the coach's window into how you got there: 2 to 5 steps in \
+the order you actually took them, one sentence each - what this board needs, \
+what the retrieved games did about it, how the candidates answer that. State \
+only what the inputs support; a step is not a place to introduce a new claim.
+5. Be concrete about mechanism (what the pick does to the draft), not about \
 tier lists.
-5. Reply with JSON only, no prose around it.
+6. Reply with JSON only, no prose around it.
 
 Schema:
-{"recommend": "<one of the CANDIDATES>",
+{"reasoning": ["<step>", "<step>"],
+ "recommend": "<one of the CANDIDATES>",
  "why": "<at most 3 sentences>",
  "their_answer": "<the opponent's most likely response and why>",
  "risk": "<the main way this goes wrong>",
@@ -324,6 +338,25 @@ def _strip_fences(text):
         return None
 
 
+def _clean_reasoning(answer):
+    """-> (steps, problems). Kept as written, capped so one runaway answer
+    cannot fill the panel. Never merged into `evidence`: these are the
+    model's own words, not citations, and the UI must not present them as
+    verified."""
+    raw = answer.get("reasoning")
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return [], ["no reasoning steps given"]
+    steps = []
+    for step in raw:
+        if isinstance(step, str) and step.strip():
+            steps.append(step.strip()[:MAX_STEP_CHARS])
+        if len(steps) >= MAX_STEPS:
+            break
+    return steps, ([] if steps else ["no reasoning steps given"])
+
+
 def validate(answer, games, notes, candidate_names):
     """-> (clean_answer, problems). Bad evidence is dropped, not shipped."""
     problems = []
@@ -362,7 +395,10 @@ def validate(answer, games, notes, candidate_names):
         else:
             unverified.append(item)
             problems.append("unknown evidence type %r" % kind)
-    clean = {"recommend": rec,
+    steps, step_problems = _clean_reasoning(answer)
+    problems.extend(step_problems)
+    clean = {"reasoning": steps,
+             "recommend": rec,
              "why": (answer.get("why") or "").strip(),
              "their_answer": (answer.get("their_answer") or "").strip(),
              "risk": (answer.get("risk") or "").strip(),
@@ -448,7 +484,10 @@ def explain(board, suggestions, index, client=None, k_games=5, use_cache=True,
     for g in games:
         idx = g.pop("next_champ_idx")
         g["next_champ"] = names[idx] if names and idx < len(names) else idx
-    top = [n for n, _p in suggestions[:3]]
+    # Notes for every candidate the model is choosing between, not just the
+    # top few: if only three of eight candidates can have notes, the one that
+    # happens to be in this patch wins the argument by default.
+    top = [n for n, _p in suggestions[:NOTES_CANDIDATES]]
     notes, missing = bullets(board.get("patch"), top)
     available = _notes_path(board.get("patch")) is not None
 
@@ -503,6 +542,10 @@ def explain(board, suggestions, index, client=None, k_games=5, use_cache=True,
     clean["model"] = getattr(client, "model", None)
     clean["cached"] = False
     clean["ok"] = not problems
+    # Shipped only when the retry did not fix it. The UI shows these next to
+    # the answer, because "the model said X and we could not verify Y" is
+    # information the coach needs, not an internal detail.
+    clean["problems"] = problems
     out["explanation"] = clean
     if use_cache:
         _cache_write(key, clean)
