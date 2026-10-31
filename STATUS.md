@@ -215,9 +215,12 @@ The repo is now shaped for these four P3 items (`plan-model-v2.md` §P3):
 2. **Soft-label distillation.** Hook: `policy_loss` in
    `model/policy/train.py`. Target: ListNet / KL against LLM rankings on a few
    thousand states; `build_prefix` already produces the states.
-3. **Retrieval + explanation.** `frontend/server.py` plus the bitmask
-   nearest-neighbour store (`soloq data analysis/store/`): retrieve k similar
-   historical drafts, let an LLM explain the recommendation. No training.
+3. **Retrieval + explanation — BUILT (2026-10-31).** `/api/explain` retrieves
+   the k most similar pro drafts (bitmask coarse pass + exact Jaccard on the
+   board *at the query move*), pulls the patch bullets for the top candidates,
+   and asks an LLM for a grounded explanation. Every citation is checked
+   mechanically before it is returned. No training involved; see
+   [P3.3 built](#p33-built-retrieval-plus-a-validator-not-a-prompt).
 4. **Patch-day cold start.** `data/patch notes/` corpus -> champion priority
    prior, bridging the patch reset that `by_patch` currently exposes.
 
@@ -281,6 +284,42 @@ Verdict on the adapter: keep it (zero cost at init, no measurable harm, and it
 is the only path to the cold-start prior), but do not expect it to move
 `champ_top5` on an existing champion pool.
 
+### P3.3 built: retrieval plus a validator, not a prompt
+
+`frontend/llm.py` + `/api/explain`. The model returns a probability and cannot
+say why; the explanation is generated at request time and never touches the
+ranking. Three pieces carry the weight:
+
+**Retrieval is over the board at the query move.** Each pro draft is one
+173-bit mask (champions seen so far). A coarse pass ranks the 46,813 rows by
+`int.bit_count()` overlap (~20 ms), then exact Jaccard on the *prefix* decides
+the top k — ranking on the final draft would surface games that resemble the
+finished board rather than the decision being asked about. Games are filtered
+to the same first-pick side; if fewer than k survive the filter relaxes and
+`relaxed_side` says so. Patch proximity ranks before date: on a real 16.20
+board the date tie-break put an 8-patch-old game first. No fixture caught that
+— the demo against the real corpus did.
+
+**Grounding is mechanical.** Every `evidence` item must resolve: a game id must
+be in the retrieved set, a patch line must be a verbatim substring of the notes
+actually handed to the model. Failures are dropped and reported, the model gets
+one retry with the problems fed back, and a second failure returns `ok: false`
+instead of prose nobody checked. The alternative — instructing the model to
+cite honestly and trusting it — is what produces confident citations of games
+that do not exist.
+
+**No key is not an error.** Without `LLM_API_KEY` the endpoint still returns
+the retrieved games and patch bullets with `explanation: null`, so the evidence
+path can be inspected before anyone configures a provider. Cache is keyed on
+prompt version + model + board + candidates + retrieved ids, so a re-ask after
+a corpus change cannot serve a stale citation.
+
+Known gap: prose quality is **unvalidated**. No `LLM_API_KEY` was configured,
+so the endpoint has only been exercised through the no-key path and a stub
+client (which did cite an invented game id on the first attempt and get
+corrected by the retry — the validator works, the model was never asked
+anything real).
+
 The frontend now serves both model families (done 2026-10-30):
 - **Masked path** (`/api/suggest`): the `Predictor` class, role-conditioned
   MASK queries for every empty role slot on both teams. Accepts pretraining
@@ -304,6 +343,9 @@ The frontend now serves both model families (done 2026-10-30):
 - The `--ckpt` dropdown lists the `best_*` files under `ckpt/run_*/` only
   (`latest.pt` is filtered out — it is a resume point, not a model), across
   all four kept checkpoints.
+- **Explainer** (`/api/explain`): `llm.ProIndex` is built once behind a lock
+  on first request (46.8k drafts, 3.7 s) and then answers in ~300 ms. Masked
+  path only — a policy checkpoint has no champion head to explain.
 - `--host 0.0.0.0` is required when serving through the Docker port mapping.
 
 Known gap: the offline proposer is told the role of each future pick from the
@@ -324,7 +366,9 @@ docker compose run --rm dev python model/policy/evaluate.py \
     --ckpt model/policy/ckpt/run_20261025_000606_ablF-stage1/best_policy.pt
 ```
 
-Tests: run per file (12 suites, 168 tests + 1 skip). `model/policy/model.py`
+Tests: run per file (16 suites, 244 tests + 1 skip). `model/policy/model.py`
 claims the `model` module name and shadows `model/finetune/model.py` in a
 combined run, so a single `pytest model/` will fail for reasons unrelated to
-the code.
+the code. `soloq data analysis/explorer/test_explorer.py` is excluded from that
+count: it opens an HTTP connection to a live explorer server at import time and
+errors during collection when none is running.
