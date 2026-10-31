@@ -129,12 +129,16 @@ curl -s localhost:8777/api/explain -H 'Content-Type: application/json' \
   Rows are filtered to the same move index and first-pick side; if that leaves
   fewer than `k_games`, the side filter is dropped and `relaxed_side` says so.
 - **Patch notes** come from `data/patch notes/clean/patch_<M>_<m>.md`, the
-  draft-relevant subset. `patch` in the body overrides which patch is used;
-  the default is the newest patch in the corpus. `patch.available` says whether
-  that file exists at all, so `missing` is not ambiguous: with
-  `available: true` a champion in `missing` was simply not changed that patch;
-  with `available: false` nothing is known and the prompt tells the model not
-  to claim anything about patch changes.
+  draft-relevant subset. **That corpus is local only** — it is git-ignored and
+  a fresh clone does not have it (see `.gitignore`; the evidence against it as
+  a training signal is in `STATUS.md` §P3.1). With the corpus present the
+  explanation can cite patch changes; without it `patch.available` is `false`,
+  the prompt tells the model not to claim anything about patch changes, and
+  everything else — retrieval, validation, the endpoint — works unchanged.
+  `patch` in the body overrides which patch is used; the default is the newest
+  patch in the pro corpus. `patch.available` also separates "the notes were
+  read and this champion was not changed" from "no notes for this patch", so
+  `missing` is never ambiguous.
 - **Grounding** is enforced, not requested. Every `evidence` item must resolve:
   a `game` id must be one of the retrieved games, a `patch` line must appear
   verbatim in the notes that were handed to the model. Unresolvable items are

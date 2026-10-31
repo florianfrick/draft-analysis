@@ -40,13 +40,12 @@ data/solo queue/puuids/
 data/solo queue/process matchdata/drafts_*.pt
 data/pro play/*.csv
 data/pro play/*.pt
-# Patch notes corpus is scraped; `collect.py` rebuilds it on demand.
-# Keep the collector, its tests and the README; ignore the 3.6MB of
-# derived markdown and the generated index.
-data/patch notes/patch_*.md
-data/patch notes/index.json
-data/patch notes/clean/
-data/patch notes/raw/
+# Patch notes corpus: local only, deliberately not in the repo. It was removed
+# in 8a30a07 and stays out - the measurement in STATUS.md §P3.1 says the
+# input-side adapter cannot turn patch changes into a cold-start prior, which
+# was the only thing the corpus was for. `frontend/llm.py` reads it when it is
+# present (patch-grounded explanations) and degrades cleanly when it is not.
+data/patch notes/
 *.jsonl
 *.jsonl.gz
 matchids/

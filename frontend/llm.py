@@ -3,7 +3,9 @@
 Three parts, each usable without a network:
 
   ProIndex   what pros actually did from a board like this one
-  bullets()  what the patch notes say about the candidates
+  bullets()  what the patch notes say about the candidates (optional: the
+             corpus is local-only, and an absent corpus simply means no patch
+             evidence - see `.gitignore` and STATUS.md P3.1 for why)
   explain()  prompt -> LLM -> validated answer, cached on disk
 
 The rule that keeps this honest: **every claim must cite evidence that

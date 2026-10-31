@@ -178,6 +178,23 @@ def test_explain_reports_whether_the_patch_was_found(notes_dir):
     assert out["patch"]["notes"]["Ahri"]  # the fixture notes have Ahri
 
 
+def test_the_corpus_can_be_absent_entirely(tmp_path, monkeypatch):
+    """A clean clone has no `data/patch notes/` at all, not just no file for
+    this patch. The endpoint is supposed to keep working."""
+    monkeypatch.setattr(llm, "PATCH_DIR", tmp_path / "not-checked-out")
+    found, missing = llm.bullets("16.20", ["Ahri", "Zed"])
+    assert found == {} and missing == ["Ahri", "Zed"]
+    index = llm.ProIndex([make_row("g", picks(10, 11))])
+    board = {"move_idx": 2, "side": "blue", "first_pick": 0, "patch": "16.20",
+             "bans": [], "blue": ["Ahri"], "red": [], "champ_ids": [10, 11]}
+    out = llm.explain(board, [("Ahri", 0.4)], index, client=None)
+    assert out["patch"]["available"] is False
+    assert out["retrieval"]["games"]  # evidence that does not depend on it
+    msg = llm.build_prompt(board, [("Ahri", 0.4)], out["retrieval"]["games"],
+                           {}, notes_available=out["patch"]["available"])[1]
+    assert "do not claim anything about patch changes" in msg["content"]
+
+
 # -------------------------------------------------------------- validation
 def games_fixture():
     return [{"gameid": "G-1", "patch": "16.20", "league": "LCK",

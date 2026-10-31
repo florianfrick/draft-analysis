@@ -217,12 +217,20 @@ The repo is now shaped for these four P3 items (`plan-model-v2.md` §P3):
    thousand states; `build_prefix` already produces the states.
 3. **Retrieval + explanation — BUILT (2026-10-31).** `/api/explain` retrieves
    the k most similar pro drafts (bitmask coarse pass + exact Jaccard on the
-   board *at the query move*), pulls the patch bullets for the top candidates,
+   board *at the query move*), pulls the patch bullets for the top candidates
+   (when the local patch corpus is checked out),
    and asks an LLM for a grounded explanation. Every citation is checked
    mechanically before it is returned. No training involved; see
    [P3.3 built](#p33-built-retrieval-plus-a-validator-not-a-prompt).
-4. **Patch-day cold start.** `data/patch notes/` corpus -> champion priority
-   prior, bridging the patch reset that `by_patch` currently exposes.
+4. **Patch-day cold start — DEPRIORITISED (2026-10-31).** The plan was
+   `data/patch notes/` -> champion priority prior, bridging the patch reset
+   that `by_patch` exposes. Two reasons it is not being built: the P3.1 result
+   says the input-side adapter cannot produce a cold-start prior at all, so a
+   patch-derived prior would have to enter through the output head (the same
+   `W_a` term) before this idea can be tested; and the corpus is **local only**
+   by owner decision — it was removed from the repo in `8a30a07` and is now
+   git-ignored as a whole. The explainer uses it opportunistically when it is
+   present on disk and says nothing about patch changes when it is not.
 
 ### P3.1 measured: the adapter trains, the cold start does not
 
@@ -368,7 +376,7 @@ docker compose run --rm dev python model/policy/evaluate.py \
     --ckpt model/policy/ckpt/run_20261025_000606_ablF-stage1/best_policy.pt
 ```
 
-Tests: run per file (16 suites, 246 tests + 1 skip). `model/policy/model.py`
+Tests: run per file (16 suites, 247 tests + 1 skip). `model/policy/model.py`
 claims the `model` module name and shadows `model/finetune/model.py` in a
 combined run, so a single `pytest model/` will fail for reasons unrelated to
 the code. `soloq data analysis/explorer/test_explorer.py` is excluded from that
