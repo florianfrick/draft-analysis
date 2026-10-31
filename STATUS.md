@@ -344,8 +344,10 @@ The frontend now serves both model families (done 2026-10-30):
   (`latest.pt` is filtered out — it is a resume point, not a model), across
   all four kept checkpoints.
 - **Explainer** (`/api/explain`): `llm.ProIndex` is built once behind a lock
-  on first request (46.8k drafts, 3.7 s) and then answers in ~300 ms. Masked
-  path only — a policy checkpoint has no champion head to explain.
+  on first request (46.8k drafts, 3.7 s) and then answers in ~300 ms. Needs a
+  **next-move policy** checkpoint — it explains a single move, so the masked
+  path (which fills every empty role slot at once) is rejected with a 400
+  naming the model family it found.
 - `--host 0.0.0.0` is required when serving through the Docker port mapping.
 
 Known gap: the offline proposer is told the role of each future pick from the
@@ -366,7 +368,7 @@ docker compose run --rm dev python model/policy/evaluate.py \
     --ckpt model/policy/ckpt/run_20261025_000606_ablF-stage1/best_policy.pt
 ```
 
-Tests: run per file (16 suites, 244 tests + 1 skip). `model/policy/model.py`
+Tests: run per file (16 suites, 246 tests + 1 skip). `model/policy/model.py`
 claims the `model` module name and shadows `model/finetune/model.py` in a
 combined run, so a single `pytest model/` will fail for reasons unrelated to
 the code. `soloq data analysis/explorer/test_explorer.py` is excluded from that
