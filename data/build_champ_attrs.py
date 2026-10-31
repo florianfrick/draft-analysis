@@ -36,6 +36,13 @@ two jobs:
 * Added ``side_laning`` and ``pick_potential``: holding a lane alone was
   missing entirely, and isolating one target is not engage (Blitzcrank
   dives 1 and picks 3; Malphite engages 3 and picks 1).
+* ``damage_output`` capped at 1 for tanks (Cho'Gath, Dr. Mundo, Mordekaiser,
+  Sion, Trundle, Volibear 2 -> 1). At 2 the axis was partly measuring
+  "how much does this champion scale", which ``scaling`` already does. The
+  cap is enforced in ``build()``.
+* ``side_laning`` pinned as **absolute** (kit-only, not role-relative). It
+  was already tagged that way; writing it down stops the next review from
+  re-litigating it.
 
 The lesson generalises: an axis that can be read two ways will be, and the
 ambiguity shows up as a champion sitting next to neighbours it has nothing
@@ -53,6 +60,21 @@ MAPPING_PATH = BASE_DIR / "solo queue" / "process matchdata" / "champ_mapping.js
 OUT_PATH = BASE_DIR / "champ_attrs.json"
 
 # (name, 0-anchor, 1, 2, 3-anchor). Higher is always "more of the thing".
+#
+# Two rules the table must satisfy, both decided by the project owner and
+# both enforced in build() rather than left to the tagger's memory:
+#
+#   1. ``damage_output`` is a cap for tanks: any champion at tankiness 3 has
+#      damage_output <= 1. A tank's job is not to be the team's damage, and
+#      letting Cho'Gath/Sion/Mordekaiser sit at 2 made the axis partly a
+#      "how much does this champion scale" measure instead of a role measure.
+#      (Champions that deal real damage *and* soak it are tagged as bruisers,
+#      tankiness 2, not as tanks.)
+#   2. ``side_laning`` is **absolute, not role-relative**: the level describes
+#      the kit's ability to hold a lane alone, regardless of which position
+#      the champion is played in. A support played mid does not gain side
+#      laning, and a top laner is not credited for the lane they happen to be
+#      given.
 AXES = [
     ("engage", "no way to start a fight",
      "situational or single-target initiation",
@@ -156,11 +178,11 @@ TABLE = {
     "Caitlyn":       (0, 1, 3, 0, 1, 3, 1, 1, 3, 2, 0, 0, 0, 2, 1, 1, 3, 0),
     "Camille":       (1, 1, 0, 2, 2, 2, 2, 3, 0, 2, 2, 0, 1, 2, 3, 2, 2, 0),
     "Cassiopeia":    (0, 1, 2, 0, 3, 2, 1, 1, 2, 2, 0, 3, 0, 3, 1, 1, 2, 0),
-    "Cho'Gath":      (1, 1, 1, 0, 3, 2, 2, 0, 0, 2, 3, 2, 2, 2, 2, 2, 0, 0),
+    "Cho'Gath":      (1, 1, 1, 0, 3, 2, 2, 0, 0, 2, 3, 2, 2, 1, 2, 2, 0, 0),
     "Corki":         (0, 0, 2, 0, 2, 2, 0, 2, 2, 2, 0, 2, 0, 2, 1, 1, 2, 0),
     "Darius":        (1, 0, 0, 0, 1, 2, 1, 0, 0, 2, 2, 0, 1, 2, 2, 2, 0, 0),
     "Diana":         (2, 0, 0, 3, 2, 2, 1, 3, 0, 2, 1, 3, 1, 3, 2, 2, 1, 0),
-    "Dr. Mundo":     (0, 0, 1, 1, 3, 2, 0, 1, 0, 2, 3, 1, 3, 2, 2, 0, 0, 0),
+    "Dr. Mundo":     (0, 0, 1, 1, 3, 2, 0, 1, 0, 2, 3, 1, 3, 1, 2, 0, 0, 0),
     "Draven":        (0, 0, 1, 0, 0, 3, 1, 1, 2, 2, 0, 0, 0, 3, 1, 0, 1, 0),
     "Ekko":          (1, 1, 1, 3, 2, 1, 1, 3, 0, 1, 1, 3, 1, 2, 2, 2, 2, 0),
     "Elise":         (2, 0, 1, 2, 0, 1, 1, 2, 0, 2, 1, 3, 1, 2, 1, 3, 1, 0),
@@ -219,7 +241,7 @@ TABLE = {
     "Milio":         (0, 3, 1, 0, 2, 2, 0, 1, 2, 1, 0, 3, 0, 0, 0, 0, 1, 3),
     "Miss Fortune":  (0, 0, 2, 0, 2, 3, 1, 0, 2, 1, 0, 1, 0, 3, 1, 0, 1, 0),
     "Wukong":        (3, 1, 0, 2, 2, 2, 2, 2, 0, 1, 2, 0, 1, 2, 2, 1, 1, 0),
-    "Mordekaiser":   (2, 1, 0, 1, 2, 2, 1, 0, 0, 1, 3, 3, 2, 2, 2, 2, 0, 0),
+    "Mordekaiser":   (2, 1, 0, 1, 2, 2, 1, 0, 0, 1, 3, 3, 2, 1, 2, 2, 0, 0),
     "Morgana":       (1, 2, 2, 0, 2, 2, 2, 0, 2, 1, 0, 3, 1, 1, 1, 2, 1, 1),
     "Naafiri":       (1, 0, 0, 3, 1, 2, 1, 2, 0, 1, 1, 1, 1, 3, 2, 3, 1, 0),
     "Nami":          (1, 2, 2, 0, 2, 2, 1, 1, 2, 1, 0, 3, 0, 1, 0, 1, 1, 3),
@@ -257,7 +279,7 @@ TABLE = {
     "Shen":          (2, 3, 0, 1, 2, 2, 2, 1, 0, 1, 3, 2, 1, 1, 2, 1, 0, 2),
     "Shyvana":       (1, 0, 0, 1, 2, 2, 0, 2, 0, 3, 2, 2, 1, 2, 2, 0, 1, 0),
     "Singed":        (1, 1, 0, 0, 2, 2, 1, 2, 0, 1, 2, 3, 1, 1, 3, 0, 3, 0),
-    "Sion":          (2, 1, 0, 1, 3, 3, 2, 1, 0, 2, 3, 2, 2, 2, 3, 0, 0, 0),
+    "Sion":          (2, 1, 0, 1, 3, 3, 2, 1, 0, 2, 3, 2, 2, 1, 3, 0, 0, 0),
     "Sivir":         (0, 1, 1, 0, 2, 3, 0, 1, 2, 2, 0, 0, 0, 2, 1, 0, 2, 0),
     "Skarner":       (3, 2, 0, 1, 2, 1, 3, 1, 0, 1, 3, 2, 1, 1, 1, 2, 0, 0),
     "Smolder":       (0, 0, 2, 0, 3, 1, 0, 1, 2, 1, 0, 1, 0, 3, 1, 0, 1, 0),
@@ -273,7 +295,7 @@ TABLE = {
     "Teemo":         (0, 1, 2, 0, 1, 2, 1, 1, 2, 1, 0, 3, 0, 2, 2, 0, 2, 0),
     "Thresh":        (3, 3, 1, 1, 2, 1, 3, 1, 1, 1, 2, 2, 1, 0, 0, 3, 1, 1),
     "Tristana":      (0, 1, 1, 2, 2, 2, 1, 2, 3, 2, 0, 1, 0, 3, 2, 0, 2, 0),
-    "Trundle":       (1, 1, 0, 1, 2, 2, 1, 0, 0, 3, 3, 1, 2, 2, 3, 0, 1, 0),
+    "Trundle":       (1, 1, 0, 1, 2, 2, 1, 0, 0, 3, 3, 1, 2, 1, 3, 0, 1, 0),
     "Tryndamere":    (0, 0, 0, 2, 3, 2, 0, 1, 0, 3, 1, 0, 3, 3, 3, 0, 1, 0),
     "Twisted Fate":  (1, 1, 1, 1, 2, 2, 1, 1, 2, 1, 0, 3, 0, 2, 2, 2, 1, 0),
     "Twitch":        (0, 0, 1, 1, 3, 1, 1, 1, 2, 2, 0, 1, 0, 3, 1, 1, 1, 0),
@@ -288,7 +310,7 @@ TABLE = {
     "Viego":         (1, 0, 0, 2, 2, 2, 1, 2, 0, 2, 1, 1, 2, 3, 2, 1, 1, 0),
     "Viktor":        (1, 1, 3, 0, 3, 3, 1, 0, 2, 1, 0, 3, 0, 3, 1, 0, 1, 0),
     "Vladimir":      (0, 0, 1, 1, 3, 1, 0, 1, 2, 1, 1, 3, 3, 3, 2, 0, 1, 0),
-    "Volibear":      (2, 1, 0, 1, 2, 2, 2, 1, 0, 2, 3, 2, 2, 2, 2, 1, 1, 0),
+    "Volibear":      (2, 1, 0, 1, 2, 2, 2, 1, 0, 2, 3, 2, 2, 1, 2, 1, 1, 0),
     "Warwick":       (2, 1, 0, 1, 1, 2, 2, 1, 0, 2, 2, 2, 3, 2, 2, 2, 1, 0),
     "Xayah":         (0, 1, 1, 1, 3, 2, 1, 1, 2, 2, 0, 0, 1, 3, 1, 1, 3, 0),
     "Xerath":        (0, 0, 3, 0, 2, 3, 1, 0, 3, 1, 0, 3, 0, 3, 1, 0, 1, 0),
@@ -369,12 +391,21 @@ def build(out_path: Path = OUT_PATH) -> dict:
         raise SystemExit("rows for champions not in the mapping: %s" % extra)
 
     k = len(AXES)
+    tank_i, dmg_i = AXES.index(next(a for a in AXES if a[0] == "tankiness")), \
+        AXES.index(next(a for a in AXES if a[0] == "damage_output"))
     for name, row in TABLE.items():
         if len(row) != k:
             raise SystemExit("%s has %d values, expected %d" % (name, len(row), k))
         bad = [v for v in row if not isinstance(v, int) or not 0 <= v <= 3]
         if bad:
             raise SystemExit("%s has out-of-range values: %s" % (name, bad))
+        # Rule 1 in the AXES comment: a tank is never the team's damage.
+        if row[tank_i] == 3 and row[dmg_i] > 1:
+            raise SystemExit(
+                "%s is tagged as a tank (tankiness 3) with damage_output %d. "
+                "A tank caps at 1; if it really is a damage threat, the tag "
+                "to change is tankiness (2 = bruiser), not this one."
+                % (name, row[dmg_i]))
 
     champs = {}
     for name, row in TABLE.items():
