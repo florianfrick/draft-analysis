@@ -22,6 +22,7 @@ Run: ``python data/probe_champ_attrs.py``
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import math
@@ -166,8 +167,54 @@ def spearman(xs, ys):
     return num / (dx * dy) if dx and dy else float("nan")
 
 
-def main():
+def query_nearest(args, axes, rows):
+    """Compare an externally supplied vector against the table.
+
+    Used to sanity-check a proposed row for a champion I cannot tag myself
+    (or one whose kit the reviewer knows better): if the closest existing
+    champions are the ones you would expect, the row is consistent with the
+    rest of the table.
+    """
+    exclude = {s.strip() for s in args.exclude.split(",") if s.strip()}
+    pool = {n: v for n, v in rows.items() if n not in exclude}
+    k = len(axes)
+    for spec in args.nearest:
+        label, _, body = spec.partition(":")
+        vec = [int(x) for x in body.replace(" ", "").split(",") if x != ""]
+        if len(vec) != k:
+            raise SystemExit("%s: expected %d values, got %d"
+                             % (label or "vector", k, len(vec)))
+        if any(not 0 <= v <= 3 for v in vec):
+            raise SystemExit("%s: values must be 0..3" % label)
+        ranked = sorted((dist(vec, v), n) for n, v in pool.items())[:args.k]
+        print("%s  %s" % (label or "vector", " ".join(str(x) for x in vec)))
+        for rank, (d, name) in enumerate(ranked):
+            print("  %2d. %-12s %.2f" % (rank + 1, name, d))
+            if rank < 3:
+                diff = ["%s %d/%d" % (axes[i], vec[i], pool[name][i])
+                        for i in range(k) if vec[i] != pool[name][i]]
+                print("      differs on: %s" % (", ".join(diff) or "nothing"))
+        print()
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(
+        description="audit data/champ_attrs.json",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--nearest", action="append", default=[],
+                    metavar="LABEL:v0,v1,...",
+                    help="query a vector against the table and exit "
+                         "(repeatable; 16 values in axis order)")
+    ap.add_argument("--exclude", default="",
+                    help="comma-separated champions to drop from the pool")
+    ap.add_argument("-k", type=int, default=5, help="how many neighbours")
+    args = ap.parse_args(argv)
+
     payload, axes, rows = load_attrs()
+    if args.nearest:
+        print("== %d axes: %s\n" % (len(axes), ", ".join(axes)))
+        return query_nearest(args, axes, rows)
+
     print("== %d tagged champions, %d axes, patch %s"
           % (len(rows), len(axes), payload.get("patch")))
     print("unknown: %s\n" % ", ".join(payload.get("unknown") or []))
@@ -221,8 +268,8 @@ def main():
           "(SE %.3f, so %+.1f sigma)"
           % (lp_rho, lp_n, 1 / math.sqrt(lp_n - 1), lp_rho * math.sqrt(lp_n - 1)))
 
-    # control: an axis with no business predicting gold@15
-    for ctl in ("tankiness", "sustain"):
+    # control: axes with no business predicting gold@15
+    for ctl in ("tankiness", "healing"):
         cx, cy = [], []
         for name, g in adj.items():
             if name not in rows or stats[name]["gold15_n"] < 3 * MIN_GAMES:
