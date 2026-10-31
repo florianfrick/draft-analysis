@@ -151,6 +151,33 @@ def test_bullets_survive_a_patch_with_no_notes(notes_dir):
     assert found == {} and missing == ["Ahri"]
 
 
+def test_prompt_separates_unchanged_from_unknown(notes_dir):
+    """"Not changed this patch" and "no notes for this patch" are different
+    claims, and the model should not be allowed to confuse them."""
+    board = {"move_idx": 8, "side": "blue", "first_pick": 0, "patch": "16.20",
+             "bans": [], "blue": ["Ahri"], "red": []}
+    sugg = [("Azir", 0.3), ("Ahri", 0.2)]
+    # Notes exist for 16.20, but neither candidate was touched.
+    msg = llm.build_prompt(board, sugg, [], {}, notes_available=True)[1]
+    assert "no champion-level changes" in msg["content"]
+    assert "do not claim anything about patch changes" not in msg["content"]
+    # Same empty dict, but the patch itself is unknown to the corpus.
+    msg = llm.build_prompt(board, sugg, [], {}, notes_available=False)[1]
+    assert "no notes for this patch" in msg["content"]
+
+
+def test_explain_reports_whether_the_patch_was_found(notes_dir):
+    index = llm.ProIndex([make_row("g", picks(10, 11))])
+    board = {"move_idx": 2, "side": "blue", "first_pick": 0, "patch": "99.99",
+             "bans": [], "blue": ["Ahri"], "red": [], "champ_ids": [10, 11]}
+    out = llm.explain(board, [("Ahri", 0.4)], index, client=None)
+    assert out["patch"]["available"] is False
+    board["patch"] = "16.20"
+    out = llm.explain(board, [("Ahri", 0.4)], index, client=None)
+    assert out["patch"]["available"] is True
+    assert out["patch"]["notes"]["Ahri"]  # the fixture notes have Ahri
+
+
 # -------------------------------------------------------------- validation
 def games_fixture():
     return [{"gameid": "G-1", "patch": "16.20", "league": "LCK",

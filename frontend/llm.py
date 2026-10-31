@@ -257,8 +257,14 @@ Schema:
               {"type": "patch", "line": "<verbatim line>"}]}"""
 
 
-def build_prompt(board, suggestions, games, notes):
-    """board: dict from the server; suggestions: [(name, prob)]."""
+def build_prompt(board, suggestions, games, notes, notes_available=True):
+    """board: dict from the server; suggestions: [(name, prob)].
+
+    `notes_available` separates "this patch has no notes in the corpus" from
+    "the notes were read and these champions were not changed". They are
+    different claims, and a model told the first one will hedge where the
+    second one should make it stop talking about patch changes.
+    """
     lines = ["PATCH: %s" % (board.get("patch") or "unknown"),
              "MOVE: %d of %d (%s), %s to move, first pick: %s"
              % (board["move_idx"], N_MOVES,
@@ -291,7 +297,10 @@ def build_prompt(board, suggestions, games, notes):
                         result, g["overlap"]))
     lines += ["", "PATCH NOTES (champion changes this patch):"]
     if not notes:
-        lines.append("  (no notes for the candidates on this patch)")
+        lines.append("  (no champion-level changes for the candidates on this "
+                     "patch)" if notes_available else
+                     "  (the corpus has no notes for this patch - do not "
+                     "claim anything about patch changes)")
     for name, text in notes.items():
         lines.append("  [%s]\n%s" % (name, text))
     return [{"role": "system", "content": SYSTEM},
@@ -439,11 +448,12 @@ def explain(board, suggestions, index, client=None, k_games=5, use_cache=True,
         g["next_champ"] = names[idx] if names and idx < len(names) else idx
     top = [n for n, _p in suggestions[:3]]
     notes, missing = bullets(board.get("patch"), top)
+    available = _notes_path(board.get("patch")) is not None
 
     out = {"retrieval": {"games": games, "relaxed_side": relaxed,
                          "n_indexed": index.n},
            "patch": {"patch": board.get("patch"), "notes": notes,
-                     "missing": missing},
+                     "missing": missing, "available": available},
            "explanation": None,
            "llm": {"configured": client is not None,
                    "model": getattr(client, "model", None)}}
@@ -467,7 +477,8 @@ def explain(board, suggestions, index, client=None, k_games=5, use_cache=True,
             out["explanation"] = hit
             return out
 
-    messages = build_prompt(board, suggestions, games, notes)
+    messages = build_prompt(board, suggestions, games, notes,
+                            notes_available=available)
     names = [n for n, _p in suggestions]
     problems, clean = ["no attempt"], None
     for attempt in range(2):
