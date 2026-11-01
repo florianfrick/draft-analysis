@@ -200,7 +200,7 @@ and the split tests in `data/pro play/test_pipeline.py`.
 Kept evidence, weights deleted-safe: `reports/` holds every run's
 `test_report.json` (pooled metrics + per-patch and per-year slices) and every
 paired comparison as JSON + transcript, because the checkpoints themselves are
-git-ignored. `ckpt/run_*/best.pt` stays local (355MB for the 8 kept runs) - the
+git-ignored. `ckpt/run_*/best.pt` stays local (482MB for the 9 kept runs) - the
 comparisons need the losing arm too, so both arms and both seeds are kept.
 
 ## What this does not settle

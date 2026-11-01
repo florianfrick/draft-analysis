@@ -487,7 +487,7 @@ Not settled: one architecture size (the epoch curve says the fit is
 data-limited); `rel@5` is not comparable across protocols (this window's
 baseline is 0.412 vs 0.373 patch-honest, so pro-only 1.38x and finetune 1.51x
 cannot be read as "finetune is better"); the wider corpus and the scratch
-control are seed 0 only. Kept: 9 checkpoints (~400MB) under
+control are seed 0 only. Kept: 9 checkpoints (482MB) under
 `model/proonly/ckpt/`, both arms and both seeds, because the paired
 comparisons need the losing arm too; the numbers that survive them are in
 `model/proonly/reports/`.
