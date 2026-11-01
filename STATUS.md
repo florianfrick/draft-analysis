@@ -492,7 +492,86 @@ control are seed 0 only. Kept: 9 checkpoints (482MB) under
 comparisons need the losing arm too; the numbers that survive them are in
 `model/proonly/reports/`.
 
-## 9. Reproduce
+## 9. Held-out series walkthrough — BLG vs HLE (`model/holdout/`)
+
+Everything above is pooled over thousands of games, which answers "how good on
+average" and never "what would it have said here". This section is the
+opposite: one series, both games outside every cache, replayed move by move
+through all 18 distinct checkpoints (6 next-move, 8 masked, 4 value).
+
+**The series.** 2026 Worlds final, Bilibili Gaming vs Hanwha Life Esports,
+`LOLTMNT02_486564` / `LOLTMNT02_486571`, patch 16.20, 2026-10-31, fearless on,
+BLG blue in both and won both.
+
+**Why it is a real holdout.** `pro_drafts.pt` stops at 2026-10-24 23:19:46 and
+`pro_drafts_all.pt` likewise; neither contains either gameid. The 2026 CSV was
+appended to at 12:59 on 2026-11-01, after both caches were written. Nothing in
+`model/holdout/` rebuilds a cache - `build_rows` would see the changed CSV
+signature and rescan, which would fold the games into the corpus the models
+were trained on. The rows are scanned straight from the CSV instead, and
+`test_holdout.py` asserts the gameids stay absent from both caches.
+
+**The confound, stated up front.** Patch 16.20 has 196 corpus drafts. Under
+`split_series_by_date` all 196 are test rows, so `policy-ablF` and
+`pro-finetune` have trained on **zero** of them - and ablF has no patch input
+at all. The pro-only models use `split_within_patch` and trained on **155** of
+the 196, plus a patch-embedding row for it. So the head-to-head below is the
+deployment comparison (a patch arrives, you have its first 80%), not a
+like-for-like one; the gap mixes fit, patch prior and strictly more
+information.
+
+**Next move** (40 states, 20 per game; baseline = patch 16.20's own per-move
+frequency table, legality applied):
+
+| model | training | top-1 | top-5 | mean rank | ban1 top-5 |
+|---|---|---|---|---|---|
+| `policy-ablF` | soloQ->pro (kept) | 0.100 | 0.450 | 17.1 | 0.17 |
+| `pro-patch-s0` | pro-only +patch | **0.225** | **0.675** | 7.3 | **0.58** |
+| `pro-patch-s1` | pro-only +patch | 0.150 | 0.600 | 5.9 | 0.33 |
+| `pro-nopatch-s0` | pro-only -patch | 0.100 | 0.550 | 13.2 | 0.17 |
+| `pro-nopatch-s1` | pro-only -patch | 0.100 | 0.450 | 13.3 | 0.17 |
+| `pro-scratch-s0` | pro-only, no masked init | 0.200 | 0.675 | 7.8 | 0.58 |
+| patch table | 16.20 frequency | 0.050 | 0.350 | 13.6 | 0.33 |
+
+**Masked completion** (10 picks per game, one hidden at a time, top-5):
+`pro-patch-s0` 0.700 (mean rank 4.0), `pro-finetune` 0.650, `pro-all-patch-s0`
+0.600, `soloQ-pretrain` 0.450 (mean rank 9.2).
+
+**Two things the pooled numbers hid.**
+
+1. **`policy-ablF` is sharper but wilder than a frequency table.** It beats the
+   table on top-5 (0.450 vs 0.350) yet loses on mean rank (17.1 vs 13.6),
+   because 4 of 40 states land outside the top 50 and one at rank 148 of 173.
+   No pro-only arm shows this: their worst rank is 139 and they have at most
+   two such states. "Better top-5" and "better average position" are not the
+   same claim.
+2. **The masked models cannot express fearless.** `ProMaskedDraftDataset`
+   never receives `unavailable`, so on game 2 - where ten champions were
+   already picked in game 1 - 56 of 80 model-slot pairs put a game-1 pick in
+   their top-5. The next-move models, which do get `unavailable_mask`, break
+   fearless zero times. That is a scope limit of the masked task as trained,
+   not a harness bug.
+
+**Value: none of the four is usable on a real draft.** `prefix-V` and
+`finetune-win` sit within 0.44-0.58 for all 20 moves; `pretrain-win` collapses
+to 0.05 at move 7 (one team has a single pick, PMA on a near-empty set);
+`policy-value` swings 0.55 -> 0.01 -> 0.99 inside game 2. It ends at 0.91/0.99
+and blue did win both, but the path is noise, matching §3's test-time finding
+rather than contradicting it.
+
+**Harness validation.** `test_harness_reproduces_the_recorded_patch_number`
+scores `policy-ablF` on the first 40 patch-16.20 test rows with this code path
+and requires top-1 0.0875 / top-5 0.25625; on the full 196 rows it returns
+0.0793 / 0.2390, which is exactly the §3 figure for patch 16.20. So the
+ranking, the legality mask and the patch plumbing agree with the training-time
+evaluator, not merely with themselves.
+
+Files: `eval_series.py` (scoring), `render_report.py` (formatting only),
+`reports/blg_vs_hle.json` (all 40 next-move states, 20 masked slots and 4
+value trajectories with every top-5), `REPORT_blg_vs_hle.html` / `.md`
+(readable report), `test_holdout.py` (10 tests).
+
+## 10. Reproduce
 
 ```bash
 docker compose run --rm dev python model/pretraining/train.py        # pretrain
@@ -507,9 +586,12 @@ docker compose run --rm dev python model/policy/evaluate.py \
 docker compose run --rm dev python model/proonly/train_masked.py --run-name m-patch-s0
 docker compose run --rm dev python model/proonly/train_policy.py --init-ckpt <masked best.pt>
 docker compose run --rm dev python model/proonly/compare.py --task masked --a A --b B
+# held-out series walkthrough (see model/holdout/README.md)
+docker compose run --rm dev python model/holdout/eval_series.py
+docker compose run --rm dev python model/holdout/render_report.py
 ```
 
-Tests: run per file (18 suites, 272 tests + 1 skip). `model/policy/model.py`
+Tests: run per file (19 suites, 282 tests + 1 skip). `model/policy/model.py`
 claims the `model` module name and shadows `model/finetune/model.py` in a
 combined run, so a single `pytest model/` will fail for reasons unrelated to
 the code. `soloq data analysis/explorer/test_explorer.py` is excluded from that

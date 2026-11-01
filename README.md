@@ -25,6 +25,9 @@ draft prediction (patch 16.20).
 - `model/proonly/` — pro-only experiment (no soloQ at all): masked stage,
   next-pick stage, patch embedding ablation, within-patch split, paired
   comparison. See `model/proonly/README.md`.
+- `model/holdout/` — one held-out series replayed through every checkpoint,
+  move by move (what each model *said*, not just its accuracy). See
+  `model/holdout/README.md`.
 - `data/solo queue/` — Riot collection (puuids → match ids → match details)
   + `process matchdata/pipeline.py` (masking, batch collate).
 - `data/pro play/` — Oracle's Elixir CSV → pro draft rows.
