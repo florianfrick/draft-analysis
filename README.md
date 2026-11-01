@@ -22,6 +22,9 @@ draft prediction (patch 16.20).
 - `model/pretraining/train.py` — masked champ+role pretraining
   (`--role-only-prob 0.10` teaches P(role|champ)).
 - `model/finetune/` — pro-play Stage 1 finetune (masked heads + win/econ).
+- `model/proonly/` — pro-only experiment (no soloQ at all): masked stage,
+  next-pick stage, patch embedding ablation, within-patch split, paired
+  comparison. See `model/proonly/README.md`.
 - `data/solo queue/` — Riot collection (puuids → match ids → match details)
   + `process matchdata/pipeline.py` (masking, batch collate).
 - `data/pro play/` — Oracle's Elixir CSV → pro draft rows.

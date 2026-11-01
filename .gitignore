@@ -29,6 +29,10 @@ model/**/ckpt/
 model/**/uploaded/
 model/finetune/ckpt/
 model/pretraining/ckpt/
+# Per-run console logs and the "last run" scratch file. The evidence that is
+# kept lives in model/proonly/reports/ (test reports + paired comparisons).
+model/proonly/logs/
+model/proonly/last_*.json
 
 # ============================================================
 # Data (GBs of match records, derived caches, player ids)

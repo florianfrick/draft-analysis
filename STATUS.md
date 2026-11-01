@@ -379,7 +379,112 @@ pro row; a UI board has no role labels, so the rollout infers each simulated
 pick's role from the champion. The UI's simulated win% is therefore a harder
 task than the offline null and is shown only as a tiebreaker behind denial.
 
-## 8. Reproduce
+## 8. Pro-only training and the patch embedding (`exp/pro-only-patch-emb`)
+
+Two questions, both from the same branch: **how far does pro data alone get
+you** (no soloQ pretraining, no rehearsal), and **does a patch embedding help
+once the patch is a *seen* input**?
+
+The second one is only askable because the split changed. Under
+`split_series_by_date` every test patch is unseen, so a patch id is UNK at
+test time and the embedding can only memorise - which is exactly what
+`policy-2` measured as "patch conditioning is harmful" (0.2029 vs 0.2558,
+§6). `pipeline.split_within_patch` puts each patch on both sides: train = the
+first 80% of its series, val/test = the last 10% / 10%, series never split.
+46,813 drafts -> 37,313 / 4,737 / 4,763, 99 of 106 patches in test, 0 series
+straddling. That is the deployment question: you always know today's patch,
+and you have its first 80%.
+
+**Patch embedding.** `DraftSlotEmbedding.patch_lookup`: one zero-initialised
+vector per patch (row 0 = UNK), added to every slot before the LayerNorm, so
+"patch on" and "patch off" are bit-identical at step 0. `n_patches` goes into
+the checkpoint config; a checkpoint with a table cannot be loaded into an
+encoder without one (and vice versa). Tests:
+`model/tests/test_patch_embed.py` (10) + `model/proonly/test_proonly.py` (6).
+
+Both stages: from scratch, D=256, 2 intra + 1 cross, dropout 0.1, uniform
+recency weights (the test window is the tail of *every* patch, so down-
+weighting old games would just make old patches unlearnable). The next-pick
+stage initialises its encoder from the matching masked checkpoint.
+
+**Masked completion** (test, 8,060 masked slots, baseline = per-slot
+popularity fit on train, 0.4120):
+
+| arm | seed | top-1 | top-5 | top-10 | rel@5 | role-cond@5 |
+|---|---|---|---|---|---|---|
+| patch | 0 / 1 | 0.2089 / 0.2133 | **0.5669 / 0.5712** | 0.7484 / 0.7509 | 1.376x / 1.386x | 0.651 / 0.632 |
+| no patch | 0 / 1 | 0.1911 / 0.1872 | 0.5303 / 0.5163 | 0.7083 / 0.7061 | 1.287x / 1.253x | 0.581 / 0.558 |
+
+Paired on identical masked slots: **+3.66 pp** top-5 (McNemar p=7.7e-14,
+game-bootstrap CI [+2.71, +4.56]) and **+5.50 pp** (p=6.5e-29, [+4.56,
++6.48]). Seed spread *within* an arm is 0.4-1.4 pp, so the gap is 3-4x the
+noise - the opposite of the P3.1 attribute result, where the gap was smaller
+than the seed spread. Val peaks at **epoch 6** and decays to 0.487 / 0.496 by
+epoch 40: 37k drafts against a 2.5M-parameter encoder overfits after ~440
+steps, and selection on val is what keeps the reported number.
+
+**More data.** The folder now also holds 2014-2021 OE exports; `CSV_GLOB` is
+pinned to 2022+ so they cannot swap the corpus under existing scripts, and
+`--corpus all` opts in (81,161 drafts, 2017-2026, 64,737 / 8,198 / 8,226, own
+cache). Seed 0, same protocol: patch **1.493x** vs no patch **1.346x**,
+paired **+5.51 pp** (p=1.1e-44). So the model is data-limited - 1.7x the
+drafts buys +0.12 rel - and the patch effect does not shrink with more data.
+
+**Next-pick** (test, 95,260 states; baseline = per-move popularity 0.1543;
+same-patch leave-one-out reference 0.1576):
+
+| slice | patch s0 / s1 | no patch s0 / s1 | rel@5 (patch / none) |
+|---|---|---|---|
+| all top-5 | **0.4839 / 0.4868** | 0.3894 / 0.3873 | 3.14x / 2.52x |
+| ban1 | **0.4246 / 0.4339** | 0.1860 / 0.1860 | **2.43x / 1.07x** |
+| pick1 | 0.5564 / 0.5552 | 0.4705 / 0.4647 | 3.64x / 3.08x |
+| ban2 | 0.3656 / 0.3700 | 0.3594 / 0.3684 | 2.95x / 2.90x |
+| pick2 | 0.5828 / 0.5801 | 0.6029 / 0.5920 | 3.72x / 3.85x |
+
+Paired: **+9.45 pp** top-5 (p<1e-300, CI [+9.16, +9.74]) and **+9.95 pp**
+(CI [+9.66, +10.24]). The per-phase split is the mechanism test, not a
+headline: **ban1 goes 1.07x -> 2.43x**, i.e. with an empty board the model
+stops sitting at the frequency table and starts predicting the patch's ban
+priority - the same slice the soloQ-based policy lost at 0.98x, for a reason
+that turns out to have been the protocol. And **pick2 is 1.2-2.0 pp better
+*without* it** (both seeds): once the board is full, composition dominates,
+and 107 x 256 patch parameters are a small net negative where they carry no
+signal.
+
+**Against the existing pipeline, same rows** (positive = pro-only better):
+
+| rows | masked: `best_mask.pt` -> pro-only | next-pick: `ablF` -> pro-only |
+|---|---|---|
+| all | 0.3710 -> **0.5669** (+19.6 pp) | 0.2671 -> **0.4839** (+21.7 pp) |
+| 2022 | 0.2721 -> 0.5839 (+31.2) | 0.1309 -> 0.4821 (+35.1) |
+| 2024 | 0.3265 -> 0.5800 (+25.4) | 0.2350 -> 0.4650 (+23.0) |
+| 2026 | 0.4939 -> 0.5431 (+4.9) | 0.4091 -> 0.4951 (+8.6) |
+
+Read the rows: the kept stages use a 75-day recency half-life and their own
+protocol only asks them about recent patches, so the pooled gap is mostly
+"the old model was told to ignore 2022". On 2026 - the deployment target -
+pro-only is +4.9 / +8.6 pp, and even that is confounded by the weighting
+difference. The only clean cross-pipeline statement is the paired one above,
+where nothing differs but the flag.
+
+**Verdict.** Pro-only is viable: masked completion 1.38x and next-pick 3.14x
+their same-patch baselines from 37k drafts, with no soloQ anywhere. The patch
+embedding is a real gain under this protocol (+3.7 to +5.5 pp masked, +9.5 to
++10.0 pp next-pick), and its effect is concentrated in ban1 exactly as the
+mechanism predicts. It does **not** contradict §6's "patch conditioning is
+harmful": that result was measured with unseen test patches, where the input
+was UNK. The two protocols answer different questions, and the product
+question is this one.
+
+Not settled: one architecture size (the epoch curve says the fit is
+data-limited); `rel@5` is not comparable across protocols (this window's
+baseline is 0.412 vs 0.373 patch-honest, so pro-only 1.38x and finetune 1.51x
+cannot be read as "finetune is better"); the policy's `--init-ckpt scratch`
+control was not run for every arm, so "the masked stage earns its place" is
+still open. Kept: 8 checkpoints (355MB) under `model/proonly/ckpt/`, both arms
+and both seeds, because the paired comparisons need the losing arm too.
+
+## 9. Reproduce
 
 ```bash
 docker compose run --rm dev python model/pretraining/train.py        # pretrain
@@ -390,9 +495,13 @@ docker compose run --rm dev python model/finetune/evaluate.py \
     --ckpt model/finetune/ckpt/run_20261017_185016_stage1-full/best_mask.pt
 docker compose run --rm dev python model/policy/evaluate.py \
     --ckpt model/policy/ckpt/run_20261025_000606_ablF-stage1/best_policy.pt
+# pro-only branch (see model/proonly/README.md)
+docker compose run --rm dev python model/proonly/train_masked.py --run-name m-patch-s0
+docker compose run --rm dev python model/proonly/train_policy.py --init-ckpt <masked best.pt>
+docker compose run --rm dev python model/proonly/compare.py --task masked --a A --b B
 ```
 
-Tests: run per file (16 suites, 253 tests + 1 skip). `model/policy/model.py`
+Tests: run per file (18 suites, 272 tests + 1 skip). `model/policy/model.py`
 claims the `model` module name and shadows `model/finetune/model.py` in a
 combined run, so a single `pytest model/` will fail for reasons unrelated to
 the code. `soloq data analysis/explorer/test_explorer.py` is excluded from that

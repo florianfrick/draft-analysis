@@ -100,7 +100,7 @@ def attr_matrix_for_config(cfg, num_champs=None):
 
 
 class DraftSlotEmbedding(nn.Module):
-    """LayerNorm(champ_lookup + role_lookup [+ attr_proj(champ_attrs)]).
+    """LayerNorm(champ_lookup + role_lookup [+ attr_proj(champ_attrs)] [+ patch]).
 
     `attr_matrix` turns on the kit-attribute residual from plan-model-v2 P3.1.
     The projection is zero-initialised, so with the same champ/role tables this
@@ -108,15 +108,32 @@ class DraftSlotEmbedding(nn.Module):
     whole point: "attributes on/off" becomes a single-variable comparison
     instead of two different initialisations, and an old checkpoint loads
     straight into an attribute-enabled encoder with the adapter still at zero.
+
+    `n_patches` turns on the patch embedding: one learned vector per patch
+    (index 0 = UNK), added to *every* slot, i.e. a segment embedding. It is
+    zero-initialised for the same reason as the attribute adapter - at step 0
+    the model is bit-identical to one without it, so "patch on/off" is one
+    flag and one seed, not two different networks. What it buys, when the
+    patch is in the training data at all, is a per-patch prior shift on top of
+    the champion table: the champion table says what a champion is, the patch
+    vector says how much it is worth right now. See
+    data/pro play/pipeline.split_within_patch for the protocol that makes the
+    patch a *seen* input at test time (the global date split does not).
     """
 
     def __init__(self, num_champs=NUM_REAL_CHAMPS, num_roles=ROLE_VOCAB_SIZE,
-                 embed_dim=128, attr_matrix=None):
+                 embed_dim=128, attr_matrix=None, n_patches=0):
         super().__init__()
         self.champ_lookup = nn.Embedding(num_champs + 2, embed_dim)  # +M+P
         self.role_lookup = nn.Embedding(num_roles, embed_dim)  # 5 + FLEX
         self.layer_norm = nn.LayerNorm(embed_dim)
         self.attr_dim = 0 if attr_matrix is None else int(attr_matrix.shape[-1])
+        self.n_patches = int(n_patches or 0)
+        if self.n_patches:
+            self.patch_lookup = nn.Embedding(self.n_patches, embed_dim)
+            nn.init.zeros_(self.patch_lookup.weight)
+        else:
+            self.patch_lookup = None
         if self.attr_dim:
             # Non-persistent: the matrix is data, not a learned parameter, and
             # keeping it out of the state dict keeps checkpoints small and
@@ -130,10 +147,18 @@ class DraftSlotEmbedding(nn.Module):
         else:
             self.attr_proj = None
 
-    def forward(self, champ_ids, role_ids):
+    def forward(self, champ_ids, role_ids, patch_id=None):
         x = self.champ_lookup(champ_ids) + self.role_lookup(role_ids)
         if self.attr_proj is not None:
             x = x + self.attr_proj(self.champ_attrs[champ_ids])
+        if self.patch_lookup is not None:
+            # Missing patch_id means "unknown patch" (index 0), not "no patch
+            # signal": a batch assembled without a patch vocabulary - a soloQ
+            # rehearsal batch, or an inference call from an old client - lands
+            # on the UNK row, which is exactly the row a *new* patch would use.
+            if patch_id is None:
+                patch_id = champ_ids.new_zeros(champ_ids.shape[0])
+            x = x + self.patch_lookup(patch_id).unsqueeze(1)
         return self.layer_norm(x)
 
 
@@ -269,12 +294,15 @@ class SoloQPretrainedModel(nn.Module):
 
     def __init__(self, num_champs=NUM_REAL_CHAMPS, embed_dim=128, num_heads=8,
                  num_intra_layers=2, num_cross_layers=1, dropout=0.0,
-                 with_value=False, value_seeds=4, attr_matrix=None):
+                 with_value=False, value_seeds=4, attr_matrix=None,
+                 n_patches=0):
         super().__init__()
         self.num_champs = num_champs
+        self.n_patches = int(n_patches or 0)
         self.embed = DraftSlotEmbedding(num_champs=num_champs,
                                         embed_dim=embed_dim,
-                                        attr_matrix=attr_matrix)
+                                        attr_matrix=attr_matrix,
+                                        n_patches=self.n_patches)
         self.attr_dim = self.embed.attr_dim
         layer = nn.TransformerEncoderLayer(d_model=embed_dim,
                                            nhead=num_heads,
@@ -338,7 +366,7 @@ class SoloQPretrainedModel(nn.Module):
         if pad_mask is None:
             pad_mask = champ_ids == (self.num_champs + 1)
 
-        x = self.embed(champ_ids, role_ids)  # [B,10,D], no positions
+        x = self.embed(champ_ids, role_ids, batch.get("patch_id"))  # [B,10,D]
         blue, red = x[:, :TEAM_SIZE], x[:, TEAM_SIZE:]  # [B,5,D] each
         blue_pad, red_pad = pad_mask[:, :TEAM_SIZE], pad_mask[:, TEAM_SIZE:]
         # PyTorch MHA NaNs when EVERY key is masked (softmax over all -inf).
