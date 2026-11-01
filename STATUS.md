@@ -476,13 +476,21 @@ harmful": that result was measured with unseen test patches, where the input
 was UNK. The two protocols answer different questions, and the product
 question is this one.
 
+**Does the masked stage earn its place?** Seed 0, patch arm: the policy
+trained from scratch scores 0.4746 top-5 against 0.4839 for the
+masked-initialised one, i.e. **+0.93 pp** for the masked stage (p=1.1e-19).
+Real but an order of magnitude smaller than the patch embedding's +9.5 pp, and
+ban1 is the same either way (0.4275 vs 0.4246) - 32 epochs of next-move CE on
+37k games learns the patch prior by itself.
+
 Not settled: one architecture size (the epoch curve says the fit is
 data-limited); `rel@5` is not comparable across protocols (this window's
 baseline is 0.412 vs 0.373 patch-honest, so pro-only 1.38x and finetune 1.51x
-cannot be read as "finetune is better"); the policy's `--init-ckpt scratch`
-control was not run for every arm, so "the masked stage earns its place" is
-still open. Kept: 8 checkpoints (355MB) under `model/proonly/ckpt/`, both arms
-and both seeds, because the paired comparisons need the losing arm too.
+cannot be read as "finetune is better"); the wider corpus and the scratch
+control are seed 0 only. Kept: 9 checkpoints (~400MB) under
+`model/proonly/ckpt/`, both arms and both seeds, because the paired
+comparisons need the losing arm too; the numbers that survive them are in
+`model/proonly/reports/`.
 
 ## 9. Reproduce
 

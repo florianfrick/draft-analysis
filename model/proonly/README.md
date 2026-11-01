@@ -144,6 +144,14 @@ rather than a headline:
 * Per-year deltas are uniform (-6.8 to -12.6 pp), so the pooled +9.5 pp is not
   a year-mix artifact.
 
+**Does the masked stage earn its place?** Seed 0, patch arm, same schedule:
+the policy trained from `--init-ckpt scratch` scores 0.4746 top-5 against
+0.4839 for the masked-initialised one — **+0.93 pp** for the masked stage
+(p=1.1e-19, CI [+0.73, +1.12]). Real but small: 32 epochs of next-move CE on
+37k games is enough to learn the patch prior on its own, and ban1 is
+essentially identical either way (0.4275 vs 0.4246). The masked stage is worth
+~1/10th of what the patch embedding is worth.
+
 ## Against the existing pipeline, on the same rows
 
 Same within-patch test split, `compare.py` between the kept checkpoints and
@@ -208,6 +216,6 @@ comparisons need the losing arm too, so both arms and both seeds are kept.
   (0.412) is much stronger than the patch-honest one (0.373), so pro-only at
   1.38x and the finetune at 1.51x cannot be read as "the finetune is better".
   Absolute top-5 on the same rows is the only cross-protocol number here.
-* **The policy is initialised from the masked arm.** A `--init-ckpt scratch`
-  control exists but was not run for every arm; "masked stage earns its place"
-  is therefore still open.
+* **The masked stage is worth +0.9 pp to the policy**, not the +9.5 pp the
+  patch embedding is worth (seed 0, paired). If the goal is next-pick, the
+  masked stage is nearly optional at this data size.
