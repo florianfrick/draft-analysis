@@ -165,6 +165,31 @@ def mcnemar(a_hits, b_hits):
     return b, c, chi2, p
 
 
+def check_same_patch_vocab(a, b):
+    """Both checkpoints must index the patch table the same way.
+
+    Each model scores a row's patch as a *position* in its own vocabulary.
+    If the two checkpoints were trained on different vocabularies - or on the
+    same patches in a different order - then "patch 12.01" is a different
+    vector in A than in B, and the comparison would be measuring a vocabulary
+    shift rather than the difference between the models. The rows would
+    still match, so nothing would raise; the number would just be wrong.
+
+    Comparing the two lists checks the order and the length at once, and the
+    length is what the patch table's shape is.
+    """
+    va = torch.load(str(a), map_location="cpu", weights_only=False)
+    vb = torch.load(str(b), map_location="cpu", weights_only=False)
+    ta = list(va.get("patch_vocab") or [])
+    tb = list(vb.get("patch_vocab") or [])
+    if ta != tb:
+        raise RuntimeError(
+            "the two checkpoints use different patch vocabularies (%d vs %d "
+            "rows); patch ids are positions in that vocabulary, so the "
+            "comparison would not be paired" % (len(ta), len(tb)))
+    return ta
+
+
 def game_bootstrap(ra, rb, games, k=5, n_boot=2000, seed=0):
     """Top-k difference (B - A) resampling whole games."""
     by_game = {}
@@ -212,6 +237,7 @@ def main():
     args = ap.parse_args()
     device = torch.device(args.device)
     rows, splits, _, _ = C.load_split(args, verbose=False)
+    check_same_patch_vocab(args.a, args.b)
 
     fn = masked_ranks if args.task == "masked" else policy_ranks
     ra, games, patches = fn(args.a, rows, splits, args, device)

@@ -381,9 +381,9 @@ task than the offline null and is shown only as a tiebreaker behind denial.
 
 ## 8. Pro-only training and the patch embedding (`exp/pro-only-patch-emb`)
 
-Merged to `main`. **`FINDINGS.md` is the full record** — every experiment, the
-training recipe behind the shipped model, what it still gets wrong, and the
-plan to improve it. This section is the condensed version.
+Merged to `main`. **`model/proonly/FINDINGS.md` is the full record** — every
+experiment, the training recipe behind the shipped model, what it still gets
+wrong, and the plan to improve it. This section is the condensed version.
 
 Two questions, both from the same branch: **how far does pro data alone get
 you** (no soloQ pretraining, no rehearsal), and **does a patch embedding help
@@ -496,8 +496,80 @@ control are seed 0 only. **Kept: 3 checkpoints (140MB)** under
 `m-patch-s0`, and the no-patch control `p-nopatch-s0` that the ablation is
 measured against. The other nine runs (seed 1, the wider-corpus pair, the
 scratch control) were deleted as losing arms: their numbers survive in
-`model/proonly/reports/` and `FINDINGS.md` §4, but their paired comparisons
-can no longer be re-run.
+`model/proonly/reports/` and `model/proonly/FINDINGS.md` §4, but their paired
+comparisons can no longer be re-run.
+
+### 8.1 Pretrained initialisation, measured (2026-11-02)
+
+`model/proonly/FINDINGS.md` §8 is the full record. The question the branch
+never asked: does the soloQ-pretrained trunk add anything *on top of* the
+pro-only model, with the patch embedding on and the within-patch split unchanged?
+
+`model/proonly/train_masked.py` gained `--init-ckpt`; the architecture comes
+from the checkpoint's config (D512 / 6 intra + 3 cross / 8 heads, 28.6M
+params), the patch table is zero-initialised, and the optimizer splits into
+heads / trunk / patch groups because the three parts are not in the same state
+at step 0. `load_encoder_state` gained an opt-in `allow_missing_patch` for
+exactly this path; the evaluation path stays strict. The scratch arm's numbers
+are unchanged - verified bit-identical against the pre-change file.
+
+Arms (corpus 2022, within-patch split, seed 0, same eval mask seed and
+selection rule as everything above):
+
+| arm | init | trunk | patch | masked top-5 | next-pick top-5 |
+|---|---|---|---|---|---|
+| `m-patch-s0` / `p-patch-s0` | scratch | D256 / 2 + 1 | on | **0.5669** | **0.4839** |
+| `m-nopatch-s0` / `p-nopatch-s0` | scratch | D256 / 2 + 1 | off | 0.5303 | 0.3894 |
+| `m-pt-patch` / `p-pt-patch` | **soloQ** | D512 / 6 + 3 | on | 0.5648 | 0.4841 |
+| `m-pt-nopatch` / `p-pt-nopatch` | **soloQ** | D512 / 6 + 3 | off | 0.5273 | 0.3774 |
+| `m-sc-patch` / `p-sc-patch` | scratch | D512 / 6 + 3 | on | 0.5139 | 0.4682 |
+
+Paired, B − A, identical rows:
+
+| comparison | masked Δ top-5 | next-pick Δ top-5 | CI |
+|---|---|---|---|
+| patch effect, pretrained trunk | +3.75 pp (p=5.7e-18) | +10.68 pp (p<1e-300) | [+2.90, +4.61] / [+10.42, +10.97] |
+| pretraining, matched capacity | +5.09 pp (p=3.0e-21) | +1.60 pp (p=5.7e-48) | [+4.07, +6.14] / [+1.39, +1.84] |
+| pretrained D512 vs shipped D256 | **−0.21 pp (p=0.674)** | **+0.02 pp (p=0.865)** | [−1.12, +0.70] / [−0.20, +0.24] |
+
+**Verdict: the shipped model is unchanged.** Pretraining plus 11x the
+parameters is a dead heat with the 2.5M-parameter pro-only model on both
+stages (top-1 and top-10 are if anything slightly behind: −0.21 pp p=0.027,
+−0.25 pp p=0.0155). `p-patch-s0` still ships. Three things this did settle:
+
+* **The patch embedding's size is a property of the protocol, not the trunk.**
+  +3.75 pp masked and +10.68 pp next-pick at the pretrained trunk, against
+  +3.66 / +9.45 at the scratch one, and the mechanism reproduces: ban1 goes
+  1.07x -> 2.46x (vs 1.07x -> 2.43x).
+* **Capacity was never the constraint, data is.** Scratch D512/6 + 3 is
+  *worse* than scratch D256/2 + 1 (0.5139 vs 0.5669 masked). §8's "don't
+  scale the model up on 37k drafts" now has a measurement behind it.
+* **The capacity control is weak, and it is stated rather than hidden.** At
+  the recipe's trunk LR the wide scratch model trains badly - train loss rises
+  4.04 -> 3.66 over epochs 1-17 before recovering, val rel oscillates 0.90 to
+  1.27, peak at epoch 38 of 40. So "+5.09 pp for pretraining" is really
+  "pretraining plus a stable optimisation regime". The conclusion that does
+  not depend on the control is the headline one.
+
+One earlier finding did not reproduce: §4.3's "pick2 is worse with the patch
+vector" (3.85x -> 3.72x at the scratch trunk) flips sign at the pretrained
+trunk (3.61x -> 3.68x), so it is trunk-dependent and not a general rule.
+
+**The arms re-run.** `m-pt-patch` was re-run with its recorded command:
+epoch 1 matches to every printed digit (`train 3.5187 | val top1 0.1715
+top5 0.4835 rel 1.213x`), the same epoch is selected (5), and the test
+numbers land on top of each other (`top1 0.2082`, `top5 0.5650` against
+`0.5648`, `rel 1.371x`, `rolecond5 0.6407`); later epochs drift by ~1e-4,
+which is the GPU's float non-determinism. One trap worth knowing: `--epochs`
+sets `total_steps` and therefore the whole LR schedule, so a re-run with a
+different epoch count is not a reproduction at all - at 40 epochs the first
+epoch is entirely inside warmup (87 warmup steps against 73 steps per epoch),
+at 2 epochs it is at full LR after four steps, and the shorter run looks
+better for it. `model/proonly/FINDINGS.md` §8.3 has the detail.
+
+Caveats: seed 0, one soloQ checkpoint, one corpus; the trunk LR differs by
+construction (1e-4 pretrained vs 1e-3 scratch). The six arms are kept
+(693MB) so the paired comparisons stay re-runnable.
 
 ## 9. Held-out series walkthrough — BLG vs HLE (`model/holdout/`)
 
@@ -593,6 +665,11 @@ docker compose run --rm dev python model/policy/evaluate.py \
 docker compose run --rm dev python model/proonly/train_masked.py --run-name m-patch-s0
 docker compose run --rm dev python model/proonly/train_policy.py --init-ckpt <masked best.pt>
 docker compose run --rm dev python model/proonly/compare.py --task masked --a A --b B
+# pretrained-init arms (see model/proonly/README.md)
+docker compose run --rm dev python model/proonly/train_masked.py --run-name m-pt-patch \
+    --init-ckpt model/pretraining/ckpt/run_20261029_153912_v2-D512-p8/best.pt --patch-emb
+docker compose run --rm dev python model/proonly/train_policy.py --run-name p-pt-patch \
+    --init-ckpt <masked best.pt> --patch-emb --epochs 32
 # held-out series walkthrough (see model/holdout/README.md)
 docker compose run --rm dev python model/holdout/eval_series.py
 docker compose run --rm dev python model/holdout/render_report.py

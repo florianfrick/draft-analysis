@@ -1,0 +1,21 @@
+ Container loldraftanalysis-dev-run-f33536f40a0d Creating 
+ Container loldraftanalysis-dev-run-f33536f40a0d Created 
+loaded cache: 46813 drafts (pro_drafts.pt)
+/usr/local/lib/python3.13/site-packages/torch/nn/modules/transformer.py:533: UserWarning: The PyTorch API of nested tensors is in prototype stage and will change in the near future. We recommend specifying layout=torch.jagged when constructing a nested tensor, as this layout receives active development, has better operator coverage, and works with torch.compile. (Triggered internally at /__w/pytorch/pytorch/aten/src/ATen/NestedTensorImpl.cpp:177.)
+  output = torch._nested_tensor_from_mask(
+masked, split=test, n=8060 examples, 4763 games
+  top1   A 0.1733  B 0.2082  delta +0.0349  (B only 667 / A only 948, McNemar p=3.23e-12)
+  top5   A 0.5139  B 0.5648  delta +0.0509  (B only 729 / A only 1139, McNemar p=2.99e-21)
+  top10  A 0.7073  B 0.7475  delta +0.0402  (B only 539 / A only 863, McNemar p=6.33e-18)
+  top1 game-bootstrap delta +0.0349  95% CI [+0.0254, +0.0442] over 4763 games
+  top5 game-bootstrap delta +0.0509  95% CI [+0.0407, +0.0614] over 4763 games
+  top5 by year:  year      A      B    delta      n
+                12    0.5641 0.5851 +0.0210   1716
+                13    0.5615 0.5969 +0.0354   1471
+                14    0.5265 0.5865 +0.0600   1550
+                15    0.4591 0.5212 +0.0621   1675
+                16    0.4630 0.5388 +0.0758   1648
+
+A = model/proonly/ckpt/run_20261102_184159_m-sc-patch/best.pt
+B = model/proonly/ckpt/run_20261102_182148_m-pt-patch/best.pt
+wrote model/proonly/reports/compare_masked_pt_vs_scratch.json

@@ -252,7 +252,8 @@ def mean_pool_vector(h, pad_mask):
     return torch.cat([vb, vr, vb - vr, vb * vr], dim=1)
 
 
-def load_encoder_state(module, state_dict, allow_missing_value=True):
+def load_encoder_state(module, state_dict, allow_missing_value=True,
+                       allow_missing_patch=False):
     """Load a pretraining state dict into an encoder, tolerating optional paths.
 
     Two asymmetries, on purpose:
@@ -261,17 +262,32 @@ def load_encoder_state(module, state_dict, allow_missing_value=True):
       `win_head.*`). Downstream stages build an encoder without them, so
       filtering is correct. An `embed.attr_proj.*` key that the target does
       not have is a real mismatch - dropping it would silently turn the
-      attribute adapter off and quietly evaluate a different model.
+      attribute adapter off and quietly evaluate a different model. The
+      same holds for `embed.patch_lookup.*`: a checkpoint that *has* patch
+      rows must never be loaded into an encoder without them.
     * **Missing** keys are allowed for the value path and for
       `embed.attr_proj.*`: the adapter is zero-initialised, so "absent from
       the checkpoint" and "correctly initialised" are the same tensor. That is
       what lets a pre-attribute checkpoint load into an attribute-enabled
       encoder unchanged.
 
+    `embed.patch_lookup.*` is missing-tolerant **only** when the caller sets
+    `allow_missing_patch=True`, because the patch table is zero-initialised
+    for exactly the same reason as the attribute adapter - absent and
+    correctly-initialised are the same tensor there too. It stays opt-in
+    because the default path is the *evaluation* path: there, a checkpoint
+    with no patch rows entering a patch-enabled encoder must be loud rather
+    than silently scoring a model nobody validated. The opt-in is for the
+    *initialisation* path - seeding a patch-enabled encoder from a trunk
+    that predates patch conditioning - where a zero table is the intended
+    starting point, not a silent substitution.
+
     Any other mismatch (wrong embed_dim, wrong layer count) still raises.
     """
     own = set(module.state_dict().keys())
     optional = ("pma.", "win_head.", "embed.attr_proj.")
+    if allow_missing_patch:
+        optional = optional + ("embed.patch_lookup.",)
     keep = {k: v for k, v in state_dict.items() if k in own}
     dropped = sorted(set(state_dict) - set(keep))
     if dropped and not (allow_missing_value and

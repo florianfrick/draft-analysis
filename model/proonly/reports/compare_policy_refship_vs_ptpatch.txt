@@ -1,0 +1,19 @@
+ Container loldraftanalysis-dev-run-b8deb70fabcd Creating 
+ Container loldraftanalysis-dev-run-b8deb70fabcd Created 
+loaded cache: 46813 drafts (pro_drafts.pt)
+policy, split=test, n=95260 examples, 4763 games
+  top1   A 0.1763  B 0.1742  delta -0.0021  (B only 4277 / A only 4074, McNemar p=0.0271)
+  top5   A 0.4839  B 0.4841  delta +0.0002  (B only 5625 / A only 5644, McNemar p=0.865)
+  top10  A 0.6676  B 0.6651  delta -0.0025  (B only 4748 / A only 4514, McNemar p=0.0155)
+  top1 game-bootstrap delta -0.0021  95% CI [-0.0040, -0.0002] over 4763 games
+  top5 game-bootstrap delta +0.0002  95% CI [-0.0020, +0.0024] over 4763 games
+  top5 by year:  year      A      B    delta      n
+                12    0.4821 0.4813 -0.0008  20200
+                13    0.5165 0.5199 +0.0033  17040
+                14    0.4650 0.4688 +0.0038  18440
+                15    0.4649 0.4625 -0.0024  20120
+                16    0.4951 0.4928 -0.0023  19460
+
+A = model/proonly/ckpt/run_20261101_183519_p-patch-s0/best.pt
+B = model/proonly/ckpt/run_20261102_185219_p-pt-patch/best.pt
+wrote model/proonly/reports/compare_policy_pt_vs_refship.json
