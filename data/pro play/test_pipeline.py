@@ -55,9 +55,24 @@ def test_scan_keeps_most_games():
         "missing_team_row", "bad_firstpick", "bad_result", "bad_date",
         "missing_players", "bad_position", "incomplete_bans",
         "incomplete_picks", "unknown_champ", "duplicate_champ",
-        "pick_mismatch"}
+        "pick_mismatch", "after_corpus_freeze"}
     assert stats["skip_reasons"].get("unknown_champ", 0) == 0, \
         "all pro names must map through the 173-champ ddragon mapping"
+
+
+def test_corpus_is_frozen_at_the_pinned_date():
+    """A CSV append must not change the corpus every number is measured on.
+
+    The 2026 export grows during the season. Without the pin, the next rebuild
+    folds the new games in - which silently moves every test number and, worse,
+    trains on the series `model/holdout/` reports as a holdout.
+    """
+    rows, stats = _rows()
+    cutoff = P._parse_date(P.CORPUS_MAX_DATE)
+    assert cutoff is not None
+    newest = max(P._parse_date(r["date"]) for r in rows)
+    assert newest <= cutoff, "corpus contains drafts after %s" % P.CORPUS_MAX_DATE
+    assert stats["kept"] == len(rows)
 
 
 def test_draft_rows_valid():
@@ -157,6 +172,68 @@ def test_split_no_series_leakage():
     va_min = min(rows[i]["date_ordinal"] for i in splits["val"])
     te_min = min(rows[i]["date_ordinal"] for i in splits["test"])
     assert va_min >= tr_max - 1 and te_min >= va_min - 1
+
+
+def test_within_patch_split_is_chronological_and_leak_free():
+    rows, _ = _rows()
+    splits = P.split_within_patch(rows)
+    all_idx = sorted(splits["train"] + splits["val"] + splits["test"])
+    assert all_idx == list(range(len(rows))), "splits must cover all rows"
+    assert not set(splits["train"]) & set(splits["val"])
+    assert not set(splits["train"]) & set(splits["test"])
+    assert not set(splits["val"]) & set(splits["test"])
+    # no series straddles a boundary
+    sids = {k: {rows[i]["series_id"] for i in splits[k]}
+            for k in ("train", "val", "test")}
+    assert not (sids["train"] & sids["val"])
+    assert not (sids["train"] & sids["test"])
+    assert not (sids["val"] & sids["test"])
+    # chronological INSIDE every patch: train head, then val, then test tail
+    by_patch = defaultdict(lambda: defaultdict(list))
+    for name in ("train", "val", "test"):
+        for i in splits[name]:
+            by_patch[P.patch_key(rows[i]["patch"])][name].append(
+                rows[i]["date_ordinal"])
+    for patch, d in by_patch.items():
+        if not d["val"] or not d["test"]:
+            continue
+        assert max(d["train"]) <= min(d["val"]), patch
+        assert max(d["val"]) <= min(d["test"]), patch
+    # every patch big enough to have a tail appears in val and test, and the
+    # patch ids are therefore *seen* in train - the whole point of this split
+    patches = defaultdict(set)
+    for name in ("train", "val", "test"):
+        for i in splits[name]:
+            patches[name].add(P.patch_key(rows[i]["patch"]))
+    assert patches["val"] <= patches["train"]
+    assert patches["test"] <= patches["train"]
+    assert len(patches["test"]) > 90
+
+
+def test_within_patch_split_respects_min_patch_rows():
+    """A patch below the floor stays whole in train: its tail would be 1 game."""
+    rows, _ = _rows()
+    sizes = defaultdict(int)
+    for r in rows:
+        sizes[P.patch_key(r["patch"])] += 1
+    tiny = {p for p, n in sizes.items() if n < 40}
+    assert tiny, "corpus is expected to contain small patches"
+    splits = P.split_within_patch(rows, min_patch_rows=40)
+    in_test = {P.patch_key(rows[i]["patch"]) for i in splits["test"]}
+    assert not (tiny & in_test)
+    # ... and the opposite: with no floor they do get a tail
+    loose = P.split_within_patch(rows, min_patch_rows=0)
+    assert tiny & {P.patch_key(rows[i]["patch"]) for i in loose["test"]}
+
+
+def test_split_fractions_are_roughly_honoured():
+    rows, _ = _rows()
+    splits = P.split_within_patch(rows, val_frac=0.10, test_frac=0.10)
+    n = len(rows)
+    for key in ("val", "test"):
+        frac = len(splits[key]) / n
+        assert 0.07 < frac < 0.13, (key, frac)
+    assert len(splits["train"]) / n > 0.75
 
 
 def test_weights_recency():

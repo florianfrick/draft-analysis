@@ -3,6 +3,9 @@
 > **Current state of the project: see [STATUS.md](STATUS.md)** — one section per
 > stage (pretraining, finetune, policy, prefix value), the exact checkpoints
 > kept, and the evaluation numbers for each.
+>
+> **The pro-only model — results, recipe, and improvement plan:
+> [FINDINGS.md](FINDINGS.md).**
 
 Project Goals:
 
@@ -22,6 +25,14 @@ draft prediction (patch 16.20).
 - `model/pretraining/train.py` — masked champ+role pretraining
   (`--role-only-prob 0.10` teaches P(role|champ)).
 - `model/finetune/` — pro-play Stage 1 finetune (masked heads + win/econ).
+- `model/proonly/` — **the shipped model**: pro drafts only, no soloQ, patch
+  embedding, within-patch split. Masked stage, next-pick stage, paired
+  comparison. See `model/proonly/README.md`.
+- `model/holdout/` — one held-out series replayed through every checkpoint,
+  move by move (what each model *said*, not just its accuracy). See
+  `model/holdout/README.md`.
+- `FINDINGS.md` — the pro-only experiment's results, the recipe behind the
+  shipped checkpoint, and the plan to improve it.
 - `data/solo queue/` — Riot collection (puuids → match ids → match details)
   + `process matchdata/pipeline.py` (masking, batch collate).
 - `data/pro play/` — Oracle's Elixir CSV → pro draft rows.

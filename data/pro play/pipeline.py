@@ -80,9 +80,28 @@ BASE_DIR = Path(__file__).resolve().parent          # .../data/pro play
 SOLOQ_PROC_DIR = BASE_DIR.parent / "solo queue" / "process matchdata"
 MAPPING_PATH = SOLOQ_PROC_DIR / "champ_mapping.json"
 CHAMP_NAMES_PATH = SOLOQ_PROC_DIR / "champ_names.json"
-CSV_GLOB = str(BASE_DIR / "*OraclesElixir*.csv")
+CSV_GLOB_ALL = str(BASE_DIR / "*OraclesElixir*.csv")
+# The corpus every recorded number is measured on (STATUS.md: 46,813 drafts).
+# Pinned to 2022+ on purpose: the folder also holds 2014-2021 exports, and a
+# bare "*" glob would silently swap the corpus out from under every existing
+# script the moment those files appear. The wider set is opt-in via
+# CSV_GLOB_ALL (81,161 drafts, 2017-2026).
+CSV_GLOB = str(BASE_DIR / "202[2-9]_*OraclesElixir*.csv")
 CACHE_PATH = BASE_DIR / "pro_drafts.pt"
+# Cache for the opt-in wider corpus (CSV_GLOB_ALL). Separate file, because a
+# single cache keyed by CSV signature would rescan back and forth every time a
+# script alternates between the two corpora.
+CACHE_PATH_ALL = BASE_DIR / "pro_drafts_all.pt"
 CACHE_VERSION = 3  # v3: prior_picks + data-driven fearless flag
+
+# Corpus freeze. Every number in STATUS.md and FINDINGS.md is measured on the
+# drafts that existed on 2026-10-24 23:19:46, which is also the last date in
+# both caches. The OE exports keep growing, and a rebuild would otherwise fold
+# the 2026 Worlds knockout stage - including the BLG vs HLE final that
+# model/holdout/ uses as a holdout - into the training corpus. That invalidates
+# every recorded number and destroys the holdout at the same time, silently.
+# Moving this date is a deliberate act: raise it, then re-measure everything.
+CORPUS_MAX_DATE = "2026-10-24 23:19:46"
 
 # Fearless Draft era (re-picks forbidden across a series): 2025 season on.
 # Real data: later-series-game re-pick rate ~95% (2022), ~97% (2023),
@@ -102,6 +121,36 @@ AUX_BASE_COLS = ("goldat10", "goldat15", "xpat10", "killsat10")
 ECON_KEYS = ("gold10_blue", "gold10_red", "gold15_blue", "gold15_red",
              "xp10_blue", "xp10_red")
 DEFAULT_HALF_LIFE_DAYS = 75.0  # recency weight: 2^(-age/half_life)
+
+
+def patch_key(patch):
+    """Normalize a patch label to 'major.mm' ('16.3' -> '16.03').
+
+    Lives here rather than in datasets.py because the split needs the same
+    notion of "one patch" that the patch vocabulary uses: two spellings of
+    the same patch must not end up on opposite sides of a within-patch
+    boundary. datasets.py re-exports this (P.patch_key) so there is one
+    definition.
+    """
+    s = str(patch or "").strip()
+    if not s:
+        return ""
+    maj, _, mnr = s.partition(".")
+    if not mnr:
+        mnr = "0"
+    try:
+        return "%d.%02d" % (int(maj), int(mnr))
+    except ValueError:
+        return s
+
+
+def patch_sort_key(key):
+    """Chronological sort key for a normalised patch label."""
+    maj, _, mnr = key.partition(".")
+    try:
+        return (int(maj), int(mnr))
+    except ValueError:
+        return (10 ** 6, 0)
 
 
 def load_name_to_idx(mapping_path=MAPPING_PATH):
@@ -427,11 +476,24 @@ def attach_fearless(rows):
     return rows
 
 
+def _game_date(g):
+    """The date of a raw game dict, parsed the same way assign_series does."""
+    blue = g.get("blue") or {}
+    return _parse_date(blue.get("date") or "")
+
+
 def scan_and_index(csv_paths, name_to_idx, limit=0):
     """One full pass over CSV(s) -> {'rows', 'stats', 'csvs'}."""
     if not isinstance(csv_paths, (list, tuple)):
         csv_paths = [csv_paths]
     games = assign_series(group_games(csv_paths))
+    total_games = len(games)
+    if CORPUS_MAX_DATE:
+        # Freeze the corpus: anything newer than the pin is held out, not
+        # trained on. Counted as a skip reason so the stats identity holds.
+        cutoff = _parse_date(CORPUS_MAX_DATE)
+        games = [g for g in games
+                 if (_game_date(g) is None or _game_date(g) <= cutoff)]
     rows, reasons = [], Counter()
     for g in games:
         out, reason = game_to_draft(g, name_to_idx)
@@ -442,8 +504,10 @@ def scan_and_index(csv_paths, name_to_idx, limit=0):
             rows.append(out)
         if limit and (len(rows) + sum(reasons.values())) >= limit:
             break
+    if total_games != len(games):
+        reasons["after_corpus_freeze"] = total_games - len(games)
     attach_fearless(rows)
-    stats = {"total_games": len(games), "kept": len(rows),
+    stats = {"total_games": total_games, "kept": len(rows),
              "skipped": sum(reasons.values()),
              "skip_reasons": dict(reasons)}
     return {"rows": rows, "stats": stats,
@@ -466,18 +530,19 @@ def _csv_signature(csv_paths):
     return sig
 
 
-def build_rows(csv_glob=CSV_GLOB, rescan=False, limit=0):
+def build_rows(csv_glob=CSV_GLOB, rescan=False, limit=0, cache_path=None):
     """Cached scan: loads pro_drafts.pt unless rescan/limit/missing."""
+    cache_path = Path(cache_path) if cache_path is not None else CACHE_PATH
     csv_paths = list_csvs(csv_glob)
     names = [p.name for p in csv_paths]
     sig = _csv_signature(csv_paths)
-    if not rescan and not limit and CACHE_PATH.exists():
-        payload = torch.load(str(CACHE_PATH), map_location="cpu",
+    if not rescan and not limit and cache_path.exists():
+        payload = torch.load(str(cache_path), map_location="cpu",
                              weights_only=False)  # our own cache
         if payload.get("version") == CACHE_VERSION and \
                 payload.get("csv_sig") == sig:
             print("loaded cache: %d drafts (%s)" %
-                  (len(payload["rows"]), CACHE_PATH.name))
+                  (len(payload["rows"]), cache_path.name))
             return payload["rows"], payload["stats"]
         if payload.get("csv_sig") is None:
             print("cache predates content signatures; rescanning")
@@ -488,9 +553,9 @@ def build_rows(csv_glob=CSV_GLOB, rescan=False, limit=0):
     payload = scan_and_index(csv_paths, load_name_to_idx()[0], limit=limit)
     if not limit:
         torch.save(dict(payload, version=CACHE_VERSION, csv_sig=sig),
-                   str(CACHE_PATH))
+                   str(cache_path))
         print("cached %d drafts -> %s" % (len(payload["rows"]),
-                                          CACHE_PATH.name))
+                                          cache_path.name))
     print("kept %d / %d games (skipped %d: %s)" % (
         payload["stats"]["kept"], payload["stats"]["total_games"],
         payload["stats"]["skipped"], payload["stats"]["skip_reasons"]))
@@ -561,6 +626,112 @@ def split_series_by_date(rows, val_frac=0.05, test_frac=0.05):
     return {"train": [i for s in train_series for i in s],
             "val": [i for s in val_series for i in s],
             "test": [i for s in test_series for i in s]}
+
+
+def split_within_patch(rows, val_frac=0.10, test_frac=0.10,
+                       min_patch_rows=40, verbose=False):
+    """Train/val/test by SERIES *inside* each patch: head -> train, tail -> val/test.
+
+    Why this split exists, next to `split_series_by_date`. The global date
+    split puts whole patches on one side of the boundary, so a test row's
+    patch never appears in train. That is the honest protocol for "will this
+    work on the next patch", but it makes patch conditioning untestable by
+    construction: every test row's patch id is UNK, so a patch embedding can
+    only memorise. Here each patch is on both sides - the first
+    (1 - val - test) of its series train, the last val/test - so the patch id
+    is a *seen* input everywhere and the question becomes whether the prior
+    learned from the head of a patch transfers to its tail.
+
+    Ordering is by series, not row: series (rows sharing series_id;
+    null-series rows are singletons) are sorted by earliest
+    (date_ordinal, gameid) and assigned whole, so fearless context never
+    straddles a split. The tail is filled from the end backwards, so test is
+    always the last games of the patch, val the games just before it, and a
+    series is never split even when that overshoots the target fraction.
+
+    A series is assigned to the patch of its *first* game before any of this.
+    Without that step a series played across a patch boundary (game 1 on
+    16.20, game 2 on 16.21) would be the head of one patch and the tail of
+    another - i.e. a fearless context split across train and test, which is
+    exactly the leakage the series grouping exists to prevent.
+
+    `min_patch_rows`: patches smaller than this stay entirely in train. Their
+    tail would be 1-2 games, which is noise rather than a measurement; on
+    this corpus that is 7 patches / 194 rows (0.4%) at the default.
+
+    Returns {"train": [...], "val": [...], "test": [...]} index lists. A
+    patch below `min_patch_rows` contributes all of its rows to train and
+    nothing to val/test.
+    """
+    series = defaultdict(list)
+    for i, row in enumerate(rows):
+        key = row["series_id"] if row["series_id"] is not None \
+            else "__null_%d" % i
+        series[key].append(i)
+
+    by_patch = defaultdict(list)     # patch -> [series (list of row indices)]
+    moved = 0
+    for idxs in series.values():
+        idxs = sorted(idxs, key=lambda i: (rows[i]["date_ordinal"],
+                                           rows[i].get("game_number") or 0,
+                                           rows[i]["gameid"]))
+        first_patch = patch_key(rows[idxs[0]].get("patch"))
+        by_patch[first_patch].append(idxs)
+        moved += sum(1 for i in idxs
+                     if patch_key(rows[i].get("patch")) != first_patch)
+
+    out = {"train": [], "val": [], "test": []}
+    report = []
+    for patch in sorted(by_patch, key=patch_sort_key):
+        ordered = sorted(by_patch[patch],
+                         key=lambda s: (rows[s[0]]["date_ordinal"],
+                                        rows[s[0]]["gameid"]))
+        idxs = [i for s in ordered for i in s]
+        n = len(idxs)
+        if n < min_patch_rows or test_frac <= 0:
+            out["train"].extend(idxs)
+            report.append((patch, n, n, 0, 0))
+            continue
+        n_test = max(1, int(round(n * test_frac)))
+        n_val = max(1, int(round(n * val_frac)))
+        test_series, val_series, acc = [], [], 0
+        cut = len(ordered)
+        for j in range(len(ordered) - 1, -1, -1):
+            if acc >= n_test:
+                break
+            test_series.insert(0, ordered[j])
+            acc += len(ordered[j])
+            cut = j
+        acc = 0
+        cut_val = cut
+        for j in range(cut - 1, -1, -1):
+            if acc >= n_val:
+                break
+            val_series.insert(0, ordered[j])
+            acc += len(ordered[j])
+            cut_val = j
+        train_series = ordered[:cut_val]
+        tr = [i for s in train_series for i in s]
+        va = [i for s in val_series for i in s]
+        te = [i for s in test_series for i in s]
+        out["train"].extend(tr)
+        out["val"].extend(va)
+        out["test"].extend(te)
+        report.append((patch, n, len(tr), len(va), len(te)))
+
+    if verbose:
+        small = [r for r in report if r[3] == 0 and r[4] == 0]
+        print("within-patch split: %d patches, %d train / %d val / %d test"
+              % (len(report), len(out["train"]), len(out["val"]),
+                 len(out["test"])))
+        if moved:
+            print("  %d rows follow their series into an earlier patch "
+                  "(series spanning a patch boundary)" % moved)
+        if small:
+            print("  %d patches below min_patch_rows stay in train: %s"
+                  % (len(small), ", ".join("%s(%d)" % (p, n)
+                                           for p, n, *_ in small[:8])))
+    return out
 
 
 def compute_popularity_baseline(rows, indices, num_champs):

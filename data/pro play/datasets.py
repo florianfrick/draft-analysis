@@ -98,26 +98,11 @@ def phase_of(move_idx):
 PATCH_UNK_ID = 0  # index 0 reserved for unseen patches
 
 
-def patch_key(patch):
-    """Normalize a patch label to 'major.mm' ('16.3' -> '16.03')."""
-    s = str(patch or "").strip()
-    if not s:
-        return ""
-    maj, _, mnr = s.partition(".")
-    if not mnr:
-        mnr = "0"
-    try:
-        return "%d.%02d" % (int(maj), int(mnr))
-    except ValueError:
-        return s
-
-
-def _patch_sort_key(key):
-    maj, _, mnr = key.partition(".")
-    try:
-        return (int(maj), int(mnr))
-    except ValueError:
-        return (10 ** 6, 0)
+# Normalisation and ordering of patch labels live in pipeline.py, because
+# split_within_patch has to group rows by the same notion of "one patch" that
+# the vocabulary uses. Re-exported here so existing callers keep working.
+patch_key = P.patch_key
+_patch_sort_key = P.patch_sort_key
 
 
 def build_patch_vocab(rows):
@@ -365,11 +350,16 @@ class ProMaskedDraftDataset(Dataset):
     incomplete drafts must see this distribution). Deterministic per
     index+epoch via an independent generator stream. `econ_mask_prob`
     switches the FULL-to-partial share of the dataset.
+
+    `patch_index` (from build_patch_vocab) makes each example carry
+    `patch_id` [B], which is what the encoder's patch embedding reads. Left
+    as None the id is UNK, so a patch-conditioned encoder sees nothing - the
+    correct behaviour for a batch whose patches are not in the vocabulary.
     """
 
     def __init__(self, rows, indices=None, num_champs=NUM_REAL_CHAMPS,
                  mask_prob=0.15, role_keep_prob=0.1, seed=0, epoch=0,
-                 econ_mask_prob=0.0):
+                 econ_mask_prob=0.0, patch_index=None):
         self.rows = rows if indices is None else [rows[i] for i in indices]
         self.num_champs = num_champs
         self.mask_prob = mask_prob
@@ -377,6 +367,10 @@ class ProMaskedDraftDataset(Dataset):
         self.seed = seed
         self.epoch = epoch
         self.econ_mask_prob = econ_mask_prob
+        # None -> patch_id is UNK for every row, i.e. an encoder with a patch
+        # embedding behaves as if it had never seen the patch. Pass the vocab
+        # from build_patch_vocab to make the patch a real input.
+        self.patch_index = patch_index
 
     def __len__(self):
         return len(self.rows)
@@ -429,6 +423,9 @@ class ProMaskedDraftDataset(Dataset):
             "champ_ids": cids, "role_ids": rids, "role_masked": rm,
             "is_masked": is_m, "champ_labels": clab, "role_labels": rlab,
             "pad_mask": pad,
+            "patch_id": torch.tensor(
+                patch_to_id(row.get("patch"), self.patch_index),
+                dtype=torch.long),
             "win_label": torch.tensor(row["blue_win"], dtype=torch.long),
             "econ_target": torch.tensor(
                 econ_targets(row), dtype=torch.float32),
