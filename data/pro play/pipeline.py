@@ -94,6 +94,15 @@ CACHE_PATH = BASE_DIR / "pro_drafts.pt"
 CACHE_PATH_ALL = BASE_DIR / "pro_drafts_all.pt"
 CACHE_VERSION = 3  # v3: prior_picks + data-driven fearless flag
 
+# Corpus freeze. Every number in STATUS.md and FINDINGS.md is measured on the
+# drafts that existed on 2026-10-24 23:19:46, which is also the last date in
+# both caches. The OE exports keep growing, and a rebuild would otherwise fold
+# the 2026 Worlds knockout stage - including the BLG vs HLE final that
+# model/holdout/ uses as a holdout - into the training corpus. That invalidates
+# every recorded number and destroys the holdout at the same time, silently.
+# Moving this date is a deliberate act: raise it, then re-measure everything.
+CORPUS_MAX_DATE = "2026-10-24 23:19:46"
+
 # Fearless Draft era (re-picks forbidden across a series): 2025 season on.
 # Real data: later-series-game re-pick rate ~95% (2022), ~97% (2023),
 # ~85% (2024), ~1.4% (2025), 0% (2026) -> gate on calendar date.
@@ -467,11 +476,24 @@ def attach_fearless(rows):
     return rows
 
 
+def _game_date(g):
+    """The date of a raw game dict, parsed the same way assign_series does."""
+    blue = g.get("blue") or {}
+    return _parse_date(blue.get("date") or "")
+
+
 def scan_and_index(csv_paths, name_to_idx, limit=0):
     """One full pass over CSV(s) -> {'rows', 'stats', 'csvs'}."""
     if not isinstance(csv_paths, (list, tuple)):
         csv_paths = [csv_paths]
     games = assign_series(group_games(csv_paths))
+    total_games = len(games)
+    if CORPUS_MAX_DATE:
+        # Freeze the corpus: anything newer than the pin is held out, not
+        # trained on. Counted as a skip reason so the stats identity holds.
+        cutoff = _parse_date(CORPUS_MAX_DATE)
+        games = [g for g in games
+                 if (_game_date(g) is None or _game_date(g) <= cutoff)]
     rows, reasons = [], Counter()
     for g in games:
         out, reason = game_to_draft(g, name_to_idx)
@@ -482,8 +504,10 @@ def scan_and_index(csv_paths, name_to_idx, limit=0):
             rows.append(out)
         if limit and (len(rows) + sum(reasons.values())) >= limit:
             break
+    if total_games != len(games):
+        reasons["after_corpus_freeze"] = total_games - len(games)
     attach_fearless(rows)
-    stats = {"total_games": len(games), "kept": len(rows),
+    stats = {"total_games": total_games, "kept": len(rows),
              "skipped": sum(reasons.values()),
              "skip_reasons": dict(reasons)}
     return {"rows": rows, "stats": stats,

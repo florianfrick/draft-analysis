@@ -55,9 +55,24 @@ def test_scan_keeps_most_games():
         "missing_team_row", "bad_firstpick", "bad_result", "bad_date",
         "missing_players", "bad_position", "incomplete_bans",
         "incomplete_picks", "unknown_champ", "duplicate_champ",
-        "pick_mismatch"}
+        "pick_mismatch", "after_corpus_freeze"}
     assert stats["skip_reasons"].get("unknown_champ", 0) == 0, \
         "all pro names must map through the 173-champ ddragon mapping"
+
+
+def test_corpus_is_frozen_at_the_pinned_date():
+    """A CSV append must not change the corpus every number is measured on.
+
+    The 2026 export grows during the season. Without the pin, the next rebuild
+    folds the new games in - which silently moves every test number and, worse,
+    trains on the series `model/holdout/` reports as a holdout.
+    """
+    rows, stats = _rows()
+    cutoff = P._parse_date(P.CORPUS_MAX_DATE)
+    assert cutoff is not None
+    newest = max(P._parse_date(r["date"]) for r in rows)
+    assert newest <= cutoff, "corpus contains drafts after %s" % P.CORPUS_MAX_DATE
+    assert stats["kept"] == len(rows)
 
 
 def test_draft_rows_valid():
