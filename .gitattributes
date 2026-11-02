@@ -1,0 +1,12 @@
+# Machine-generated report artefacts.
+#
+# Everything here is written by a script running in the Linux container, so it
+# is LF. With core.autocrlf=true (the default on Windows) git would rewrite
+# these to CRLF on checkout, and every regeneration would then show up as a
+# modification with no content change - which makes `git status` useless for
+# spotting a real diff in exactly the files that matter.
+model/holdout/reports/*.json  text eol=lf
+model/holdout/REPORT_*.html   text eol=lf
+model/holdout/REPORT_*.md     text eol=lf
+model/proonly/reports/*.json  text eol=lf
+model/proonly/reports/*.txt   text eol=lf
