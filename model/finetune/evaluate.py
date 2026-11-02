@@ -41,9 +41,9 @@ MODEL_DIR = HERE.parent                           # .../model
 ROOT = MODEL_DIR.parent                           # .../lol draft analysis
 PRO_DIR = ROOT / "data" / "pro play"
 
-sys.path.insert(0, str(MODEL_DIR))
-from soloq_model import SoloQPretrainedModel      # noqa: E402
-from soloq_model import attr_matrix_for_config    # noqa: E402
+sys.path.insert(0, str(ROOT))
+from model.pretraining.soloq_model import SoloQPretrainedModel      # noqa: E402
+from model.pretraining.soloq_model import attr_matrix_for_config    # noqa: E402
 
 
 def _load_module_by_path(name, path):

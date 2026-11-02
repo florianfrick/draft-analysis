@@ -14,9 +14,9 @@ import torch
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(HERE.parent))
+sys.path.insert(0, str(HERE.parent.parent))
 
-from soloq_model import SoloQPretrainedModel, CHAMP_PAD_ID, ROLE_FLEX_ID  # noqa: E402
+from model.pretraining.soloq_model import SoloQPretrainedModel, CHAMP_PAD_ID, ROLE_FLEX_ID  # noqa: E402
 from model import PrefixValueModel  # noqa: E402
 import value as V  # noqa: E402
 

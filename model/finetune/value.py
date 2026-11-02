@@ -67,9 +67,9 @@ def _load_module_by_path(name, path):
     return mod
 
 
-sys.path.insert(0, str(MODEL_DIR))
-from soloq_model import SoloQPretrainedModel  # noqa: E402
-from soloq_model import attr_matrix_for_config  # noqa: E402
+sys.path.insert(0, str(ROOT))
+from model.pretraining.soloq_model import SoloQPretrainedModel  # noqa: E402
+from model.pretraining.soloq_model import attr_matrix_for_config  # noqa: E402
 from model import PrefixValueModel  # noqa: E402
 
 PRO_PIPE = _load_module_by_path("pro_pipeline", PRO_DIR / "pipeline.py")

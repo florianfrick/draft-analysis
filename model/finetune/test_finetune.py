@@ -12,9 +12,9 @@ import torch
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(HERE.parent))
+sys.path.insert(0, str(HERE.parent.parent))
 
-from soloq_model import SoloQPretrainedModel  # noqa: E402
+from model.pretraining.soloq_model import SoloQPretrainedModel  # noqa: E402
 from model import ProDraftModel  # noqa: E402
 import train as T  # noqa: E402
 

@@ -21,7 +21,7 @@ draft prediction (patch 16.20).
 
 ### Layout
 
-- `model/soloq_model.py` + `model/README.md` — frozen I/O contract.
+- `model/pretraining/soloq_model.py` + `model/README.md` — frozen I/O contract.
 - `model/pretraining/train.py` — masked champ+role pretraining
   (`--role-only-prob 0.10` teaches P(role|champ)).
 - `model/finetune/` — pro-play Stage 1 finetune (masked heads + win/econ).

@@ -17,7 +17,7 @@ masks, hard CE losses, >= 1 mask per draft, plus an opt-in value path
 (PMA pooling + blue-win head, Sec 4.3) that is off by default.
 
 This file freezes the **tensor shapes, dtypes, vocabs, and invariants**
-the future data pipeline/loader and `soloq_model.py` MUST satisfy.
+the future data pipeline/loader and `pretraining/soloq_model.py` MUST satisfy.
 `tests/test_soloq_contract.py` encodes the same contract as checks.
 
 ## 1. Draft representation
@@ -274,7 +274,7 @@ x = champ_lookup(champ_ids) + role_lookup(role_ids)
 
 Loader builder: return dict in Sec 3 with exact keys/shapes/dtypes (incl. `role_masked`, no `team_ids`). Reuse `tests/test_soloq_contract.py::validate_batch_dict` locally.
 
-Model builder (`soloq_model.py`): implement e.g.
+Model builder (`pretraining/soloq_model.py`): implement e.g.
 
 ```python
 class DraftSlotEmbedding(nn.Module):  # LayerNorm(Embedding(175,D) + Embedding(6,D)), no team embed

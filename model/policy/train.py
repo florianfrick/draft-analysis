@@ -60,11 +60,18 @@ def _load_module_by_path(name, path):
     return mod
 
 
-sys.path.insert(0, str(MODEL_DIR))
-from soloq_model import SoloQPretrainedModel  # noqa: E402
-from soloq_model import attr_matrix_for_config  # noqa: E402
-from soloq_model import load_encoder_state  # noqa: E402
-from model import PolicyValueModel  # noqa: E402
+# Insert the repo ROOT so that `model` resolves to the `model/` namespace
+# package (enabling `from model.pretraining...`), then drop this script's own
+# directory from sys.path. As a top-level entry it contains `model.py`, which
+# would shadow the `model/` package (a regular module always beats a namespace
+# portion) and break `from model.pretraining...`. The class imports below are
+# fully-qualified submodules, not `from model import X`.
+sys.path.insert(0, str(ROOT))
+sys.path[:] = [p for p in sys.path if p != str(HERE)]
+from model.pretraining.soloq_model import SoloQPretrainedModel  # noqa: E402
+from model.pretraining.soloq_model import attr_matrix_for_config  # noqa: E402
+from model.pretraining.soloq_model import load_encoder_state  # noqa: E402
+from model.policy.model import PolicyValueModel  # noqa: E402
 
 PRO_PIPE = _load_module_by_path("pro_pipeline", PRO_DIR / "pipeline.py")
 PRO_DATA = _load_module_by_path("pro_datasets", PRO_DIR / "datasets.py")
@@ -161,31 +168,36 @@ def pick_init_ckpt(spec):
     return best
 
 
-def build_encoder(payload):
+def build_encoder(payload, n_patches=0):
     cfg = payload["config"]
     enc = SoloQPretrainedModel(
         num_champs=cfg["num_champs"], embed_dim=cfg["embed_dim"],
         num_heads=cfg["num_heads"],
         num_intra_layers=cfg["num_intra"],
         num_cross_layers=cfg["num_cross"], dropout=cfg.get("dropout", 0.0),
-        attr_matrix=attr_matrix_for_config(cfg))
+        attr_matrix=attr_matrix_for_config(cfg), n_patches=n_patches)
     # The pretrained checkpoint may carry the opt-in value path (pma.*,
     # win_head.*); the policy builds its own value head, so drop those keys
-    # instead of failing on "unexpected keys".
-    load_encoder_state(enc, payload["model"])
+    # instead of failing on "unexpected keys". The patch table is tolerated
+    # too: the finetune (or soloQ) trunk predates / differs in patch
+    # conditioning and may carry no patch_lookup, while the encoder's own
+    # zero-initialised table is the intended starting point.
+    load_encoder_state(enc, payload["model"], allow_missing_patch=True)
     return enc, cfg
 
 
 def load_pro_rows(args):
     rows, stats = PRO_PIPE.build_rows(limit=args.limit_drafts)
     PRO_PIPE.assign_weights(rows, args.half_life)
-    splits = PRO_PIPE.split_series_by_date(rows)
-    # Validation must sit in the condition test is in. Test is 100% patches
-    # unseen in train; the raw val window is only 81.5%, and the familiar
-    # share is systematically easier, which inflated val and made the
-    # val->test drop look like model degradation.
-    splits["val"], honest_info = EP.patch_honest_val(rows, splits)
-    args.patch_honest_val = honest_info
+    # Within-patch split (train = head of each patch, val/test = tail) so the
+    # patch id is a *seen* input at test - the only split on which a patch
+    # embedding can be measured. Under split_series_by_date every test patch is
+    # unseen and the patch id is UNK at test, which made patch conditioning
+    # untestable and inflated val (val was 81.5% patches-seen vs 100% unseen at
+    # test). `patch_honest_val` is meaningless once val and test share the same
+    # condition, so it is disabled.
+    splits = PRO_PIPE.split_within_patch(rows)
+    args.patch_honest_val = False
     return rows, splits
 
 
@@ -580,11 +592,6 @@ def train(args):
     print("init encoder <- %s (val top5 %.4f)" %
           (ckpt_spec, float(payload.get("metrics", {})
                             .get("champ_top5", -1))))
-    encoder, cfg = build_encoder(payload)
-    embed_dim = cfg["embed_dim"]
-
-    # Data. Loaded before the model so the patch vocabulary can size the
-    # patch embedding.
     rows, splits = load_pro_rows(args)
     print("pro rows %d (train %d / val %d / test %d)" %
           (len(rows), len(splits["train"]), len(splits["val"]),
@@ -601,6 +608,9 @@ def train(args):
         n_patches = len(patch_vocab) + 1
         print("patch conditioning: ON (%d patches %s..%s + UNK)"
               % (len(patch_vocab), patch_vocab[0], patch_vocab[-1]))
+
+    encoder, cfg = build_encoder(payload, n_patches=n_patches)
+    embed_dim = cfg["embed_dim"]
 
     model = PolicyValueModel(
         encoder, embed_dim=embed_dim, state_dim=args.state_dim,
@@ -804,7 +814,7 @@ def train(args):
                       for k, v in rb.items()}
                 with torch.cuda.amp.autocast(enabled=amp):
                     rout = model.encoder(rb)
-                    from soloq_model import NUM_REAL_CHAMPS
+                    from model.pretraining.soloq_model import NUM_REAL_CHAMPS
                     m = rb["is_masked"]
                     if bool(m.any()):
                         cl = F.cross_entropy(
@@ -879,8 +889,9 @@ def train(args):
                       dict(metrics), global_step, extra)
 
     # Test report
-    report = {"protocol": {"patch_honest_val": getattr(args, "patch_honest_val",
-                                                       None),
+    report = {"protocol": {"split": "within-patch (train=head, val/test=tail)",
+                           "patch_honest_val": getattr(args, "patch_honest_val",
+                                                      None),
                            "focus_patch": EP.FOCUS_PATCH,
                            "selection": "rel_top5 (val)",
                            "n_val": len(splits["val"]),

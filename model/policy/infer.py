@@ -46,7 +46,7 @@ for _p in (str(HERE), str(MODEL_DIR)):        # `model` -> policy/model.py
         sys.path.insert(0, _p)
 
 from model import PolicyValueModel                             # noqa: E402
-from soloq_model import (SoloQPretrainedModel, CHAMP_PAD_ID,   # noqa: E402
+from model.pretraining.soloq_model import (SoloQPretrainedModel, CHAMP_PAD_ID,   # noqa: E402
                          ROLE_FLEX_ID, NUM_ROLES, load_encoder_state,
                          attr_matrix_for_config)
 

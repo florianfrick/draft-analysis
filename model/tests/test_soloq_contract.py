@@ -35,7 +35,8 @@ ROLE_KEEP_PROB = 0.1
 BLUE_SLOTS = slice(0, 5)
 RED_SLOTS = slice(5, 10)
 
-MODEL_PATH = pathlib.Path(__file__).resolve().parent.parent / "soloq_model.py"
+MODEL_PATH = (pathlib.Path(__file__).resolve().parent.parent
+              / "pretraining" / "soloq_model.py")
 
 
 def _load_soloq_module():
@@ -46,7 +47,7 @@ def _load_soloq_module():
     try:
         spec.loader.exec_module(mod)
     except Exception as exc:  # noqa: BLE001
-        pytest.skip(f"could not import soloq_model.py: {exc}")
+        pytest.skip(f"could not import model.pretraining.soloq_model as soloq_model.py: {exc}")
     return mod
 
 

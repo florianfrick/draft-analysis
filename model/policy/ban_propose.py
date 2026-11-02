@@ -56,11 +56,11 @@ import torch
 HERE = Path(__file__).resolve().parent
 MODEL_DIR = HERE.parent
 sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(MODEL_DIR))
+sys.path.insert(0, str(MODEL_DIR.parent))
 
 import train as T  # noqa: E402  (model/policy/train.py)
 from model import PolicyValueModel  # noqa: E402
-from soloq_model import (SoloQPretrainedModel, load_encoder_state,  # noqa: E402
+from model.pretraining.soloq_model import (SoloQPretrainedModel, load_encoder_state,  # noqa: E402
                          attr_matrix_for_config, CHAMP_PAD_ID)
 
 PRO_DATA = T.PRO_DATA

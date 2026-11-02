@@ -29,8 +29,8 @@ ROOT = MODEL_DIR.parent                           # .../lol draft analysis
 PRO_DIR = ROOT / "data" / "pro play"
 SOLOQ_PROC_DIR = ROOT / "data" / "solo queue" / "process matchdata"
 
-sys.path.insert(0, str(MODEL_DIR))
-from soloq_model import SoloQPretrainedModel, load_encoder_state  # noqa: E402
+sys.path.insert(0, str(ROOT))
+from model.pretraining.soloq_model import SoloQPretrainedModel, load_encoder_state  # noqa: E402
 
 # Fixed for every run and every arm. The masked eval masks must not depend on
 # the training seed, otherwise the two arms score different slots.
@@ -104,42 +104,6 @@ def build_encoder(num_champs, embed_dim, num_intra, num_cross, num_heads,
         num_champs=num_champs, embed_dim=embed_dim, num_heads=num_heads,
         num_intra_layers=num_intra, num_cross_layers=num_cross,
         dropout=dropout, with_value=with_value, n_patches=n_patches)
-
-
-def checkpoint_patch_space(ckpt, patch_vocab, patch_index, n_patches):
-    """-> (n_patches, patch_index, vocab) honouring the checkpoint's vocabulary.
-
-    A checkpoint's patch ids are *positions* in the vocabulary it was trained
-    with. A run that initialises from a checkpoint with a patch table must use
-    that id space, or the table cannot be loaded: the shapes would not match,
-    and the error would be a size mismatch that says nothing about the cause.
-
-    The run's own vocabulary can legitimately differ from the checkpoint's:
-
-    * `--limit-drafts` subsamples the corpus, so the run sees fewer patches;
-    * `--corpus all` sees more patches than a 2022 checkpoint was trained on.
-
-    Both are handled the same way - the checkpoint's vocabulary wins, and a row
-    whose patch is not in it gets UNK (id 0), which is the honest id for a
-    patch the model has never seen. `patch_to_id` already falls back to UNK.
-
-    When the checkpoint has no patch table there is nothing to inherit, and
-    the run's own values stand: the table is created fresh and
-    zero-initialised.
-
-    This is a no-op for a run whose corpus and limits match the checkpoint's,
-    which is every recorded run.
-    """
-    ckpt_vocab = list(ckpt.get("patch_vocab") or [])
-    ckpt_rows = int((ckpt.get("config") or {}).get("n_patches", 0))
-    if not ckpt_rows:
-        return n_patches, patch_index, list(patch_vocab)
-    if len(ckpt_vocab) + 1 != ckpt_rows:
-        raise RuntimeError(
-            "init checkpoint's patch table has %d rows but its vocabulary "
-            "holds %d patches; the two must agree or the ids mean nothing"
-            % (ckpt_rows, len(ckpt_vocab)))
-    return ckpt_rows, PRO_DATA.patch_index_from_vocab(ckpt_vocab), ckpt_vocab
 
 
 def encoder_from_checkpoint(path, n_patches, device="cpu"):

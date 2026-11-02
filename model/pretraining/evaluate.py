@@ -25,15 +25,15 @@ from torch.utils.data import DataLoader
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(HERE.parent))                  # soloq_model
+sys.path.insert(0, str(HERE.parent.parent))                  # soloq_model
 sys.path.insert(0, str(HERE.parent.parent / "data" /
                       "solo queue" / "process matchdata"))
 
 import pipeline as P                    # noqa: E402
 import train as T                       # noqa: E402  (reuses loaders/eval)
-from soloq_model import SoloQPretrainedModel  # noqa: E402
-from soloq_model import attr_matrix_for_config  # noqa: E402
-from soloq_model import load_encoder_state  # noqa: E402
+from model.pretraining.soloq_model import SoloQPretrainedModel  # noqa: E402
+from model.pretraining.soloq_model import attr_matrix_for_config  # noqa: E402
+from model.pretraining.soloq_model import load_encoder_state  # noqa: E402
 
 ROLE_ROWS = ["TOP", "JGL", "MID", "ADC", "SUP"]
 

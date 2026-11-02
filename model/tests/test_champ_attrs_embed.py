@@ -26,7 +26,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 MODEL = HERE.parent
 sys.path.insert(0, str(MODEL))
 
-from soloq_model import (DraftSlotEmbedding, NUM_REAL_CHAMPS,  # noqa: E402
+from model.pretraining.soloq_model import (DraftSlotEmbedding, NUM_REAL_CHAMPS,  # noqa: E402
                          SoloQPretrainedModel, attr_matrix_for_config,
                          load_champ_attr_matrix, load_encoder_state)
 

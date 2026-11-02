@@ -59,8 +59,8 @@ MODEL_DIR = HERE.parent                           # .../model
 ROOT = MODEL_DIR.parent                           # .../lol draft analysis
 PRO_DIR = ROOT / "data" / "pro play"
 
-sys.path.insert(0, str(MODEL_DIR))
-from soloq_model import (CHAMP_MASK_ID, CHAMP_PAD_ID, ROLE_FLEX_ID,  # noqa: E402
+sys.path.insert(0, str(ROOT))
+from model.pretraining.soloq_model import (CHAMP_MASK_ID, CHAMP_PAD_ID, ROLE_FLEX_ID,  # noqa: E402
                          SoloQPretrainedModel, attr_matrix_for_config,
                          load_encoder_state)
 
@@ -112,12 +112,19 @@ POLICY_MODELS = [
      "model/policy/ckpt/run_20261025_000606_ablF-stage1/best_policy.pt"),
     ("pro-patch-s0", "pro-only +patch", "model/proonly/ckpt/run_20261101_183519_p-patch-s0/best.pt"),
     ("pro-nopatch-s0", "pro-only -patch", "model/proonly/ckpt/run_20261101_183522_p-nopatch-s0/best.pt"),
+    # Redesigned pipeline (within-patch split + patch embedding), re-trained
+    # 2026-11-02 to match the pro-only protocol for a fair head-to-head.
+    ("policy-patch-s0", "soloQ->pro +patch",
+     "model/policy/ckpt/run_20261102_221226_p-patch-s0/best_policy.pt"),
 ]
 
 MASKED_MODELS = [
     ("soloQ-pretrain", "soloQ only", "model/pretraining/ckpt/run_20261029_153912_v2-D512-p8/best.pt"),
     ("pro-finetune", "soloQ->pro (kept)", "model/finetune/ckpt/run_20261017_185016_stage1-full/best_mask.pt"),
     ("pro-patch-s0", "pro-only +patch", "model/proonly/ckpt/run_20261101_182415_m-patch-s0/best.pt"),
+    # Redesigned pipeline (within-patch split + patch embedding).
+    ("finetune-patch-s0", "soloQ->pro +patch",
+     "model/finetune/ckpt/run_20261102_220121_f-patch-s0/best_mask.pt"),
 ]
 
 VALUE_MODELS = [
@@ -151,6 +158,17 @@ def build_encoder(blob, n_patches=None):
     return enc
 
 
+def patch_vocab_of(blob):
+    # Tolerates both conventions: finetune stores ``patch_vocab`` at the
+    # top level of the payload, while the policy stage nests it inside
+    # ``config``. Either way we want the dict, never None (None would make
+    # every patch score UNK and hide the patch conditioning we measure).
+    pv = blob.get("patch_vocab")
+    if pv is None:
+        pv = (blob.get("config") or {}).get("patch_vocab")
+    return PRO_DATA.patch_index_from_vocab(pv)
+
+
 def load_policy(path):
     blob = torch.load(str(path), map_location="cpu", weights_only=False)
     cfg = blob["config"]
@@ -163,14 +181,14 @@ def load_policy(path):
         n_patches=n_p, with_value=with_value)
     model.load_state_dict(blob["model"])
     model.eval()
-    return model, PRO_DATA.patch_index_from_vocab(blob.get("patch_vocab")), cfg
+    return model, patch_vocab_of(blob), cfg
 
 
 def load_masked(path):
     blob = torch.load(str(path), map_location="cpu", weights_only=False)
     enc = build_encoder(blob)
     enc.eval()
-    return enc, PRO_DATA.patch_index_from_vocab(blob.get("patch_vocab")), blob["config"]
+    return enc, patch_vocab_of(blob), blob["config"]
 
 
 def load_value(path, kind):

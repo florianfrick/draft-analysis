@@ -73,10 +73,10 @@ HERE = Path(__file__).resolve().parent           # .../model/pretraining
 ROOT = HERE.parent.parent                        # .../lol draft analysis
 PROC_DIR = ROOT / "data" / "solo queue" / "process matchdata"
 sys.path.insert(0, str(PROC_DIR))
-sys.path.insert(0, str(HERE.parent))             # for soloq_model
+sys.path.insert(0, str(ROOT))             # for soloq_model
 
 import pipeline as P                     # noqa: E402
-from soloq_model import (SoloQPretrainedModel,  # noqa: E402
+from model.pretraining.soloq_model import (SoloQPretrainedModel,  # noqa: E402
                          load_champ_attr_matrix, load_encoder_state)
 
 CKPT_ROOT = HERE / "ckpt"

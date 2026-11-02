@@ -25,7 +25,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 MODEL = HERE.parent
 sys.path.insert(0, str(MODEL))
 
-from soloq_model import (DraftSlotEmbedding, SoloQPretrainedModel,  # noqa: E402
+from model.pretraining.soloq_model import (DraftSlotEmbedding, SoloQPretrainedModel,  # noqa: E402
                          load_encoder_state)
 
 C = 20            # toy champion pool

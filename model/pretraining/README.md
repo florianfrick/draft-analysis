@@ -1,6 +1,6 @@
 # SoloQ Pretraining
 
-Masked-draft pretraining loop for `../soloq_model.py`. Contract:
+Masked-draft pretraining loop for `soloq_model.py`. Contract:
 `../README.md`; data: `../../data/solo queue/process matchdata/pipeline.py`.
 
 ## Run

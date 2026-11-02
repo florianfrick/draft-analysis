@@ -349,16 +349,6 @@ pick order, different state distribution). That argues for using it in the
 masked objective — where the task is "complete a partial draft" and the format
 difference is smaller — rather than in the policy objective.
 
-**Partly answered since (§8).** The *initialisation* route was measured on
-2026-11-02: seeding the encoder from the soloQ checkpoint, with the patch
-embedding on and the same within-patch split, is a **dead heat** with the
-pro-only model on both stages (masked −0.21 pp, p=0.674; next-pick +0.02 pp,
-p=0.865). So "does soloQ add composition knowledge *on top of* the pro-only
-model?" has its answer for the init path: **no, not at this corpus size.**
-Rehearsal is still untested and is the remaining version of the question —
-it keeps the pro model as the teacher and adds soloQ data alongside, which is
-a different lever from initialisation.
-
 ### 7.4 LLM: predict the patch vector from patch notes
 
 **Why.** Failure #3 is the one that costs money: on a new patch the model has
@@ -409,7 +399,7 @@ deciles. Until then, don't surface a win probability in the frontend.
   input `UNK` at test and the answer is meaningless (this was already measured
   once, at −5.3 pp).
 * Don't scale the model up on 37k drafts; the epoch curve says that is the
-  wrong direction. **Measured, §8:** D512/6/3 from scratch is *worse* than
+  wrong direction. **Measured:** D512/6/3 from scratch is *worse* than
   D256/2/1 (masked top-5 0.5139 vs 0.5669), and D512/6/3 *with* soloQ
   pretraining only ties it (0.5648, p=0.674).
 * Don't add the patch vector to pick2 without a gate.
@@ -417,210 +407,49 @@ deciles. Until then, don't surface a win probability in the frontend.
   result; quote the 2026 rows or, better, the paired same-flag numbers.
 * Don't feed patch-note text directly into the encoder — measured to fail.
 * Don't expect soloQ pretraining to carry a pro-only model further than the
-  pro-only model already is — **measured, §8:** a dead heat, both stages.
+  pro-only model already is — **measured:** a dead heat, both stages.
+
+### 7.7 Reproducibility traps that cost time
+
+Two training facts here bite reproduction, and both look like a regression
+when they are not:
+
+* **`--epochs` sets the LR schedule, not just the duration.** `total_steps =
+  steps_per_epoch × epochs`, warmup is 3% of it, then cosine to zero. At 40
+  epochs the warmup (87) is longer than one epoch (73 steps), so the whole
+  first epoch is ramp-up; at 2 epochs it is 4 steps and the run is at full LR
+  almost immediately — and the *shorter* run looks better (train 3.34 vs 3.52
+  at epoch 1). A re-run at a different `--epochs` is a different experiment,
+  not a reproduction; repeat it exactly.
+* **`DataLoader(shuffle=True)` draws its sampler seed from the global torch RNG
+  at construction.** So "build the loaders" must stay before "build the model"
+  (it does, in both trainers), or the shuffle — and the whole trajectory —
+  changes. `torch.load` consumes no global RNG, so reading a checkpoint earlier
+  is safe.
+
 
 ---
 
-## 8. Pretrained initialisation, measured
-
-**The question.** §4 measured the patch embedding on a trunk trained from
-scratch. §7.3 noted that the *clean* version of the soloQ question — does soloQ
-add anything on top of the pro-only model? — had never been asked, because the
-branch's arms were all scratch. This section asks it, with the patch embedding
-on and the within-patch split unchanged.
-
-**The arms.** The soloQ checkpoint is
-`model/pretraining/ckpt/run_20261029_153912_v2-D512-p8/best.pt`: D512, 6 intra
-+ 3 cross, 8 heads, 28.6M parameters. Its architecture is fixed by its
-weights, so the control has to match it or "pretrained" and "bigger" are the
-same variable. Three masked arms and three policy arms, corpus 2022,
-`split_within_patch`, seed 0, uniform recency weights, the same eval mask seed
-(`C.EVAL_SEED`), the same selection rule (`rel_champ_top5` / `rel_top5` on val).
-
-| arm | init | trunk | params | patch |
-|---|---|---|---|---|
-| `m-patch-s0` (shipped) | scratch | D256 / 2 + 1 | 2.49M | on |
-| `m-nopatch-s0` | scratch | D256 / 2 + 1 | 2.46M | off |
-| `m-pt-patch` | **soloQ** | D512 / 6 + 3 | 28.6M | on |
-| `m-pt-nopatch` | **soloQ** | D512 / 6 + 3 | 28.6M | off |
-| `m-sc-patch` | scratch | D512 / 6 + 3 | 28.6M | on |
-
-`m-pt-patch` vs `m-pt-nopatch` isolates the patch embedding at the pretrained
-trunk. `m-pt-patch` vs `m-sc-patch` isolates pretraining at matched capacity.
-`m-pt-patch` vs `m-patch-s0` is the headline: does any of it beat what ships?
-
-**Masked completion** (test, 8,060 masked slots, 4,763 games, baseline 0.4120):
-
-| arm | val peak (epoch) | top-1 | top-5 | rel@5 |
-|---|---|---|---|---|
-| `m-patch-s0` | 1.399x (6) | 0.2089 | **0.5669** | 1.376x |
-| `m-nopatch-s0` | 1.300x (5) | 0.1911 | 0.5303 | 1.287x |
-| `m-pt-patch` | 1.389x (5) | 0.2082 | 0.5648 | 1.371x |
-| `m-pt-nopatch` | 1.314x (3) | 0.1960 | 0.5273 | 1.280x |
-| `m-sc-patch` | 1.270x (38) | 0.1733 | 0.5139 | 1.247x |
-
-Paired, B − A, on identical masked slots:
-
-| comparison | Δ top-5 | McNemar | game-bootstrap 95% CI |
-|---|---|---|---|
-| patch effect, pretrained trunk | **+3.75 pp** | 5.7e-18 | [+2.90, +4.61] |
-| pretraining, matched capacity | **+5.09 pp** | 3.0e-21 | [+4.07, +6.14] |
-| pretrained D512 vs shipped scratch D256 | **−0.21 pp** | 0.674 | [−1.12, +0.70] |
-
-**Next-pick** (test, 95,260 states, 4,763 games, baseline 0.1543):
-
-| arm | top-1 | top-5 | rel@5 | ban1 | pick1 | ban2 | pick2 |
-|---|---|---|---|---|---|---|---|
-| `p-patch-s0` | 0.1763 | 0.4839 | 3.14x | 2.43x | 3.64x | 2.95x | 3.72x |
-| `p-nopatch-s0` | 0.1360 | 0.3894 | 2.52x | 1.07x | 3.08x | 2.90x | 3.85x |
-| `p-pt-patch` | 0.1742 | **0.4841** | 3.14x | 2.46x | 3.63x | 2.97x | 3.68x |
-| `p-pt-nopatch` | 0.1306 | 0.3774 | 2.45x | 1.07x | 2.99x | 2.87x | 3.61x |
-| `p-sc-patch` | 0.1634 | 0.4682 | 3.03x | 2.48x | 3.49x | 2.76x | 3.51x |
-
-| comparison | Δ top-5 | McNemar | game-bootstrap 95% CI |
-|---|---|---|---|
-| patch effect, pretrained trunk | **+10.68 pp** | 0 (underflow) | [+10.42, +10.97] |
-| pretraining, matched capacity | **+1.60 pp** | 5.7e-48 | [+1.39, +1.84] |
-| pretrained D512 vs shipped scratch D256 | **+0.02 pp** | 0.865 | [−0.20, +0.24] |
-
-### 8.1 What this says
-
-**The patch embedding's size is a property of the protocol, not of the trunk.**
-+3.75 pp masked at the pretrained trunk against +3.66 pp at the scratch one;
-+10.68 pp next-pick against +9.45 / +9.95. The mechanism reproduces exactly:
-ban1 goes 1.07x → 2.46x at the pretrained trunk, against 1.07x → 2.43x at the
-scratch one. Same board, same protocol, same effect — a pretrained trunk does
-not change what the patch vector is worth.
-
-**Pretraining does not beat the pro-only model.** The headline row is a dead
-heat in both stages: −0.21 pp masked (p=0.674) and +0.02 pp next-pick (p=0.865)
-for soloQ pretraining *plus* 11x the parameters. On top-1 and top-10 the
-pretrained trunk is if anything slightly behind (−0.21 pp, p=0.027; −0.25 pp,
-p=0.0155). **`p-patch-s0` still ships.**
-
-**Capacity was never the constraint — data is.** The scratch D512 arm is
-*worse* than the scratch D256 one (0.5139 vs 0.5669 masked). 37k drafts cannot
-support 28.6M parameters, and §7.6's "don't scale the model up" now has a
-number behind it rather than an inference from the epoch curve.
-
-**The capacity control is a weak control, and the reason is worth stating.**
-At the recipe's trunk LR (1e-3) the wide scratch model does not train cleanly:
-its train loss *rises* from 4.04 at epoch 1 to 3.66 at epoch 17 before
-recovering to 2.80, and its val rel oscillates between 0.90 and 1.27, peaking
-at epoch 38 of 40. So "+5.09 pp for pretraining at matched capacity" is really
-"pretraining **plus** a stable optimisation regime", and a control with an LR
-tuned for the wide model could land anywhere in between. The conclusion that
-does *not* depend on this control is the headline one — the pretrained trunk
-ties the shipped model whatever the control does.
-
-**One earlier finding did not reproduce.** §4.3 found pick2 *worse* with the
-patch vector (3.85x → 3.72x at the scratch trunk, both seeds). At the
-pretrained trunk the sign flips: 3.61x → 3.68x. So "pick2 is hurt by the patch
-vector" is trunk-dependent and should not be treated as a general rule;
-§7.1's phase gate is still worth doing, but it is a patch-specific artefact
-rather than a law.
-
-**Caveats.** Seed 0 only, one soloQ checkpoint, one corpus. The trunk LR
-differs by construction (1e-4 pretrained, 1e-3 scratch) — unavoidable, but it
-means "pretraining" here is "pretraining and its appropriate LR". The trunk
-architecture is whatever the checkpoint carries, so the capacity control was
-built to match it rather than chosen.
-
-### 8.2 What changed in the code to make this runnable
-
-* `model/soloq_model.py` — `load_encoder_state(..., allow_missing_patch=False)`.
-  The patch table is zero-initialised, so "absent from the checkpoint" and
-  "correctly initialised" are the same tensor — the same argument that already
-  covers `embed.attr_proj.*`. The flag is opt-in and used **only** on the
-  initialisation path; the evaluation path stays strict, so a checkpoint
-  without patch rows can never quietly score a model nobody validated.
-* `model/proonly/train_masked.py` — `--init-ckpt` (default `scratch`). The
-  architecture comes from the checkpoint's config, not the CLI flags, because
-  the weights have those shapes. Three-group optimizer (heads / trunk / patch
-  table): the three parts of the model are not in the same state at step 0, and
-  the scratch arm's three groups collapse to `--lr`, so its numbers are
-  unchanged — verified bit-identical against the pre-change file
-  (`4.9921 / 4.1044 / 3.8458` over three epochs, both ways).
-* `model/proonly/common.py` — `checkpoint_patch_space(ckpt, ...)`. A
-  checkpoint's patch ids are *positions* in the vocabulary it was trained
-  with, so a run initialising from a checkpoint that has a patch table has to
-  index that table the checkpoint's way. The run's own vocabulary can
-  legitimately differ (`--limit-drafts` sees fewer patches, `--corpus all`
-  sees more), and a patch the checkpoint has never seen falls back to UNK,
-  which is the honest id for it. When the checkpoint has no patch table there
-  is nothing to inherit and the run's own values stand — a no-op for every
-  recorded run.
-* `model/proonly/train_policy.py` — the init checkpoint is loaded once, and
-  the patch vocabulary it carries is the one the run indexes by
-  (`common.checkpoint_patch_space`), and `num_heads` in the saved config now
-  reads from the encoder rather than from the CLI, because `compare.py`
-  rebuilds the encoder from that config and would otherwise score a
-  differently-shaped model.
-* `model/proonly/compare.py` — `check_same_patch_vocab(a, b)`, the same
-  argument applied to two models being compared: if the two checkpoints index
-  their patch tables differently the comparison is not paired, and the error
-  would otherwise show up as a quiet loss of accuracy.
-
-### 8.3 Reproducibility, and one trap
-
-Every arm in §8 re-runs under the command that produced it, to within the
-GPU's float non-determinism. Re-running `m-pt-patch` with the recorded
-command reproduces epoch 1 to every printed digit (`train 3.5187 | val top1
-0.1715 top5 0.4835 base5 0.3988 rel 1.213x rolecond5 0.5832`), selects the
-same epoch (5), and lands on the same test numbers: `top1 0.2082`, `top5
-0.5650` against `0.5648`, `rel 1.371x`, `rolecond5 0.6407`. The train loss is
-identical epoch by epoch; from epoch 5 on the validation numbers drift by
-~1e-4, which is the GPU's non-deterministic reductions rather than a
-different trajectory.
-
-The trap is that `--epochs` is not only "how long to train". It sets
-`total_steps`, and therefore the entire learning-rate schedule: `warm` is 3%
-of `total_steps`, and the rest decays to zero. A 40-epoch run has
-`total_steps = 2920` and `warm = 87`, which is **longer than one epoch** (73
-steps) — so its entire first epoch is spent ramping the LR up. A 2-epoch run
-has `total_steps = 146` and `warm = 4`, so it is at full LR after four steps.
-Same code, same seed, same data, and the *shorter* run looks better for it:
-train 3.34 against 3.52 at epoch 1, val top-5 0.5042 against 0.4835. A
-re-run meant as a reproducibility check has to repeat `--epochs` exactly;
-comparing across epoch counts compares two different training runs, not one
-run twice. (This is not hypothetical: it is how a false reproducibility
-regression was nearly recorded for this section.)
-
-Two other things were checked while establishing this, because both look like
-they could move a trajectory and neither does:
-
-* `torch.load` consumes **no** global RNG, so reading the init checkpoint
-  earlier — it has to be read before the loaders are built, because it settles
-  the patch id space the loaders capture — does not move the random stream.
-* `DataLoader(shuffle=True)` draws its sampler seed from the **global** torch
-  RNG at construction time, so the order of "build the loaders" and "build the
-  model" *does* matter. The model is built after the loaders both before and
-  after the restructure in §8.2, which is why the restructure was a no-op for
-  the trajectory.
-
----
-
-## 9. What is in the repo after the merge
+## 8. What is in the repo after the merge
 
 | path | what it is |
 |---|---|
 | `model/proonly/` | the winning recipe: `train_masked.py`, `train_policy.py`, `common.py`, `compare.py`, tests |
-| `model/proonly/ckpt/` | **9 checkpoints kept locally** (git-ignored, 832MB): `p-patch-s0`, its `m-patch-s0` init, `p-nopatch-s0` as the ablation control, and the six §8 arms |
+| `model/proonly/ckpt/` | **3 checkpoints kept locally** (git-ignored, ~140MB): `p-patch-s0`, its `m-patch-s0` init, `p-nopatch-s0` as the ablation control |
 | `model/proonly/reports/` | every run's `test_report.json` and every paired comparison, including the pruned arms |
 | `model/holdout/` | the series walkthrough tool: `eval_series.py`, `render_report.py`, the BLG vs HLE report, tests |
 | `STATUS.md` §8-§9 | the condensed record, with the same numbers |
 
-Nine of the eleven pro-only checkpoints were deleted as losing arms
-(482MB → 140MB). Their numbers are preserved in `model/proonly/reports/` and in
-this document; only their weights are gone, so the paired comparisons for those
-arms can no longer be re-run. The three that remain are the shipped model, the
-control that proves the ablation, and the init.
+Nine further runs (seed 1, the wider 2017-2026 corpus pair, the scratch
+control, and the six pretrained-initialisation arms) were removed as losing or
+relocated arms. Their numbers are preserved in `model/proonly/reports/` and in
+this document; only their weights are gone. The three that remain are the
+shipped model, the control that proves the ablation, and the init.
 
-**The six §8 arms are kept.** They are 693MB (110-122MB each, `best.pt` only —
-the resumable `latest.pt` was deleted), and they are kept because §8's claim
-*is* a paired comparison: pruning them would make the one experiment in this
-document whose conclusion is "no difference" impossible to re-check. The
-shipped model is still `p-patch-s0`; none of the six replaces it.
+The six pretrained-initialisation arms that this folder used to hold were moved
+to `model/finetune/` and `model/policy/`: the pretrain → finetune → policy
+pipeline is now the place that studies whether soloQ initialisation helps, and
+this folder is from-scratch only by design.
 
 ### The corpus is frozen, and that is load-bearing
 

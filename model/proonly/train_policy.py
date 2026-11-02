@@ -205,12 +205,6 @@ def train(args):
     rows, splits, patch_vocab, patch_index = C.load_split(args)
     num_champs = 173
     n_patches = (len(patch_vocab) + 1) if args.patch_emb else 0
-    # The vocabulary the patch ids refer to. A checkpoint's ids are positions
-    # in the vocabulary *it* was trained with, so a run initialising from a
-    # checkpoint with a patch table indexes that table the checkpoint's way -
-    # see `common.checkpoint_patch_space`. The checkpoint stores this
-    # vocabulary, so the next stage reads the ids back the same way.
-    patch_vocab_used = list(patch_vocab)
 
     # ---- encoder
     if args.init_ckpt == "scratch":
@@ -220,23 +214,14 @@ def train(args):
         lr_enc = args.lr if args.lr_enc is None else args.lr_enc
         print("encoder: scratch (%d patch rows)" % n_patches)
     else:
-        ckpt = torch.load(args.init_ckpt, map_location="cpu",
-                          weights_only=False)
-        # The patch ids in this checkpoint are positions in *its* vocabulary,
-        # and the table's shape is that vocabulary's length. A run whose own
-        # vocabulary differs - `--limit-drafts` sees fewer patches, `--corpus
-        # all` sees more - has to index the table the checkpoint's way, or the
-        # table cannot be loaded at all. A patch the checkpoint has never seen
-        # falls back to UNK, which is the honest id for it.
-        n_patches, patch_index, patch_vocab_used = C.checkpoint_patch_space(
-            ckpt, patch_vocab, patch_index, n_patches)
         encoder, cfg, info = C.encoder_from_checkpoint(args.init_ckpt,
                                                        n_patches, device)
         encoder = encoder.to(device)
         lr_enc = (1e-4 if args.lr_enc is None else args.lr_enc)
         print("encoder: %s (val rel_top5 %.3f, patch %s)"
               % (args.init_ckpt,
-                 float(ckpt.get("metrics", {})
+                 float(torch.load(args.init_ckpt, map_location="cpu",
+                                  weights_only=False).get("metrics", {})
                        .get("rel_champ_top5", float("nan"))),
                  "ON" if n_patches else "OFF"))
         if info["missing"]:
@@ -298,14 +283,9 @@ def train(args):
                "embed_dim": encoder.embed.champ_lookup.embedding_dim,
                "num_intra": len(encoder.intra_team.layers),
                "num_cross": len(encoder.cross_team),
-               # From the encoder, not from --num-heads: the trunk may have
-               # come from a checkpoint whose head count differs from the
-               # default. compare.py rebuilds the encoder from this config,
-               # so a wrong number here would score a different model.
-               "num_heads": encoder.intra_team.layers[0].self_attn.num_heads,
-               "dropout": args.dropout, "state_dim": args.state_dim,
-               "n_patches": n_patches, "n_econ": 0, "with_value": False,
-               "attr_dim": 0}
+               "num_heads": args.num_heads, "dropout": args.dropout,
+               "state_dim": args.state_dim, "n_patches": n_patches,
+               "n_econ": 0, "with_value": False, "attr_dim": 0}
 
     best = -1.0
     global_step = 0
@@ -356,9 +336,9 @@ def train(args):
                 save_ckpt(run_dir / "best.pt", model, args, cfg_out,
                           {k: v for k, v in va.items()
                            if k not in ("phase", "move")} | {"epoch": epoch},
-                          global_step, epoch, patch_vocab_used)
+                          global_step, epoch, patch_vocab)
         save_ckpt(run_dir / "latest.pt", model, args, cfg_out, {"epoch": epoch},
-                  global_step, epoch, patch_vocab_used,
+                  global_step, epoch, patch_vocab,
                   resume={"opt": opt.state_dict(), "sched": sched.state_dict(),
                           "step": global_step, "epoch": epoch, "best": best,
                           "run_dir": str(run_dir)})

@@ -3200,6 +3200,896 @@
      "mean_rank": 1.5
     }
    }
+  },
+  "policy-patch-s0": {
+   "family": "soloQ->pro +patch",
+   "path": "model/policy/ckpt/run_20261102_221226_p-patch-s0/best_policy.pt",
+   "n_patches": 107,
+   "games": [
+    {
+     "gameid": "LOLTMNT02_486564",
+     "steps": [
+      {
+       "move": 0,
+       "rank": 19,
+       "top1": 51,
+       "top1_name": "Nocturne",
+       "top5": [
+        51,
+        135,
+        68,
+        130,
+        160
+       ],
+       "top5_names": [
+        "Nocturne",
+        "Vi",
+        "Poppy",
+        "Lucian",
+        "Locke"
+       ],
+       "prob": 0.010903575457632542
+      },
+      {
+       "move": 1,
+       "rank": 27,
+       "top1": 51,
+       "top1_name": "Nocturne",
+       "top5": [
+        51,
+        62,
+        130,
+        1,
+        135
+       ],
+       "top5_names": [
+        "Nocturne",
+        "Cassiopeia",
+        "Lucian",
+        "Olaf",
+        "Vi"
+       ],
+       "prob": 0.0029884600080549717
+      },
+      {
+       "move": 2,
+       "rank": 6,
+       "top1": 135,
+       "top1_name": "Vi",
+       "top5": [
+        135,
+        160,
+        71,
+        74,
+        54
+       ],
+       "top5_names": [
+        "Vi",
+        "Locke",
+        "Ezreal",
+        "Akali",
+        "Jarvan IV"
+       ],
+       "prob": 0.04448651894927025
+      },
+      {
+       "move": 3,
+       "rank": 0,
+       "top1": 135,
+       "top1_name": "Vi",
+       "top5": [
+        135,
+        51,
+        62,
+        47,
+        145
+       ],
+       "top5_names": [
+        "Vi",
+        "Nocturne",
+        "Cassiopeia",
+        "Caitlyn",
+        "Kalista"
+       ],
+       "prob": 0.16732925176620483
+      },
+      {
+       "move": 4,
+       "rank": 15,
+       "top1": 51,
+       "top1_name": "Nocturne",
+       "top5": [
+        51,
+        59,
+        1,
+        97,
+        47
+       ],
+       "top5_names": [
+        "Nocturne",
+        "Lee Sin",
+        "Olaf",
+        "Lulu",
+        "Caitlyn"
+       ],
+       "prob": 0.025943461805582047
+      },
+      {
+       "move": 5,
+       "rank": 1,
+       "top1": 59,
+       "top1_name": "Lee Sin",
+       "top5": [
+        59,
+        51,
+        47,
+        62,
+        97
+       ],
+       "top5_names": [
+        "Lee Sin",
+        "Nocturne",
+        "Caitlyn",
+        "Cassiopeia",
+        "Lulu"
+       ],
+       "prob": 0.10633772611618042
+      },
+      {
+       "move": 6,
+       "rank": 2,
+       "top1": 59,
+       "top1_name": "Lee Sin",
+       "top5": [
+        59,
+        61,
+        62,
+        12,
+        54
+       ],
+       "top5_names": [
+        "Lee Sin",
+        "Rumble",
+        "Cassiopeia",
+        "Ryze",
+        "Jarvan IV"
+       ],
+       "prob": 0.12416598945856094
+      },
+      {
+       "move": 7,
+       "rank": 2,
+       "top1": 54,
+       "top1_name": "Jarvan IV",
+       "top5": [
+        54,
+        59,
+        56,
+        74,
+        71
+       ],
+       "top5_names": [
+        "Jarvan IV",
+        "Lee Sin",
+        "Orianna",
+        "Akali",
+        "Ezreal"
+       ],
+       "prob": 0.0011850950540974736
+      },
+      {
+       "move": 8,
+       "rank": 40,
+       "top1": 93,
+       "top1_name": "Viktor",
+       "top5": [
+        93,
+        17,
+        159,
+        150,
+        54
+       ],
+       "top5_names": [
+        "Viktor",
+        "Tristana",
+        "Yunara",
+        "Sylas",
+        "Jarvan IV"
+       ],
+       "prob": 0.00019962691294495016
+      },
+      {
+       "move": 9,
+       "rank": 22,
+       "top1": 47,
+       "top1_name": "Caitlyn",
+       "top5": [
+        47,
+        159,
+        122,
+        148,
+        17
+       ],
+       "top5_names": [
+        "Caitlyn",
+        "Yunara",
+        "Jhin",
+        "Xayah",
+        "Tristana"
+       ],
+       "prob": 0.0009389783954247832
+      },
+      {
+       "move": 10,
+       "rank": 54,
+       "top1": 122,
+       "top1_name": "Jhin",
+       "top5": [
+        122,
+        77,
+        96,
+        2,
+        28
+       ],
+       "top5_names": [
+        "Jhin",
+        "Leona",
+        "Ziggs",
+        "Galio",
+        "Twitch"
+       ],
+       "prob": 0.0003040454175788909
+      },
+      {
+       "move": 11,
+       "rank": 13,
+       "top1": 47,
+       "top1_name": "Caitlyn",
+       "top5": [
+        47,
+        122,
+        17,
+        20,
+        96
+       ],
+       "top5_names": [
+        "Caitlyn",
+        "Jhin",
+        "Tristana",
+        "Miss Fortune",
+        "Ziggs"
+       ],
+       "prob": 0.0003149144467897713
+      },
+      {
+       "move": 12,
+       "rank": 2,
+       "top1": 47,
+       "top1_name": "Caitlyn",
+       "top5": [
+        47,
+        20,
+        122,
+        17,
+        96
+       ],
+       "top5_names": [
+        "Caitlyn",
+        "Miss Fortune",
+        "Jhin",
+        "Tristana",
+        "Ziggs"
+       ],
+       "prob": 0.12309128791093826
+      },
+      {
+       "move": 13,
+       "rank": 30,
+       "top1": 14,
+       "top1_name": "Sivir",
+       "top5": [
+        14,
+        22,
+        96,
+        125,
+        111
+       ],
+       "top5_names": [
+        "Sivir",
+        "Tryndamere",
+        "Ziggs",
+        "Jinx",
+        "Kai'Sa"
+       ],
+       "prob": 0.0004988242289982736
+      },
+      {
+       "move": 14,
+       "rank": 0,
+       "top1": 14,
+       "top1_name": "Sivir",
+       "top5": [
+        14,
+        22,
+        96,
+        20,
+        98
+       ],
+       "top5_names": [
+        "Sivir",
+        "Tryndamere",
+        "Ziggs",
+        "Miss Fortune",
+        "Draven"
+       ],
+       "prob": 0.43035128712654114
+      },
+      {
+       "move": 15,
+       "rank": 10,
+       "top1": 22,
+       "top1_name": "Tryndamere",
+       "top5": [
+        22,
+        96,
+        20,
+        1,
+        113
+       ],
+       "top5_names": [
+        "Tryndamere",
+        "Ziggs",
+        "Miss Fortune",
+        "Olaf",
+        "Gnar"
+       ],
+       "prob": 0.0015590304974466562
+      },
+      {
+       "move": 16,
+       "rank": 20,
+       "top1": 20,
+       "top1_name": "Miss Fortune",
+       "top5": [
+        20,
+        159,
+        98,
+        124,
+        111
+       ],
+       "top5_names": [
+        "Miss Fortune",
+        "Yunara",
+        "Draven",
+        "Zeri",
+        "Kai'Sa"
+       ],
+       "prob": 0.0003807204484473914
+      },
+      {
+       "move": 17,
+       "rank": 12,
+       "top1": 159,
+       "top1_name": "Yunara",
+       "top5": [
+        159,
+        98,
+        61,
+        113,
+        17
+       ],
+       "top5_names": [
+        "Yunara",
+        "Draven",
+        "Rumble",
+        "Gnar",
+        "Tristana"
+       ],
+       "prob": 7.779251609463245e-05
+      },
+      {
+       "move": 18,
+       "rank": 0,
+       "top1": 61,
+       "top1_name": "Rumble",
+       "top5": [
+        61,
+        113,
+        53,
+        167,
+        149
+       ],
+       "top5_names": [
+        "Rumble",
+        "Gnar",
+        "Renekton",
+        "K'Sante",
+        "Ornn"
+       ],
+       "prob": 0.9098920822143555
+      },
+      {
+       "move": 19,
+       "rank": 0,
+       "top1": 113,
+       "top1_name": "Gnar",
+       "top5": [
+        113,
+        167,
+        149,
+        170,
+        136
+       ],
+       "top5_names": [
+        "Gnar",
+        "K'Sante",
+        "Ornn",
+        "Zaahen",
+        "Aatrox"
+       ],
+       "prob": 0.7275016903877258
+      }
+     ]
+    },
+    {
+     "gameid": "LOLTMNT02_486571",
+     "steps": [
+      {
+       "move": 0,
+       "rank": 24,
+       "top1": 51,
+       "top1_name": "Nocturne",
+       "top5": [
+        51,
+        135,
+        68,
+        130,
+        160
+       ],
+       "top5_names": [
+        "Nocturne",
+        "Vi",
+        "Poppy",
+        "Lucian",
+        "Locke"
+       ],
+       "prob": 0.00732855498790741
+      },
+      {
+       "move": 1,
+       "rank": 26,
+       "top1": 51,
+       "top1_name": "Nocturne",
+       "top5": [
+        51,
+        62,
+        130,
+        1,
+        135
+       ],
+       "top5_names": [
+        "Nocturne",
+        "Cassiopeia",
+        "Lucian",
+        "Olaf",
+        "Vi"
+       ],
+       "prob": 0.0030326666310429573
+      },
+      {
+       "move": 2,
+       "rank": 3,
+       "top1": 135,
+       "top1_name": "Vi",
+       "top5": [
+        135,
+        160,
+        71,
+        74,
+        54
+       ],
+       "top5_names": [
+        "Vi",
+        "Locke",
+        "Ezreal",
+        "Akali",
+        "Jarvan IV"
+       ],
+       "prob": 0.06655966490507126
+      },
+      {
+       "move": 3,
+       "rank": 0,
+       "top1": 135,
+       "top1_name": "Vi",
+       "top5": [
+        135,
+        51,
+        62,
+        47,
+        145
+       ],
+       "top5_names": [
+        "Vi",
+        "Nocturne",
+        "Cassiopeia",
+        "Caitlyn",
+        "Kalista"
+       ],
+       "prob": 0.1663474291563034
+      },
+      {
+       "move": 4,
+       "rank": 38,
+       "top1": 51,
+       "top1_name": "Nocturne",
+       "top5": [
+        51,
+        59,
+        1,
+        97,
+        47
+       ],
+       "top5_names": [
+        "Nocturne",
+        "Lee Sin",
+        "Olaf",
+        "Lulu",
+        "Caitlyn"
+       ],
+       "prob": 0.0034582950174808502
+      },
+      {
+       "move": 5,
+       "rank": 1,
+       "top1": 59,
+       "top1_name": "Lee Sin",
+       "top5": [
+        59,
+        51,
+        47,
+        62,
+        97
+       ],
+       "top5_names": [
+        "Lee Sin",
+        "Nocturne",
+        "Caitlyn",
+        "Cassiopeia",
+        "Lulu"
+       ],
+       "prob": 0.10324089974164963
+      },
+      {
+       "move": 6,
+       "rank": 2,
+       "top1": 12,
+       "top1_name": "Ryze",
+       "top5": [
+        12,
+        1,
+        106,
+        97,
+        130
+       ],
+       "top5_names": [
+        "Ryze",
+        "Olaf",
+        "Syndra",
+        "Lulu",
+        "Lucian"
+       ],
+       "prob": 0.13458938896656036
+      },
+      {
+       "move": 7,
+       "rank": 1,
+       "top1": 2,
+       "top1_name": "Galio",
+       "top5": [
+        2,
+        159,
+        160,
+        57,
+        93
+       ],
+       "top5_names": [
+        "Galio",
+        "Yunara",
+        "Locke",
+        "Wukong",
+        "Viktor"
+       ],
+       "prob": 0.14209222793579102
+      },
+      {
+       "move": 8,
+       "rank": 0,
+       "top1": 97,
+       "top1_name": "Lulu",
+       "top5": [
+        97,
+        47,
+        145,
+        152,
+        70
+       ],
+       "top5_names": [
+        "Lulu",
+        "Caitlyn",
+        "Kalista",
+        "Aphelios",
+        "Pantheon"
+       ],
+       "prob": 0.9346672892570496
+      },
+      {
+       "move": 9,
+       "rank": 2,
+       "top1": 172,
+       "top1_name": "Naafiri",
+       "top5": [
+        172,
+        130,
+        47,
+        169,
+        42
+       ],
+       "top5_names": [
+        "Naafiri",
+        "Lucian",
+        "Caitlyn",
+        "Milio",
+        "Karma"
+       ],
+       "prob": 0.01762196235358715
+      },
+      {
+       "move": 10,
+       "rank": 1,
+       "top1": 146,
+       "top1_name": "Bard",
+       "top5": [
+        146,
+        42,
+        172,
+        151,
+        169
+       ],
+       "top5_names": [
+        "Bard",
+        "Karma",
+        "Naafiri",
+        "Neeko",
+        "Milio"
+       ],
+       "prob": 0.03753180429339409
+      },
+      {
+       "move": 11,
+       "rank": 23,
+       "top1": 57,
+       "top1_name": "Wukong",
+       "top5": [
+        57,
+        172,
+        30,
+        4,
+        49
+       ],
+       "top5_names": [
+        "Wukong",
+        "Naafiri",
+        "Cho'Gath",
+        "Xin Zhao",
+        "Malphite"
+       ],
+       "prob": 0.00024608682724647224
+      },
+      {
+       "move": 12,
+       "rank": 1,
+       "top1": 63,
+       "top1_name": "Skarner",
+       "top5": [
+        63,
+        4,
+        57,
+        172,
+        54
+       ],
+       "top5_names": [
+        "Skarner",
+        "Xin Zhao",
+        "Wukong",
+        "Naafiri",
+        "Jarvan IV"
+       ],
+       "prob": 0.18356530368328094
+      },
+      {
+       "move": 13,
+       "rank": 1,
+       "top1": 113,
+       "top1_name": "Gnar",
+       "top5": [
+        113,
+        172,
+        60,
+        70,
+        63
+       ],
+       "top5_names": [
+        "Gnar",
+        "Naafiri",
+        "Vayne",
+        "Pantheon",
+        "Skarner"
+       ],
+       "prob": 0.19014723598957062
+      },
+      {
+       "move": 14,
+       "rank": 4,
+       "top1": 70,
+       "top1_name": "Pantheon",
+       "top5": [
+        70,
+        54,
+        63,
+        45,
+        57
+       ],
+       "top5_names": [
+        "Pantheon",
+        "Jarvan IV",
+        "Skarner",
+        "Trundle",
+        "Wukong"
+       ],
+       "prob": 0.09416283667087555
+      },
+      {
+       "move": 15,
+       "rank": 11,
+       "top1": 45,
+       "top1_name": "Trundle",
+       "top5": [
+        45,
+        113,
+        63,
+        49,
+        54
+       ],
+       "top5_names": [
+        "Trundle",
+        "Gnar",
+        "Skarner",
+        "Malphite",
+        "Jarvan IV"
+       ],
+       "prob": 0.009474296122789383
+      },
+      {
+       "move": 16,
+       "rank": 5,
+       "top1": 99,
+       "top1_name": "Hecarim",
+       "top5": [
+        99,
+        63,
+        45,
+        100,
+        131
+       ],
+       "top5_names": [
+        "Hecarim",
+        "Skarner",
+        "Trundle",
+        "Kha'Zix",
+        "Zed"
+       ],
+       "prob": 0.021483825519680977
+      },
+      {
+       "move": 17,
+       "rank": 2,
+       "top1": 45,
+       "top1_name": "Trundle",
+       "top5": [
+        45,
+        1,
+        63,
+        49,
+        53
+       ],
+       "top5_names": [
+        "Trundle",
+        "Olaf",
+        "Skarner",
+        "Malphite",
+        "Renekton"
+       ],
+       "prob": 0.06548498570919037
+      },
+      {
+       "move": 18,
+       "rank": 19,
+       "top1": 99,
+       "top1_name": "Hecarim",
+       "top5": [
+        99,
+        49,
+        45,
+        131,
+        1
+       ],
+       "top5_names": [
+        "Hecarim",
+        "Malphite",
+        "Trundle",
+        "Zed",
+        "Olaf"
+       ],
+       "prob": 0.0007272038492374122
+      },
+      {
+       "move": 19,
+       "rank": 12,
+       "top1": 49,
+       "top1_name": "Malphite",
+       "top5": [
+        49,
+        45,
+        100,
+        163,
+        170
+       ],
+       "top5_names": [
+        "Malphite",
+        "Trundle",
+        "Kha'Zix",
+        "Gwen",
+        "Zaahen"
+       ],
+       "prob": 0.0013294100062921643
+      }
+     ]
+    }
+   ],
+   "agg": {
+    "n": 40,
+    "top1": 0.15,
+    "top5": 0.5,
+    "mean_rank": 11.275,
+    "mean_prob": 0.12153854316857178
+   },
+   "by_phase": {
+    "ban1": {
+     "n": 12,
+     "top1": 0.16666666666666666,
+     "top5": 0.4166666666666667,
+     "mean_rank": 13.333333333333334
+    },
+    "pick1": {
+     "n": 12,
+     "top1": 0.08333333333333333,
+     "top5": 0.5833333333333334,
+     "mean_rank": 13.5
+    },
+    "ban2": {
+     "n": 8,
+     "top1": 0.125,
+     "top5": 0.625,
+     "mean_rank": 7.375
+    },
+    "pick2": {
+     "n": 8,
+     "top1": 0.25,
+     "top5": 0.375,
+     "mean_rank": 8.75
+    }
+   }
   }
  },
  "masked": {
@@ -4713,6 +5603,510 @@
     "top5": 0.7,
     "mean_rank": 4.0,
     "mean_prob": 0.1615545750129968
+   }
+  },
+  "finetune-patch-s0": {
+   "family": "soloQ->pro +patch",
+   "path": "model/finetune/ckpt/run_20261102_220121_f-patch-s0/best_mask.pt",
+   "n_patches": 107,
+   "games": [
+    {
+     "gameid": "LOLTMNT02_486564",
+     "slots": [
+      {
+       "slot": 7,
+       "move": 6,
+       "role": "MID",
+       "actual": "Cassiopeia",
+       "rank": 0,
+       "top1": 62,
+       "top1_name": "Cassiopeia",
+       "top5": [
+        62,
+        12,
+        106,
+        93,
+        2
+       ],
+       "top5_names": [
+        "Cassiopeia",
+        "Ryze",
+        "Syndra",
+        "Viktor",
+        "Galio"
+       ],
+       "prob": 0.1795356124639511
+      },
+      {
+       "slot": 2,
+       "move": 7,
+       "role": "MID",
+       "actual": "Orianna",
+       "rank": 5,
+       "top1": 12,
+       "top1_name": "Ryze",
+       "top5": [
+        12,
+        106,
+        2,
+        74,
+        93
+       ],
+       "top5_names": [
+        "Ryze",
+        "Syndra",
+        "Galio",
+        "Akali",
+        "Viktor"
+       ],
+       "prob": 0.04442468658089638
+      },
+      {
+       "slot": 4,
+       "move": 8,
+       "role": "SUP",
+       "actual": "Nautilus",
+       "rank": 2,
+       "top1": 153,
+       "top1_name": "Rell",
+       "top5": [
+        153,
+        77,
+        92,
+        82,
+        68
+       ],
+       "top5_names": [
+        "Rell",
+        "Leona",
+        "Nautilus",
+        "Shen",
+        "Poppy"
+       ],
+       "prob": 0.09407209604978561
+      },
+      {
+       "slot": 6,
+       "move": 9,
+       "role": "JNG",
+       "actual": "Jarvan IV",
+       "rank": 1,
+       "top1": 135,
+       "top1_name": "Vi",
+       "top5": [
+        135,
+        54,
+        172,
+        70,
+        57
+       ],
+       "top5_names": [
+        "Vi",
+        "Jarvan IV",
+        "Naafiri",
+        "Pantheon",
+        "Wukong"
+       ],
+       "prob": 0.2238200455904007
+      },
+      {
+       "slot": 9,
+       "move": 10,
+       "role": "SUP",
+       "actual": "Alistar",
+       "rank": 3,
+       "top1": 153,
+       "top1_name": "Rell",
+       "top5": [
+        153,
+        146,
+        137,
+        11,
+        77
+       ],
+       "top5_names": [
+        "Rell",
+        "Bard",
+        "Nami",
+        "Alistar",
+        "Leona"
+       ],
+       "prob": 0.10613062977790833
+      },
+      {
+       "slot": 3,
+       "move": 11,
+       "role": "BOT",
+       "actual": "Ezreal",
+       "rank": 2,
+       "top1": 122,
+       "top1_name": "Jhin",
+       "top5": [
+        122,
+        111,
+        71,
+        159,
+        14
+       ],
+       "top5_names": [
+        "Jhin",
+        "Kai'Sa",
+        "Ezreal",
+        "Yunara",
+        "Sivir"
+       ],
+       "prob": 0.0710347443819046
+      },
+      {
+       "slot": 1,
+       "move": 16,
+       "role": "JNG",
+       "actual": "Lee Sin",
+       "rank": 9,
+       "top1": 172,
+       "top1_name": "Naafiri",
+       "top5": [
+        172,
+        4,
+        57,
+        135,
+        63
+       ],
+       "top5_names": [
+        "Naafiri",
+        "Xin Zhao",
+        "Wukong",
+        "Vi",
+        "Skarner"
+       ],
+       "prob": 0.026880625635385513
+      },
+      {
+       "slot": 8,
+       "move": 17,
+       "role": "BOT",
+       "actual": "Corki",
+       "rank": 5,
+       "top1": 122,
+       "top1_name": "Jhin",
+       "top5": [
+        122,
+        14,
+        111,
+        91,
+        159
+       ],
+       "top5_names": [
+        "Jhin",
+        "Sivir",
+        "Kai'Sa",
+        "Varus",
+        "Yunara"
+       ],
+       "prob": 0.03327080234885216
+      },
+      {
+       "slot": 5,
+       "move": 18,
+       "role": "TOP",
+       "actual": "Rumble",
+       "rank": 1,
+       "top1": 157,
+       "top1_name": "Ambessa",
+       "top5": [
+        157,
+        61,
+        167,
+        53,
+        60
+       ],
+       "top5_names": [
+        "Ambessa",
+        "Rumble",
+        "K'Sante",
+        "Renekton",
+        "Vayne"
+       ],
+       "prob": 0.23714452981948853
+      },
+      {
+       "slot": 0,
+       "move": 19,
+       "role": "TOP",
+       "actual": "Gnar",
+       "rank": 3,
+       "top1": 167,
+       "top1_name": "K'Sante",
+       "top5": [
+        167,
+        157,
+        2,
+        113,
+        102
+       ],
+       "top5_names": [
+        "K'Sante",
+        "Ambessa",
+        "Galio",
+        "Gnar",
+        "Jayce"
+       ],
+       "prob": 0.07012000679969788
+      }
+     ]
+    },
+    {
+     "gameid": "LOLTMNT02_486571",
+     "slots": [
+      {
+       "slot": 7,
+       "move": 6,
+       "role": "MID",
+       "actual": "Syndra",
+       "rank": 2,
+       "top1": 93,
+       "top1_name": "Viktor",
+       "top5": [
+        93,
+        56,
+        106,
+        62,
+        12
+       ],
+       "top5_names": [
+        "Viktor",
+        "Orianna",
+        "Syndra",
+        "Cassiopeia",
+        "Ryze"
+       ],
+       "prob": 0.16009525954723358
+      },
+      {
+       "slot": 3,
+       "move": 7,
+       "role": "BOT",
+       "actual": "Yunara",
+       "rank": 0,
+       "top1": 159,
+       "top1_name": "Yunara",
+       "top5": [
+        159,
+        14,
+        124,
+        125,
+        152
+       ],
+       "top5_names": [
+        "Yunara",
+        "Sivir",
+        "Zeri",
+        "Jinx",
+        "Aphelios"
+       ],
+       "prob": 0.8711268901824951
+      },
+      {
+       "slot": 4,
+       "move": 8,
+       "role": "SUP",
+       "actual": "Lulu",
+       "rank": 0,
+       "top1": 97,
+       "top1_name": "Lulu",
+       "top5": [
+        97,
+        92,
+        146,
+        153,
+        154
+       ],
+       "top5_names": [
+        "Lulu",
+        "Nautilus",
+        "Bard",
+        "Rell",
+        "Pyke"
+       ],
+       "prob": 0.8395021557807922
+      },
+      {
+       "slot": 8,
+       "move": 9,
+       "role": "BOT",
+       "actual": "Caitlyn",
+       "rank": 1,
+       "top1": 71,
+       "top1_name": "Ezreal",
+       "top5": [
+        71,
+        47,
+        14,
+        122,
+        41
+       ],
+       "top5_names": [
+        "Ezreal",
+        "Caitlyn",
+        "Sivir",
+        "Jhin",
+        "Corki"
+       ],
+       "prob": 0.21377521753311157
+      },
+      {
+       "slot": 9,
+       "move": 10,
+       "role": "SUP",
+       "actual": "Karma",
+       "rank": 1,
+       "top1": 146,
+       "top1_name": "Bard",
+       "top5": [
+        146,
+        42,
+        83,
+        92,
+        151
+       ],
+       "top5_names": [
+        "Bard",
+        "Karma",
+        "Lux",
+        "Nautilus",
+        "Neeko"
+       ],
+       "prob": 0.26767662167549133
+      },
+      {
+       "slot": 2,
+       "move": 11,
+       "role": "MID",
+       "actual": "Locke",
+       "rank": 7,
+       "top1": 12,
+       "top1_name": "Ryze",
+       "top5": [
+        12,
+        62,
+        93,
+        86,
+        6
+       ],
+       "top5_names": [
+        "Ryze",
+        "Cassiopeia",
+        "Viktor",
+        "Ahri",
+        "LeBlanc"
+       ],
+       "prob": 0.030754808336496353
+      },
+      {
+       "slot": 1,
+       "move": 16,
+       "role": "JNG",
+       "actual": "Pantheon",
+       "rank": 4,
+       "top1": 59,
+       "top1_name": "Lee Sin",
+       "top5": [
+        59,
+        135,
+        57,
+        54,
+        70
+       ],
+       "top5_names": [
+        "Lee Sin",
+        "Vi",
+        "Wukong",
+        "Jarvan IV",
+        "Pantheon"
+       ],
+       "prob": 0.0755188837647438
+      },
+      {
+       "slot": 6,
+       "move": 17,
+       "role": "JNG",
+       "actual": "Skarner",
+       "rank": 7,
+       "top1": 57,
+       "top1_name": "Wukong",
+       "top5": [
+        57,
+        134,
+        45,
+        54,
+        59
+       ],
+       "top5_names": [
+        "Wukong",
+        "Qiyana",
+        "Trundle",
+        "Jarvan IV",
+        "Lee Sin"
+       ],
+       "prob": 0.04812966659665108
+      },
+      {
+       "slot": 5,
+       "move": 18,
+       "role": "TOP",
+       "actual": "K'Sante",
+       "rank": 9,
+       "top1": 23,
+       "top1_name": "Jax",
+       "top5": [
+        23,
+        157,
+        118,
+        132,
+        113
+       ],
+       "top5_names": [
+        "Jax",
+        "Ambessa",
+        "Camille",
+        "Kled",
+        "Gnar"
+       ],
+       "prob": 0.032712534070014954
+      },
+      {
+       "slot": 0,
+       "move": 19,
+       "role": "TOP",
+       "actual": "Olaf",
+       "rank": 3,
+       "top1": 61,
+       "top1_name": "Rumble",
+       "top5": [
+        61,
+        113,
+        53,
+        1,
+        102
+       ],
+       "top5_names": [
+        "Rumble",
+        "Gnar",
+        "Renekton",
+        "Olaf",
+        "Jayce"
+       ],
+       "prob": 0.046027474105358124
+      }
+     ]
+    }
+   ],
+   "agg": {
+    "n": 20,
+    "top1": 0.15,
+    "top5": 0.7,
+    "mean_rank": 3.25,
+    "mean_prob": 0.18358766455203296
    }
   }
  },

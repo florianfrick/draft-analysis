@@ -40,10 +40,10 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 PROC_DIR = ROOT / "data" / "solo queue" / "process matchdata"
 sys.path.insert(0, str(PROC_DIR))
-sys.path.insert(0, str(HERE.parent))
+sys.path.insert(0, str(ROOT))
 
 import pipeline as P  # noqa: E402
-from soloq_model import (SoloQPretrainedModel, mean_pool_vector,  # noqa: E402
+from model.pretraining.soloq_model import (SoloQPretrainedModel, mean_pool_vector,  # noqa: E402
                          attr_matrix_for_config, load_encoder_state)
 
 

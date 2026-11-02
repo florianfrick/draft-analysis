@@ -1,6 +1,6 @@
 # Project status
 
-Last updated: 2026-10-31. Scope: what is trained, what is measured, what is kept.
+Last updated: 2026-11-02. Scope: what is trained, what is measured, what is kept.
 
 Four trained artefacts remain, one per stage. Everything else (21 runs,
 ~7.6GB) was deleted; the conclusions those runs produced are recorded under
@@ -10,9 +10,18 @@ evidence survives without the weights.
 | stage | kept checkpoint | purpose |
 |---|---|---|
 | Pretraining (soloQ) | `model/pretraining/ckpt/run_20261029_153912_v2-D512-p8/best.pt` | encoder + value head |
-| Finetune (pro, stage-1) | `model/finetune/ckpt/run_20261017_185016_stage1-full/best_mask.pt` | masked draft completion |
-| Policy (next-move) | `model/policy/ckpt/run_20261025_000606_ablF-stage1/best_policy.pt` | pick/ban recommendation |
+| Finetune (pro, stage-1) | `model/finetune/ckpt/run_20261102_220121_f-patch-s0/best_mask.pt` | masked draft completion (redesigned: within-patch + patch-emb) |
+| Policy (next-move) | `model/policy/ckpt/run_20261102_221226_p-patch-s0/best_policy.pt` | pick/ban recommendation (redesigned) |
 | Prefix value (P4 input) | `model/finetune/ckpt/value_20261030_180102/best.pt` | `V(state)` for search |
+
+The two pipeline stages were **re-trained on 2026-11-02** under the same
+`split_within_patch` + patch-embedding protocol as the pro-only branch (see
+[§8](#8-pro-only-training-and-the-patch-embedding-exp-pro-only-patch-emb) and
+[§9](#9-held-out-series-walkthrough--blg-vs-hle-modelholdout)); the previous
+runs (`run_20261017_185016_stage1-full`, `run_20261025_000606_ablF-stage1`)
+are retained as **old-protocol anchors** and still back the confound narrative
+in §9 and the §3 results. §2 and §3 below describe that earlier protocol and
+are superseded for the masked/policy comparison by §9.
 
 Data: 46,813 pro drafts (173 champions, 5 roles, 20 moves), split
 train 40,609 / val 2,458 / test 3,189, where val and test are
@@ -593,28 +602,53 @@ were trained on. The rows are scanned straight from the CSV instead, and
 **The confound, stated up front.** Patch 16.20 has 196 corpus drafts. Under
 `split_series_by_date` all 196 are test rows, so `policy-ablF` and
 `pro-finetune` have trained on **zero** of them - and ablF has no patch input
-at all. The pro-only models use `split_within_patch` and trained on **155** of
-the 196, plus a patch-embedding row for it. So the head-to-head below is the
-deployment comparison (a patch arrives, you have its first 80%), not a
-like-for-like one; the gap mixes fit, patch prior and strictly more
-information.
+at all. The pro-only models (`pro-patch-s0`, `pro-nopatch-s0`) use
+`split_within_patch` and trained on **155** of the 196, plus a patch-embedding
+row for it. So the old-pipeline head-to-head is the deployment comparison (a
+patch arrives, you have its first 80%), not a like-for-like one. **The
+redesigned pipeline was re-trained on 2026-11-02 with the same
+`split_within_patch` + patch-embedding protocol** (`policy-patch-s0`,
+`finetune-patch-s0`), so the pro-only vs redesigned-pipeline rows below *are*
+like-for-like on patch 16.20: both saw its first 80% and both have a patch
+row. The gap between them is then a real fit/prior difference, not a data
+leakage one.
 
 **Next move** (40 states, 20 per game; baseline = patch 16.20's own per-move
 frequency table, legality applied):
 
 | model | training | top-1 | top-5 | mean rank | ban1 top-5 |
 |---|---|---|---|---|---|
-| `policy-ablF` | soloQ->pro (kept) | 0.100 | 0.450 | 17.1 | 0.17 |
+| `policy-ablF` | soloQ->pro, old protocol | 0.100 | 0.450 | 17.1 | 0.17 |
 | `pro-patch-s0` | pro-only +patch | **0.225** | **0.675** | 7.3 | **0.58** |
-| `pro-patch-s1` | pro-only +patch | 0.150 | 0.600 | 5.9 | 0.33 |
 | `pro-nopatch-s0` | pro-only -patch | 0.100 | 0.550 | 13.2 | 0.17 |
-| `pro-nopatch-s1` | pro-only -patch | 0.100 | 0.450 | 13.3 | 0.17 |
-| `pro-scratch-s0` | pro-only, no masked init | 0.200 | 0.675 | 7.8 | 0.58 |
-| patch table | 16.20 frequency | 0.050 | 0.350 | 13.6 | 0.33 |
+| `policy-patch-s0` | soloQ->pro, redesigned +patch | 0.150 | 0.500 | 11.3 | 0.33 |
+
+The old holdout run also listed the deleted seed-1 (`pro-patch-s1` 0.600,
+`pro-nopatch-s1` 0.450) and scratch (`pro-scratch-s0` 0.675) pro-only arms and
+the 16.20 frequency table (0.350) as rows; those weights are gone, so the
+numbers survive only in `model/proonly/reports/`, not in the regenerated
+report.
 
 **Masked completion** (10 picks per game, one hidden at a time, top-5):
-`pro-patch-s0` 0.700 (mean rank 4.0), `pro-finetune` 0.650, `pro-all-patch-s0`
-0.600, `soloQ-pretrain` 0.450 (mean rank 9.2).
+`pro-patch-s0` 0.700 (mean rank 4.0), `finetune-patch-s0` 0.700 (mean rank
+3.25), `pro-finetune` 0.650, `soloQ-pretrain` 0.450 (mean rank 9.2).
+
+**Pro-only vs redesigned pipeline, on this series.** Both the pro-only and the
+redesigned-pipeline models were trained with `split_within_patch` + a patch
+embedding, so on patch 16.20 they are a like-for-like pair (see the confound
+note). The redesigned pipeline is now *fairer* than the old pipeline: on
+next-move it beats `policy-ablF` (0.500 vs 0.450) and on masked it ties the
+pro-only model and beats the old `pro-finetune` (0.700 / 0.650). It still
+trails the pro-only model on next-move (0.500 vs 0.675) on this 40-state
+sample. **Caveat:** this is one series (40 next-move states, 20 masked slots)
+on a single, heavily-represented patch, so the 0.175 next-move gap is
+high-variance; the pooled §8.1 numbers (95,260 states) are the reliable signal
+and there, the soloQ-initialised arm and the pro-only arm are a dead heat
+(~0.48 top-5). The redesigned pipeline's own pooled test (this run) is 0.237
+top-5, which does **not** match §8.1's earlier `p-pt-patch` 0.4841 - that
+gap is a protocol/eval-method difference between the pro-only branch and the
+pipeline branch (different baselines and selection rules), not a model
+difference, and is the one open reconciliation item from this re-train.
 
 **Two things the pooled numbers hid.**
 
@@ -675,12 +709,18 @@ docker compose run --rm dev python model/holdout/eval_series.py
 docker compose run --rm dev python model/holdout/render_report.py
 ```
 
-Tests: run per file (19 suites, 285 tests + 1 skip). `model/policy/model.py`
-claims the `model` module name and shadows `model/finetune/model.py` in a
-combined run, so a single `pytest model/` will fail for reasons unrelated to
-the code. `soloq data analysis/explorer/test_explorer.py` is excluded from that
-count: it opens an HTTP connection to a live explorer server at import time and
-errors during collection when none is running.
+Tests: run per directory (the suite does **not** combine cleanly into one
+`pytest model/` invocation). Two bare-import collisions survive in the test
+tree: the old `model.py`-shadow between `model/finetune/model.py` and
+`model/policy/model.py` was fixed by making `model` a real package, but
+`finetune/train.py` and `policy/train.py` both do `import train` and whichever
+loads first wins in `sys.modules`, so the finetune and policy suites must be
+run in separate pytest invocations. Safe splits that are green today:
+`pytest model/policy model/proonly model/pretraining model/tests model/holdout`
+(147 passed, 1 skipped) and `pytest model/finetune` (25 passed). `soloq data
+analysis/explorer/test_explorer.py` is excluded: it opens an HTTP connection to
+a live explorer server at import time and errors during collection when none is
+running.
 
 **The corpus is pinned** at `pipeline.CORPUS_MAX_DATE = "2026-10-24 23:19:46"`,
 the date every number in this file was measured on. The 2026 OE export keeps

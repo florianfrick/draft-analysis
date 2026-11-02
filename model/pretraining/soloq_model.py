@@ -35,7 +35,7 @@ ROLE_HEAD_DIM = 5  # output: exactly the 5 real roles, no FLEX column
 IGNORE_INDEX = -100
 DUPLICATE_LOGIT_NEG = float("-inf")  # suppress visible champs (Sec 4.1)
 
-CHAMP_ATTRS_PATH = (Path(__file__).resolve().parent.parent
+CHAMP_ATTRS_PATH = (Path(__file__).resolve().parent.parent.parent
                     / "data" / "champ_attrs.json")
 
 

@@ -42,12 +42,12 @@ from torch.utils.data import DataLoader
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(HERE.parent))
+sys.path.insert(0, str(HERE.parent.parent))
 
 import train as T  # noqa: E402
 from model import PolicyValueModel  # noqa: E402
-from soloq_model import SoloQPretrainedModel  # noqa: E402
-from soloq_model import attr_matrix_for_config  # noqa: E402
+from model.pretraining.soloq_model import SoloQPretrainedModel  # noqa: E402
+from model.pretraining.soloq_model import attr_matrix_for_config  # noqa: E402
 
 PRO_DATA = T.PRO_DATA
 EP = T.EP

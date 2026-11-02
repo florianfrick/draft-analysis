@@ -15,7 +15,7 @@ per team. PAD slots never contribute to the pooled vector.
 import torch
 import torch.nn as nn
 
-from soloq_model import CHAMP_PAD_ID, ROLE_FLEX_ID, PMAPool
+from model.pretraining.soloq_model import CHAMP_PAD_ID, ROLE_FLEX_ID, PMAPool
 
 
 class PoolOutcomeHeads(nn.Module):
@@ -89,7 +89,7 @@ class ProDraftModel(nn.Module):
 
     def pool(self, batch):
         """Set-pooled vector z [B, 4D] (PAD-masked means per team)."""
-        from soloq_model import TEAM_SIZE
+        from model.pretraining.soloq_model import TEAM_SIZE
         h = self.encoder._encode(batch)  # [B,10,D], no positions
         pad = batch.get("pad_mask")
         if pad is None:

@@ -27,7 +27,7 @@ for p in (str(HERE), str(MODEL_DIR), str(PRO_DIR)):
 import infer  # noqa: E402
 import pipeline as P  # noqa: E402
 from model import PolicyValueModel  # noqa: E402
-from soloq_model import SoloQPretrainedModel  # noqa: E402
+from model.pretraining.soloq_model import SoloQPretrainedModel  # noqa: E402
 
 CKPT = HERE / "ckpt" / "run_20261025_000606_ablF-stage1" / "best_policy.pt"
 

@@ -13,9 +13,9 @@ import torch.nn.functional as F
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(HERE.parent))
+sys.path.insert(0, str(HERE.parent.parent))
 
-from soloq_model import SoloQPretrainedModel, NUM_REAL_CHAMPS  # noqa: E402
+from model.pretraining.soloq_model import SoloQPretrainedModel, NUM_REAL_CHAMPS  # noqa: E402
 from model import PolicyValueModel  # noqa: E402
 
 C = NUM_REAL_CHAMPS  # 173

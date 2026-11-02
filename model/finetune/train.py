@@ -57,11 +57,18 @@ def _load_module_by_path(name, path):
     return mod
 
 
-sys.path.insert(0, str(MODEL_DIR))
-from soloq_model import SoloQPretrainedModel  # noqa: E402
-from soloq_model import attr_matrix_for_config  # noqa: E402
-from soloq_model import load_encoder_state  # noqa: E402
-from model import ProDraftModel  # noqa: E402
+# Insert the repo ROOT so that `model` resolves to the `model/` namespace
+# package (enabling `from model.pretraining...`), then drop this script's own
+# directory from sys.path. As a top-level entry it contains `model.py`, which
+# would shadow the `model/` package (a regular module always beats a namespace
+# portion) and break `from model.pretraining...`. The class imports below are
+# fully-qualified submodules, not `from model import X`.
+sys.path.insert(0, str(ROOT))
+sys.path[:] = [p for p in sys.path if p != str(HERE)]
+from model.pretraining.soloq_model import SoloQPretrainedModel  # noqa: E402
+from model.pretraining.soloq_model import attr_matrix_for_config  # noqa: E402
+from model.pretraining.soloq_model import load_encoder_state  # noqa: E402
+from model.finetune.model import ProDraftModel  # noqa: E402
 
 PRO_PIPE = _load_module_by_path("pro_pipeline", PRO_DIR / "pipeline.py")
 EP = _load_module_by_path("eval_protocol", PRO_DIR / "eval_protocol.py")
@@ -134,27 +141,35 @@ def pick_init_ckpt(spec):
     return best
 
 
-def build_encoder(payload):
+def build_encoder(payload, n_patches=0):
     cfg = payload["config"]
     enc = SoloQPretrainedModel(
         num_champs=cfg["num_champs"], embed_dim=cfg["embed_dim"],
         num_heads=cfg["num_heads"],
         num_intra_layers=cfg["num_intra"],
         num_cross_layers=cfg["num_cross"], dropout=cfg.get("dropout", 0.0),
-        attr_matrix=attr_matrix_for_config(cfg))
+        attr_matrix=attr_matrix_for_config(cfg), n_patches=n_patches)
     # Tolerate the pretraining value path (pma.*, win_head.*): this stage adds
-    # its own win head, so those keys are dropped rather than raising.
-    load_encoder_state(enc, payload["model"])
+    # its own win head, so those keys are dropped rather than raising. The
+    # patch table is tolerated too: the soloQ trunk predates patch
+    # conditioning and carries no patch_lookup, while the encoder's own
+    # zero-initialised table is the intended starting point.
+    load_encoder_state(enc, payload["model"], allow_missing_patch=True)
     return enc, cfg
 
 
 def load_pro_rows(args):
     rows, stats = PRO_PIPE.build_rows(limit=args.limit_drafts)
     PRO_PIPE.assign_weights(rows, args.half_life)
-    splits = PRO_PIPE.split_series_by_date(rows)
-    # Val must sit in the condition test is in: test is 100% patches unseen in
-    # train, the raw val window only 81.5%, and the familiar share is easier.
-    splits["val"], args.patch_honest_val = EP.patch_honest_val(rows, splits)
+    # Within-patch split (train = head of each patch, val/test = tail) so the
+    # patch id is a *seen* input at test - the only split on which a patch
+    # embedding can be measured. Under split_series_by_date every test patch is
+    # unseen and the patch id is UNK at test, which made patch conditioning
+    # untestable and inflated val (val was 81.5% patches-seen vs 100% unseen at
+    # test). `patch_honest_val` is meaningless once val and test share the same
+    # condition, so it is disabled.
+    splits = PRO_PIPE.split_within_patch(rows)
+    args.patch_honest_val = False
     return rows, splits
 
 
@@ -398,7 +413,8 @@ def run_wandb(args):
         return None
 
 
-def save_ckpt(path, model, args, cfg, metrics, step, extra):
+def save_ckpt(path, model, args, cfg, metrics, step, extra, n_patches=0,
+              patch_vocab=None):
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {"model": model.state_dict(),
                "config": {"num_champs": cfg["num_champs"],
@@ -407,12 +423,20 @@ def save_ckpt(path, model, args, cfg, metrics, step, extra):
                           "num_intra": cfg["num_intra"],
                           "num_cross": cfg["num_cross"],
                           "dropout": cfg.get("dropout", 0.0),
-                          "n_econ": len(PRO_PIPE.ECON_KEYS)},
+                          "n_econ": len(PRO_PIPE.ECON_KEYS),
+                          # Needed by downstream loaders (eval_series, the
+                          # policy stage) to rebuild a patch-enabled encoder
+                          # that matches this checkpoint.
+                          "n_patches": n_patches},
                "metrics": metrics, "step": step,
                "init_ckpt": extra["init_ckpt"],
                "stage": extra["stage"], "patch": extra.get("patch"),
                "econ_mean": extra["econ_mean"], "econ_std": extra["econ_std"],
-               "platt": extra["platt"]}
+               "platt": extra["platt"],
+               # Training-time patch vocabulary, so eval_series.load_masked can
+               # rebuild the patch index. Without it the masked model would
+               # score every patch as UNK and the comparison would be unfair.
+               "patch_vocab": patch_vocab}
     torch.save(payload, str(path))
 
 
@@ -425,15 +449,22 @@ def train(args):
     print("init encoder <- %s (val top5 %.4f)" %
           (ckpt_spec, float(payload.get("metrics", {})
                             .get("champ_top5", -1))))
-    encoder, cfg = build_encoder(payload)
-    num_champs = cfg["num_champs"]
-    model = ProDraftModel(encoder, n_econ=len(PRO_PIPE.ECON_KEYS),
-                          head_dropout=args.head_dropout).to(device)
 
+    # Data first: the patch vocabulary has to size the encoder's patch
+    # embedding before the encoder is built.
     rows, splits = load_pro_rows(args)
     print("pro rows %d (train %d / val %d / test %d)" %
           (len(rows), len(splits["train"]), len(splits["val"]),
            len(splits["test"])))
+    patch_vocab, patch_index = PRO_DATA.build_patch_vocab(rows)
+    n_patches = len(patch_vocab) + 1
+    print("patch conditioning: ON (%d patches + UNK) on a within-patch split"
+          % len(patch_vocab))
+    encoder, cfg = build_encoder(payload, n_patches=n_patches)
+    num_champs = cfg["num_champs"]
+    model = ProDraftModel(encoder, n_econ=len(PRO_PIPE.ECON_KEYS),
+                          head_dropout=args.head_dropout).to(device)
+
     econ_mean, econ_std = fit_econ_stats(rows, splits["train"],
                                          len(PRO_PIPE.ECON_KEYS))
     emu, esd = econ_mean.to(device), econ_std.to(device)
@@ -448,14 +479,15 @@ def train(args):
     def pro_loader(idxs, mask_prob, epoch, shuffle, econ_p):
         ds = PRO_DATA.ProMaskedDraftDataset(
             rows, idxs, num_champs=num_champs, mask_prob=mask_prob,
-            seed=args.seed, epoch=epoch, econ_mask_prob=econ_p)
+            seed=args.seed, epoch=epoch, econ_mask_prob=econ_p,
+            patch_index=patch_index)
         return DataLoader(ds, batch_size=args.batch_size, shuffle=shuffle,
                           collate_fn=PRO_DATA.pro_collate, num_workers=0,
                           pin_memory=torch.cuda.is_available())
 
     tr_ds = PRO_DATA.ProMaskedDraftDataset(
         rows, splits["train"], num_champs=num_champs, seed=args.seed,
-        econ_mask_prob=args.econ_mask_prob)
+        econ_mask_prob=args.econ_mask_prob, patch_index=patch_index)
     wts = [r.get("weight", 1.0) for r in rows]
     if max(wts) - min(wts) > 1e-6:
         tr_loader = DataLoader(tr_ds, batch_size=args.batch_size,
@@ -628,20 +660,24 @@ def train(args):
                 vl, vy = collect_val_logits(model, va_aux, device)
                 extra["platt"] = fit_platt(vl, vy)
                 save_ckpt(run_dir / "best_mask.pt", model, args, cfg,
-                          metrics, global_step, extra)
+                          metrics, global_step, extra, n_patches=n_patches,
+                          patch_vocab=patch_vocab)
             if metrics["win_auc"] > best_auc:
                 best_auc = metrics["win_auc"]
                 vl, vy = collect_val_logits(model, va_aux, device)
                 extra["platt"] = fit_platt(vl, vy)
                 save_ckpt(run_dir / "best_win.pt", model, args, cfg,
-                          metrics, global_step, extra)
+                          metrics, global_step, extra, n_patches=n_patches,
+                          patch_vocab=patch_vocab)
             save_ckpt(run_dir / "latest.pt", model, args, cfg,
-                      dict(metrics, platt=extra["platt"]), global_step, extra)
+                      dict(metrics, platt=extra["platt"]), global_step, extra,
+                      n_patches=n_patches, patch_vocab=patch_vocab)
 
 
     # held-out test report on both best checkpoints
-    report = {"protocol": {"patch_honest_val": getattr(args, "patch_honest_val",
-                                                       None),
+    report = {"protocol": {"split": "within-patch (train=head, val/test=tail)",
+                           "patch_honest_val": getattr(args, "patch_honest_val",
+                                                      None),
                            "focus_patch": EP.FOCUS_PATCH,
                            "selection": "rel_champ_top5 (val)",
                            "n_val": len(splits["val"]),

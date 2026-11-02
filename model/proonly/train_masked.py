@@ -1,43 +1,17 @@
-"""Masked modelling on pro drafts. Scratch by default; optional soloQ init.
+"""Pro-only masked modelling: no soloQ pretraining, no soloQ rehearsal.
 
     python model/proonly/train_masked.py --run-name p1-patch --patch-emb
     python model/proonly/train_masked.py --run-name p1-nopatch --no-patch-emb
-    python model/proonly/train_masked.py --run-name pt-patch \
-        --init-ckpt model/pretraining/ckpt/run_20261029_153912_v2-D512-p8/best.pt
 
-Two init modes, and what each one measures
--------------------------------------------
-`--init-ckpt scratch` (the default) is the original pro-only arm: the encoder
-is randomly initialised and sees pro drafts only, so the number it reports is
-the answer to "how far does 37k pro drafts get you on their own". Nothing here
-reads a soloQ shard - there is no rehearsal path to disable, which is the
-point (a rehearsal term would make the result a pretraining ablation rather
-than a pro-only one).
-
-`--init-ckpt PATH` seeds the encoder from a soloQ-pretrained checkpoint and
-finetunes it on the pro drafts. The architecture is then taken from that
-checkpoint's config, not from the flags below, because the weights have those
-shapes; `--embed-dim` and friends only apply to the scratch arm. The patch
-table is the one thing the checkpoint cannot provide: it is zero-initialised,
-so "absent from the checkpoint" and "correctly initialised" are the same
-tensor, which is what `load_encoder_state(..., allow_missing_patch=True)` is
-for. That flag is used *only* on this initialisation path; the evaluation
-path stays strict, so a checkpoint with no patch rows can never quietly score
-a model nobody validated.
-
-Pretraining the trunk is not the same as rehearsing on soloQ: this stage
-imports soloQ *weights* and then trains on pro data only. There is still no
-rehearsal term, so the run remains a within-patch-split finetune and the
-comparison against the scratch arm is a clean "same data, same split, same
-objective, different initialisation".
-
-Learning rates are three groups, because the three parts of the model are not
-in the same state at step 0: the trunk arrives pretrained and must not be
-shattered (`--lr-enc`, 1e-4 from a checkpoint, 1e-3 from scratch), the heads
-are pretrained but face a different label distribution (`--lr`), and the patch
-table is brand new and zero (`--lr-patch`). On the scratch arm all three
-collapse to the same value, which is why the scratch arm's numbers are
-unchanged by this code.
+What this measures, and what it deliberately does not
+----------------------------------------------------
+Every other stage in this repo starts from a soloQ-pretrained encoder
+(`model/pretraining`) and treats pro data as a finetune. This script drops
+that: the encoder is randomly initialised and sees pro drafts only, so the
+number it reports is the answer to "how far does 37k pro drafts get you on
+their own". Nothing here reads a soloQ shard - there is no rehearsal path to
+disable, which is the point (a rehearsal term would make the result a
+pretraining ablation rather than a pro-only one).
 
 Split: `pipeline.split_within_patch`. Train is the head of every patch, val
 and test are its tail, series never straddle. Under the repo's global date
@@ -82,31 +56,17 @@ IGNORE_INDEX = -100
 
 
 def parse_args(argv=None):
-    ap = argparse.ArgumentParser(description="Pro masked modelling")
+    ap = argparse.ArgumentParser(description="Pro-only masked modelling")
     C.add_corpus_args(ap)
-    # init
-    ap.add_argument("--init-ckpt", default="scratch",
-                    help="'scratch' (default, random init) or a soloQ-"
-                         "pretrained checkpoint. With a checkpoint the "
-                         "architecture comes from its config, so "
-                         "--embed-dim/--num-intra/--num-cross/--num-heads "
-                         "are ignored.")
     # model
-    ap.add_argument("--embed-dim", type=int, default=256,
-                    help="scratch arm only")
-    ap.add_argument("--num-intra", type=int, default=2, help="scratch arm only")
-    ap.add_argument("--num-cross", type=int, default=1, help="scratch arm only")
-    ap.add_argument("--num-heads", type=int, default=8, help="scratch arm only")
+    ap.add_argument("--embed-dim", type=int, default=256)
+    ap.add_argument("--num-intra", type=int, default=2)
+    ap.add_argument("--num-cross", type=int, default=1)
+    ap.add_argument("--num-heads", type=int, default=8)
     ap.add_argument("--dropout", type=float, default=0.1,
                     help="0.1, not the soloQ 0.0: 37k pro drafts against a "
                          "~2.5M-parameter encoder is the regime where the "
-                         "soloQ runs were underfitting and this one overfits. "
-                         "This value is used for every arm, including the "
-                         "pretrained one: dropout is a training-time "
-                         "regulariser rather than a weight, and letting it "
-                         "track the checkpoint would make it a confound "
-                         "between arms that are supposed to differ in "
-                         "initialisation only.")
+                         "soloQ runs were underfitting and this one overfits")
     ap.add_argument("--patch-emb", dest="patch_emb", action="store_true",
                     default=True,
                     help="add the patch embedding (default; --no-patch-emb is "
@@ -119,15 +79,7 @@ def parse_args(argv=None):
     # optimisation
     ap.add_argument("--epochs", type=int, default=40)
     ap.add_argument("--batch-size", type=int, default=512)
-    ap.add_argument("--lr", type=float, default=1e-3, help="heads")
-    ap.add_argument("--lr-enc", type=float, default=None,
-                    help="trunk; default 1e-3 for scratch, 1e-4 from a "
-                         "pretrained checkpoint (a pretrained trunk needs "
-                         "less)")
-    ap.add_argument("--lr-patch", type=float, default=None,
-                    help="patch table; default 1e-3. The table is new and "
-                         "zero-initialised, so it wants the head's rate, not "
-                         "the trunk's.")
+    ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--weight-decay", type=float, default=0.01)
     ap.add_argument("--warmup-frac", type=float, default=0.03)
     ap.add_argument("--grad-clip", type=float, default=1.0)
@@ -141,20 +93,6 @@ def parse_args(argv=None):
     ap.add_argument("--wandb-project", default="lol-draft-proonly")
     ap.add_argument("--run-name", default="")
     return ap.parse_args(argv)
-
-
-def resolve_init(spec):
-    """-> (payload or None, cfg or None).
-
-    'scratch' -> (None, None). Otherwise load the checkpoint and return its
-    payload and config. The config is authoritative for the architecture: the
-    weights have the checkpoint's shapes, so honouring the flags instead would
-    fail to load rather than quietly train a different model.
-    """
-    if spec == "scratch":
-        return None, None
-    payload = torch.load(str(spec), map_location="cpu", weights_only=False)
-    return payload, payload["config"]
 
 
 def masked_loss(out, batch, lambda_role):
@@ -255,98 +193,12 @@ def save_ckpt(path, model, args, cfg, metrics, step, epoch, patch_vocab,
     payload = {"model": model.state_dict(),
                "config": cfg, "metrics": metrics, "step": step, "epoch": epoch,
                "patch_vocab": patch_vocab, "corpus": args.corpus,
-               "patch_emb": bool(args.patch_emb),
-               "init_ckpt": args.init_ckpt}
+               "patch_emb": bool(args.patch_emb)}
     if resume is not None:
         payload["resume"] = resume
     tmp = path.with_suffix(path.suffix + ".tmp")
     torch.save(payload, str(tmp))
     os.replace(str(tmp), str(path))
-
-
-def build_and_init(args, n_patches, device, payload=None):
-    """-> (model, cfg, init_info).
-
-    The architecture comes from the init checkpoint's config when there is
-    one: the weights have that checkpoint's shapes, so honouring the flags
-    instead would fail to load rather than quietly train a different model.
-    On the scratch arm the flags are the architecture.
-
-    `payload` is the already-loaded checkpoint, so the caller can read it once
-    (to settle the patch id space) without paying for a second load.
-    """
-    if payload is None:
-        payload, icfg = resolve_init(args.init_ckpt)
-    else:
-        icfg = payload["config"]
-    if icfg is None:
-        cfg = {"num_champs": 173, "embed_dim": args.embed_dim,
-               "num_intra": args.num_intra, "num_cross": args.num_cross,
-               "num_heads": args.num_heads, "dropout": args.dropout}
-    else:
-        cfg = {"num_champs": icfg["num_champs"],
-               "embed_dim": icfg["embed_dim"], "num_intra": icfg["num_intra"],
-               "num_cross": icfg["num_cross"],
-               "num_heads": icfg["num_heads"],
-               # dropout is a training-time regulariser, not a weight: the
-               # checkpoint's own value belongs to soloQ's data volume, and
-               # the pro-data default (0.1) is applied to every arm of this
-               # family so dropout is not a confound between them.
-               "dropout": args.dropout}
-        print("init: %s (D%d/%d intra/%d cross/%d heads)"
-              % (args.init_ckpt, cfg["embed_dim"], cfg["num_intra"],
-                 cfg["num_cross"], cfg["num_heads"]))
-    model = C.build_encoder(cfg["num_champs"], cfg["embed_dim"],
-                            cfg["num_intra"], cfg["num_cross"],
-                            cfg["num_heads"], cfg["dropout"],
-                            n_patches).to(device)
-    info = {"dropped": [], "missing": []}
-    if payload is not None:
-        # allow_missing_patch: the checkpoint predates patch conditioning, so
-        # it has no patch rows. The table is zero-initialised, which makes
-        # "absent from the checkpoint" and "correctly initialised" the same
-        # tensor - that is what makes this load legitimate rather than a
-        # silent substitution. The strict default stays for the evaluation
-        # path (compare.py, eval_series.py), where a checkpoint without
-        # patch rows must never quietly score a model nobody validated.
-        info = C.load_encoder_state(model, payload["model"],
-                                    allow_missing_patch=True)
-        if info["missing"]:
-            print("  zero-init (absent from ckpt): %s" % info["missing"])
-        if info["dropped"]:
-            print("  dropped (not part of this encoder): %s"
-                  % info["dropped"][:4])
-    cfg = dict(cfg, with_value=False, attr_dim=0, n_patches=n_patches)
-    return model, cfg, info
-
-
-def param_groups(model, args, lr_enc, lr_patch):
-    """Three groups, because the three parts of the model are not in the
-    same state at step 0.
-
-    * heads (champ/role) - pretrained when the trunk is, but they face a
-      different label distribution, so they keep the head rate.
-    * trunk - pretrained, and must not be shattered, so it gets the lower
-      rate. On the scratch arm it is the same thing as the heads.
-    * patch table - brand new and zero, so it wants the head rate, not the
-      trunk's.
-
-    On the scratch arm all three collapse to `--lr`, which is what keeps
-    that arm's numbers unchanged by this code.
-    """
-    heads, trunk, patch = [], [], []
-    for name, p in model.named_parameters():
-        if name.startswith("embed.patch_lookup."):
-            patch.append(p)
-        elif "champ_head" in name or "role_head" in name:
-            heads.append(p)
-        else:
-            trunk.append(p)
-    groups = [{"params": heads, "lr": args.lr},
-              {"params": trunk, "lr": lr_enc}]
-    if patch:
-        groups.append({"params": patch, "lr": lr_patch})
-    return groups
 
 
 def train(args):
@@ -356,20 +208,6 @@ def train(args):
     rows, splits, patch_vocab, patch_index = C.load_split(args)
     num_champs = 173
     n_patches = (len(patch_vocab) + 1) if args.patch_emb else 0
-    # The vocabulary the patch ids refer to. A checkpoint's ids are positions
-    # in the vocabulary *it* was trained with, so a run initialising from a
-    # checkpoint with a patch table indexes that table the checkpoint's way -
-    # see `common.checkpoint_patch_space`. The checkpoint stores this
-    # vocabulary, so the next stage reads the ids back the same way.
-    patch_vocab_used = list(patch_vocab)
-
-    # Read the init checkpoint before the loaders are built: it decides the
-    # patch id space, and the loaders capture it. Reading a checkpoint
-    # consumes no global RNG, so this does not move the random stream.
-    init_payload, _ = resolve_init(args.init_ckpt)
-    if init_payload is not None:
-        n_patches, patch_index, patch_vocab_used = C.checkpoint_patch_space(
-            init_payload, patch_vocab, patch_index, n_patches)
 
     def loader(idxs, mask_prob, shuffle, seed, patch_index=patch_index):
         ds = PRO_DATA.ProMaskedDraftDataset(
@@ -387,33 +225,25 @@ def train(args):
     va_loader = loader(splits["val"], args.mask_prob, False, C.EVAL_SEED)
     te_loader = loader(splits["test"], args.mask_prob, False, C.EVAL_SEED)
 
-    # build_and_init prints what was loaded, dropped and zero-initialised;
-    # the checkpoint's own `init_ckpt` field in the report protocol is the
-    # provenance, so the info dict itself is not kept.
-    model, cfg, _ = build_and_init(args, n_patches, device, init_payload)
+    model = C.build_encoder(num_champs, args.embed_dim, args.num_intra,
+                            args.num_cross, args.num_heads, args.dropout,
+                            n_patches).to(device)
+    cfg = {"num_champs": num_champs, "embed_dim": args.embed_dim,
+           "num_intra": args.num_intra, "num_cross": args.num_cross,
+           "num_heads": args.num_heads, "dropout": args.dropout,
+           "with_value": False, "attr_dim": 0, "n_patches": n_patches}
     print("patch embedding: %s (%d rows incl. UNK)"
           % ("ON" if n_patches else "OFF", n_patches))
     print("model: %.2fM params, device %s, amp %s"
           % (C.param_count(model) / 1e6, device, amp))
-
-    # Trunk rate: a pretrained trunk needs less than a random one. Same
-    # convention as the policy stage's `--lr-enc`. On the scratch arm it is
-    # `--lr`, so the three groups collapse to one and the scratch arm's
-    # numbers are unchanged by the split.
-    lr_enc = args.lr_enc if args.lr_enc is not None else (
-        args.lr if args.init_ckpt == "scratch" else 1e-4)
-    lr_patch = args.lr_patch if args.lr_patch is not None else args.lr
-    print("lr: heads %.0e / trunk %.0e / patch %.0e"
-          % (args.lr, lr_enc, lr_patch))
 
     slot_rank = EP.slot_popularity_ranks(rows, splits["train"], num_champs)
     steps_per_epoch = math.ceil(len(tr_loader))
     total_steps = steps_per_epoch * args.epochs
     if args.max_steps:
         total_steps = min(total_steps, args.max_steps)
-    opt = torch.optim.AdamW(
-        param_groups(model, args, lr_enc, lr_patch),
-        weight_decay=args.weight_decay)
+    opt = torch.optim.AdamW(model.parameters(), lr=args.lr,
+                            weight_decay=args.weight_decay)
     warm = max(1, int(total_steps * args.warmup_frac))
 
     def lr_lambda(step):
@@ -476,9 +306,9 @@ def train(args):
                 best = va["rel_champ_top5"]
                 save_ckpt(run_dir / "best.pt", model, args, cfg,
                           dict(va, epoch=epoch), global_step, epoch,
-                          patch_vocab_used)
+                          patch_vocab)
         save_ckpt(run_dir / "latest.pt", model, args, cfg,
-                  {"epoch": epoch}, global_step, epoch, patch_vocab_used,
+                  {"epoch": epoch}, global_step, epoch, patch_vocab,
                   resume={"opt": opt.state_dict(), "sched": sched.state_dict(),
                           "step": global_step, "epoch": epoch,
                           "best": best, "run_dir": str(run_dir)})
@@ -494,10 +324,8 @@ def train(args):
         "n_train": len(splits["train"]), "n_val": len(splits["val"]),
         "n_test": len(splits["test"]),
         "selection": "rel_champ_top5 (val)",
-        "init_ckpt": args.init_ckpt,
         "model": {k: cfg[k] for k in ("embed_dim", "num_intra", "num_cross",
                                       "num_heads", "dropout")},
-        "lr": {"heads": args.lr, "trunk": lr_enc, "patch": lr_patch},
         "params": C.param_count(model)}}
     blob = torch.load(str(run_dir / "best.pt"), map_location="cpu",
                       weights_only=False)

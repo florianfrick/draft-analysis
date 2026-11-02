@@ -101,7 +101,7 @@ current SoloQ-pretrain to pro-finetune + set-attention strategy was chosen.
   modelling. Sketch in root README: embedding to Siamese intra-team attention
   to symmetric inter-team cross-attention to slot-level champ + role heads
   (plus pooling to aux heads). Frozen as I/O contract, enforced by tests,
-  implemented in soloq_model.py.
+  implemented in model/pretraining/soloq_model.py.
 - Why sets, not sequences: same champ cannot repeat and only the current
   state matters, so permutation invariance is wanted and there are no
   positional embeddings. Slot order is loader convention only; tests assert
