@@ -227,3 +227,30 @@ def test_report_json_shape():
             assert all(0.0 <= p <= 1.0 for p in g["p_blue"])
     # the baseline must cover the same states as the models
     assert sum(len(g["steps"]) for g in rep["baseline"]["games"]) == 40
+
+
+def test_report_model_set_matches_the_registry():
+    """Pruning a checkpoint or editing the registry must regenerate the report.
+
+    The report is the artefact people read. If it lists a model whose weights
+    were deleted, the tool can no longer reproduce its own committed output -
+    and nothing else in the suite would notice.
+    """
+    path = HERE / "reports" / "blg_vs_hle.json"
+    if not path.exists():
+        pytest.skip("report not generated")
+    rep = json.loads(path.read_text(encoding="utf-8"))
+    assert set(rep["next_move"]) == {n for n, _f, _p in ES.POLICY_MODELS}
+    assert set(rep["masked"]) == {n for n, _f, _p in ES.MASKED_MODELS}
+    assert set(rep["value"]) == {n for n, _f, _p, _k in ES.VALUE_MODELS}
+
+
+def test_no_registry_entry_points_at_a_deleted_checkpoint():
+    """The pruning must not leave a dangling path behind.
+
+    Weights are git-ignored, so this is only meaningful on a machine that has
+    them; a fresh clone has none and skips.
+    """
+    if not (ROOT / "model" / "proonly" / "ckpt").exists():
+        pytest.skip("weights are git-ignored; nothing to check on a fresh clone")
+    assert ES.missing_checkpoints() == []

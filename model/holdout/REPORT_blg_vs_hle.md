@@ -74,10 +74,7 @@ Next move, 40 states (20 per game):
 |---|---|---|---|---|---|
 | `policy-ablF` | soloQ->pro (kept) | 10% | 45% | 17.1 | 17% |
 | `pro-patch-s0` | pro-only +patch | 22% | 68% | 7.3 | 58% |
-| `pro-patch-s1` | pro-only +patch | 15% | 60% | 5.9 | 33% |
 | `pro-nopatch-s0` | pro-only -patch | 10% | 55% | 13.2 | 17% |
-| `pro-nopatch-s1` | pro-only -patch | 10% | 45% | 13.3 | 17% |
-| `pro-scratch-s0` | pro-only, no masked init | 20% | 68% | 7.8 | 58% |
 | `patch table` | patch 16.20 frequency | 5% | 35% | 13.6 | 33% |
 
 Masked completion, 20 hidden picks:
@@ -87,11 +84,6 @@ Masked completion, 20 hidden picks:
 | `soloQ-pretrain` | soloQ only | 15% | 45% | 9.2 |
 | `pro-finetune` | soloQ->pro (kept) | 15% | 65% | 10.1 |
 | `pro-patch-s0` | pro-only +patch | 15% | 70% | 4.0 |
-| `pro-patch-s1` | pro-only +patch | 20% | 55% | 4.0 |
-| `pro-nopatch-s0` | pro-only -patch | 25% | 55% | 4.3 |
-| `pro-nopatch-s1` | pro-only -patch | 20% | 55% | 4.2 |
-| `pro-all-patch-s0` | pro-only +patch, 2017-26 | 20% | 60% | 3.4 |
-| `pro-all-nopatch-s0` | pro-only -patch, 2017-26 | 15% | 55% | 4.8 |
 
 ## Per-step recommendations
 
@@ -99,85 +91,85 @@ Cell = that model's top-1 for the real board, with the position of the move that
 
 ### Game 1
 
-| # | phase | side | actual | `policy-ablF` | `pro-patch-s0` | `pro-patch-s1` | `pro-nopatch-s0` | `pro-nopatch-s1` | `pro-scratch-s0` |
-|---|---|---|---|---|---|---|---|---|---|
-| 0 | ban 1 | red | Renata Glasc | Varus (79th) | Nocturne (129th) | Nocturne (42nd) | Vi (66th) | Varus (73rd) | Nocturne (139th) |
-| 1 | ban 1 | blue | Jayce | *Orianna (3rd)* | Cassiopeia (6th) | Nocturne (15th) | Rumble (8th) | Rumble (9th) | Cassiopeia (6th) |
-| 2 | ban 1 | red | Qiyana | Jarvan IV (32nd) | Vi (7th) | Vi (14th) | Vi (95th) | Vi (83rd) | Nocturne (6th) |
-| 3 | ban 1 | blue | Vi | Orianna (10th) | *Nocturne (2nd)* | *Nocturne (2nd)* | *Rumble (4th)* | *Rumble (3rd)* | *Cassiopeia (4th)* |
-| 4 | ban 1 | red | Syndra | Varus (54th) | *Nocturne (5th)* | Nocturne (8th) | Varus (36th) | Varus (38th) | *Nocturne (5th)* |
-| 5 | ban 1 | blue | Nocturne | Orianna (8th) | **Nocturne (1st)** | **Nocturne (1st)** | Varus (12th) | Rumble (12th) | *Cassiopeia (2nd)* |
-| 6 | pick 1 | red | Cassiopeia | Orianna (57th) | *Jarvan IV (2nd)* | *Lee Sin (2nd)* | Varus (39th) | Varus (41st) | *Lee Sin (2nd)* |
-| 7 | pick 1 | blue | Orianna | *Yunara (4th)* | *Jarvan IV (2nd)* | *Lucian (3rd)* | **Orianna (1st)** | **Orianna (1st)** | **Orianna (1st)** |
-| 8 | pick 1 | blue | Nautilus | Jarvan IV (13th) | Jarvan IV (12th) | Jarvan IV (6th) | Jarvan IV (11th) | Jarvan IV (10th) | Jarvan IV (10th) |
-| 9 | pick 1 | red | Jarvan IV | **Jarvan IV (1st)** | **Jarvan IV (1st)** | *Lee Sin (2nd)* | **Jarvan IV (1st)** | **Jarvan IV (1st)** | **Jarvan IV (1st)** |
-| 10 | pick 1 | red | Alistar | Wukong (13th) | Leona (7th) | *Leona (4th)* | *Leona (3rd)* | *Rell (4th)* | *Leona (4th)* |
-| 11 | pick 1 | blue | Ezreal | Kai'Sa (20th) | *Lee Sin (3rd)* | *Lee Sin (3rd)* | Ambessa (8th) | *Wukong (3rd)* | *Wukong (3rd)* |
-| 12 | ban 2 | blue | Jhin | Sivir (12th) | Lee Sin (13th) | Kai'Sa (10th) | Kai'Sa (18th) | Kai'Sa (17th) | Kai'Sa (6th) |
-| 13 | ban 2 | red | Wukong | *Kai'Sa (4th)* | *Lee Sin (4th)* | Kai'Sa (6th) | *Kai'Sa (2nd)* | Kai'Sa (8th) | *Kai'Sa (2nd)* |
-| 14 | ban 2 | blue | Sivir | *Kai'Sa (2nd)* | *Lee Sin (3rd)* | *Kai'Sa (2nd)* | *Kai'Sa (3rd)* | *Kai'Sa (2nd)* | *Kai'Sa (2nd)* |
-| 15 | ban 2 | red | Ambessa | *Kai'Sa (5th)* | Lee Sin (9th) | Kai'Sa (9th) | *Kai'Sa (3rd)* | Kai'Sa (6th) | Kai'Sa (10th) |
-| 16 | pick 2 | blue | Lee Sin | Kai'Sa (17th) | *Kai'Sa (2nd)* | Kai'Sa (6th) | *Xin Zhao (3rd)* | *Xin Zhao (4th)* | *Kai'Sa (3rd)* |
-| 17 | pick 2 | red | Corki | Kai'Sa (7th) | **Corki (1st)** | *Kai'Sa (3rd)* | *Kai'Sa (2nd)* | *Kai'Sa (2nd)* | *Kai'Sa (2nd)* |
-| 18 | pick 2 | red | Rumble | *K'Sante (3rd)* | *Gnar (2nd)* | *Gnar (4th)* | *Gnar (2nd)* | *K'Sante (3rd)* | *K'Sante (5th)* |
-| 19 | pick 2 | blue | Gnar | *K'Sante (4th)* | *K'Sante (4th)* | *K'Sante (5th)* | *K'Sante (4th)* | K'Sante (6th) | *K'Sante (2nd)* |
+| # | phase | side | actual | `policy-ablF` | `pro-patch-s0` | `pro-nopatch-s0` |
+|---|---|---|---|---|---|---|
+| 0 | ban 1 | red | Renata Glasc | Varus (79th) | Nocturne (129th) | Vi (66th) |
+| 1 | ban 1 | blue | Jayce | *Orianna (3rd)* | Cassiopeia (6th) | Rumble (8th) |
+| 2 | ban 1 | red | Qiyana | Jarvan IV (32nd) | Vi (7th) | Vi (95th) |
+| 3 | ban 1 | blue | Vi | Orianna (10th) | *Nocturne (2nd)* | *Rumble (4th)* |
+| 4 | ban 1 | red | Syndra | Varus (54th) | *Nocturne (5th)* | Varus (36th) |
+| 5 | ban 1 | blue | Nocturne | Orianna (8th) | **Nocturne (1st)** | Varus (12th) |
+| 6 | pick 1 | red | Cassiopeia | Orianna (57th) | *Jarvan IV (2nd)* | Varus (39th) |
+| 7 | pick 1 | blue | Orianna | *Yunara (4th)* | *Jarvan IV (2nd)* | **Orianna (1st)** |
+| 8 | pick 1 | blue | Nautilus | Jarvan IV (13th) | Jarvan IV (12th) | Jarvan IV (11th) |
+| 9 | pick 1 | red | Jarvan IV | **Jarvan IV (1st)** | **Jarvan IV (1st)** | **Jarvan IV (1st)** |
+| 10 | pick 1 | red | Alistar | Wukong (13th) | Leona (7th) | *Leona (3rd)* |
+| 11 | pick 1 | blue | Ezreal | Kai'Sa (20th) | *Lee Sin (3rd)* | Ambessa (8th) |
+| 12 | ban 2 | blue | Jhin | Sivir (12th) | Lee Sin (13th) | Kai'Sa (18th) |
+| 13 | ban 2 | red | Wukong | *Kai'Sa (4th)* | *Lee Sin (4th)* | *Kai'Sa (2nd)* |
+| 14 | ban 2 | blue | Sivir | *Kai'Sa (2nd)* | *Lee Sin (3rd)* | *Kai'Sa (3rd)* |
+| 15 | ban 2 | red | Ambessa | *Kai'Sa (5th)* | Lee Sin (9th) | *Kai'Sa (3rd)* |
+| 16 | pick 2 | blue | Lee Sin | Kai'Sa (17th) | *Kai'Sa (2nd)* | *Xin Zhao (3rd)* |
+| 17 | pick 2 | red | Corki | Kai'Sa (7th) | **Corki (1st)** | *Kai'Sa (2nd)* |
+| 18 | pick 2 | red | Rumble | *K'Sante (3rd)* | *Gnar (2nd)* | *Gnar (2nd)* |
+| 19 | pick 2 | blue | Gnar | *K'Sante (4th)* | *K'Sante (4th)* | *K'Sante (4th)* |
 
 ### Game 2
 
-| # | phase | side | actual | `policy-ablF` | `pro-patch-s0` | `pro-patch-s1` | `pro-nopatch-s0` | `pro-nopatch-s1` | `pro-scratch-s0` |
-|---|---|---|---|---|---|---|---|---|---|
-| 0 | ban 1 | red | Qiyana | Varus (26th) | *Nocturne (5th)* | Nocturne (9th) | Vi (91st) | Varus (89th) | *Nocturne (5th)* |
-| 1 | ban 1 | blue | Jayce | *Orianna (3rd)* | *Cassiopeia (5th)* | Nocturne (14th) | Rumble (8th) | Rumble (9th) | *Cassiopeia (5th)* |
-| 2 | ban 1 | red | Akali | Jarvan IV (15th) | Vi (8th) | Vi (16th) | Vi (19th) | Vi (17th) | Nocturne (11th) |
-| 3 | ban 1 | blue | Vi | Orianna (10th) | *Nocturne (2nd)* | *Nocturne (2nd)* | *Rumble (4th)* | *Rumble (3rd)* | *Cassiopeia (4th)* |
-| 4 | ban 1 | red | LeBlanc | Varus (22nd) | Nocturne (46th) | Nocturne (27th) | Varus (15th) | Varus (14th) | Nocturne (53rd) |
-| 5 | ban 1 | blue | Nocturne | Orianna (8th) | **Nocturne (1st)** | **Nocturne (1st)** | Varus (12th) | Rumble (12th) | *Cassiopeia (2nd)* |
-| 6 | pick 1 | red | Syndra | Ryze (42nd) | **Syndra (1st)** | **Syndra (1st)** | Varus (35th) | Varus (34th) | **Syndra (1st)** |
-| 7 | pick 1 | blue | Yunara | *Neeko (4th)* | *Viktor (5th)* | *Lucian (5th)* | *Ryze (3rd)* | Viktor (7th) | Viktor (6th) |
-| 8 | pick 1 | blue | Lulu | **Lulu (1st)** | **Lulu (1st)** | **Lulu (1st)** | **Lulu (1st)** | **Lulu (1st)** | **Lulu (1st)** |
-| 9 | pick 1 | red | Caitlyn | *Ashe (5th)* | **Caitlyn (1st)** | *Lucian (2nd)* | *Lucian (2nd)* | *Lucian (2nd)* | **Caitlyn (1st)** |
-| 10 | pick 1 | red | Karma | *Neeko (4th)* | *Bard (2nd)* | **Karma (1st)** | *Bard (2nd)* | **Karma (1st)** | **Karma (1st)** |
-| 11 | pick 1 | blue | Locke | Xin Zhao (149th) | Xin Zhao (7th) | Viktor (7th) | Ryze (16th) | Ryze (16th) | Ryze (10th) |
-| 12 | ban 2 | blue | Xin Zhao | *Jarvan IV (3rd)* | Lee Sin (8th) | *Jarvan IV (4th)* | *Jarvan IV (2nd)* | Olaf (6th) | Jarvan IV (6th) |
-| 13 | ban 2 | red | Naafiri | *Jarvan IV (3rd)* | Lee Sin (6th) | Jarvan IV (6th) | Jarvan IV (6th) | *Olaf (4th)* | Jarvan IV (6th) |
-| 14 | ban 2 | blue | Wukong | Lee Sin (8th) | *Jarvan IV (3rd)* | *Jarvan IV (2nd)* | *Jarvan IV (4th)* | Olaf (6th) | *Jarvan IV (2nd)* |
-| 15 | ban 2 | red | Camille | Lee Sin (50th) | Lee Sin (11th) | Jarvan IV (21st) | Jarvan IV (19th) | Olaf (12th) | Jarvan IV (15th) |
-| 16 | pick 2 | blue | Pantheon | **Pantheon (1st)** | *Skarner (2nd)* | **Pantheon (1st)** | **Pantheon (1st)** | *Trundle (2nd)* | **Pantheon (1st)** |
-| 17 | pick 2 | red | Skarner | *Ambessa (3rd)* | **Skarner (1st)** | *Trundle (2nd)* | *Olaf (2nd)* | *Trundle (2nd)* | *Olaf (3rd)* |
-| 18 | pick 2 | red | K'Sante | **K'Sante (1st)** | **K'Sante (1st)** | *Ambessa (3rd)* | *Ambessa (3rd)* | *Renekton (3rd)* | **K'Sante (1st)** |
-| 19 | pick 2 | blue | Olaf | Ambessa (19th) | *Ambessa (2nd)* | *Gwen (3rd)* | *Gwen (3rd)* | *Ambessa (5th)* | *Ambessa (2nd)* |
+| # | phase | side | actual | `policy-ablF` | `pro-patch-s0` | `pro-nopatch-s0` |
+|---|---|---|---|---|---|---|
+| 0 | ban 1 | red | Qiyana | Varus (26th) | *Nocturne (5th)* | Vi (91st) |
+| 1 | ban 1 | blue | Jayce | *Orianna (3rd)* | *Cassiopeia (5th)* | Rumble (8th) |
+| 2 | ban 1 | red | Akali | Jarvan IV (15th) | Vi (8th) | Vi (19th) |
+| 3 | ban 1 | blue | Vi | Orianna (10th) | *Nocturne (2nd)* | *Rumble (4th)* |
+| 4 | ban 1 | red | LeBlanc | Varus (22nd) | Nocturne (46th) | Varus (15th) |
+| 5 | ban 1 | blue | Nocturne | Orianna (8th) | **Nocturne (1st)** | Varus (12th) |
+| 6 | pick 1 | red | Syndra | Ryze (42nd) | **Syndra (1st)** | Varus (35th) |
+| 7 | pick 1 | blue | Yunara | *Neeko (4th)* | *Viktor (5th)* | *Ryze (3rd)* |
+| 8 | pick 1 | blue | Lulu | **Lulu (1st)** | **Lulu (1st)** | **Lulu (1st)** |
+| 9 | pick 1 | red | Caitlyn | *Ashe (5th)* | **Caitlyn (1st)** | *Lucian (2nd)* |
+| 10 | pick 1 | red | Karma | *Neeko (4th)* | *Bard (2nd)* | *Bard (2nd)* |
+| 11 | pick 1 | blue | Locke | Xin Zhao (149th) | Xin Zhao (7th) | Ryze (16th) |
+| 12 | ban 2 | blue | Xin Zhao | *Jarvan IV (3rd)* | Lee Sin (8th) | *Jarvan IV (2nd)* |
+| 13 | ban 2 | red | Naafiri | *Jarvan IV (3rd)* | Lee Sin (6th) | Jarvan IV (6th) |
+| 14 | ban 2 | blue | Wukong | Lee Sin (8th) | *Jarvan IV (3rd)* | *Jarvan IV (4th)* |
+| 15 | ban 2 | red | Camille | Lee Sin (50th) | Lee Sin (11th) | Jarvan IV (19th) |
+| 16 | pick 2 | blue | Pantheon | **Pantheon (1st)** | *Skarner (2nd)* | **Pantheon (1st)** |
+| 17 | pick 2 | red | Skarner | *Ambessa (3rd)* | **Skarner (1st)** | *Olaf (2nd)* |
+| 18 | pick 2 | red | K'Sante | **K'Sante (1st)** | **K'Sante (1st)** | *Ambessa (3rd)* |
+| 19 | pick 2 | blue | Olaf | Ambessa (19th) | *Ambessa (2nd)* | *Gwen (3rd)* |
 
 ## Masked completion
 
 ### Game 1
 
-| mv | role | actual | `soloQ-pretrain` | `pro-finetune` | `pro-patch-s0` | `pro-patch-s1` | `pro-nopatch-s0` | `pro-nopatch-s1` | `pro-all-patch-s0` | `pro-all-nopatch-s0` |
-|---|---|---|---|---|---|---|---|---|---|---|
-| 6 | MID | Cassiopeia | Viktor (29th) | Azir (12th) | Viktor (8th) | Syndra (6th) | Azir (11th) | Syndra (9th) | Galio (7th) | Ryze (15th) |
-| 7 | MID | Orianna | Sylas (15th) | *Ryze (4th)* | *Syndra (2nd)* | Ryze (8th) | **Orianna (1st)** | *Akali (4th)* | Ryze (8th) | Ryze (8th) |
-| 8 | SUP | Nautilus | *Karma (4th)* | *Leona (2nd)* | *Rell (5th)* | *Bard (5th)* | *Rell (5th)* | Leona (7th) | Bard (6th) | Braum (8th) |
-| 9 | JNG | Jarvan IV | *Qiyana (5th)* | *Xin Zhao (2nd)* | *Xin Zhao (4th)* | *Vi (3rd)* | **Jarvan IV (1st)** | *Vi (2nd)* | *Wukong (5th)* | *Vi (3rd)* |
-| 10 | SUP | Alistar | Thresh (7th) | *Nami (3rd)* | Nami (11th) | *Bard (4th)* | Nami (8th) | **Alistar (1st)** | *Bard (5th)* | Nami (10th) |
-| 11 | BOT | Ezreal | Kai'Sa (13th) | Kai'Sa (7th) | *Yunara (5th)* | *Jhin (5th)* | *Kai'Sa (2nd)* | *Jhin (4th)* | *Sivir (3rd)* | *Kai'Sa (3rd)* |
-| 16 | JNG | Lee Sin | **Lee Sin (1st)** | Wukong (16th) | *Xin Zhao (3rd)* | Naafiri (6th) | Wukong (6th) | Naafiri (8th) | Xin Zhao (6th) | *Nocturne (5th)* |
-| 17 | BOT | Corki | Kai'Sa (19th) | *Varus (3rd)* | Varus (6th) | *Jhin (4th)* | *Kai'Sa (3rd)* | Kai'Sa (8th) | *Sivir (4th)* | Kai'Sa (10th) |
-| 18 | TOP | Rumble | K'Sante (17th) | **Rumble (1st)** | *K'Sante (3rd)* | K'Sante (7th) | K'Sante (6th) | Camille (10th) | Renekton (7th) | *K'Sante (3rd)* |
-| 19 | TOP | Gnar | Jayce (12th) | *K'Sante (2nd)* | K'Sante (14th) | Galio (7th) | Ambessa (11th) | K'Sante (12th) | K'Sante (8th) | K'Sante (7th) |
+| mv | role | actual | `soloQ-pretrain` | `pro-finetune` | `pro-patch-s0` |
+|---|---|---|---|---|---|
+| 6 | MID | Cassiopeia | Viktor (29th) | Azir (12th) | Viktor (8th) |
+| 7 | MID | Orianna | Sylas (15th) | *Ryze (4th)* | *Syndra (2nd)* |
+| 8 | SUP | Nautilus | *Karma (4th)* | *Leona (2nd)* | *Rell (5th)* |
+| 9 | JNG | Jarvan IV | *Qiyana (5th)* | *Xin Zhao (2nd)* | *Xin Zhao (4th)* |
+| 10 | SUP | Alistar | Thresh (7th) | *Nami (3rd)* | Nami (11th) |
+| 11 | BOT | Ezreal | Kai'Sa (13th) | Kai'Sa (7th) | *Yunara (5th)* |
+| 16 | JNG | Lee Sin | **Lee Sin (1st)** | Wukong (16th) | *Xin Zhao (3rd)* |
+| 17 | BOT | Corki | Kai'Sa (19th) | *Varus (3rd)* | Varus (6th) |
+| 18 | TOP | Rumble | K'Sante (17th) | **Rumble (1st)** | *K'Sante (3rd)* |
+| 19 | TOP | Gnar | Jayce (12th) | *K'Sante (2nd)* | K'Sante (14th) |
 
 ### Game 2
 
-| mv | role | actual | `soloQ-pretrain` | `pro-finetune` | `pro-patch-s0` | `pro-patch-s1` | `pro-nopatch-s0` | `pro-nopatch-s1` | `pro-all-patch-s0` | `pro-all-nopatch-s0` |
-|---|---|---|---|---|---|---|---|---|---|---|
-| 6 | MID | Syndra | *Viktor (3rd)* | Azir (10th) | *Cassiopeia (3rd)* | *Viktor (2nd)* | Orianna (10th) | *Ryze (2nd)* | *Orianna (3rd)* | *Orianna (4th)* |
-| 7 | BOT | Yunara | **Yunara (1st)** | **Yunara (1st)** | **Yunara (1st)** | **Yunara (1st)** | **Yunara (1st)** | **Yunara (1st)** | **Yunara (1st)** | **Yunara (1st)** |
-| 8 | SUP | Lulu | **Lulu (1st)** | **Lulu (1st)** | **Lulu (1st)** | **Lulu (1st)** | **Lulu (1st)** | **Lulu (1st)** | **Lulu (1st)** | **Lulu (1st)** |
-| 9 | BOT | Caitlyn | *Ezreal (3rd)* | *Ezreal (2nd)* | *Ezreal (2nd)* | **Caitlyn (1st)** | *Ezreal (3rd)* | *Ezreal (2nd)* | *Ezreal (2nd)* | *Ezreal (2nd)* |
-| 10 | SUP | Karma | *Bard (3rd)* | *Bard (2nd)* | *Bard (2nd)* | *Bard (3rd)* | *Bard (2nd)* | *Bard (3rd)* | **Karma (1st)** | *Bard (2nd)* |
-| 11 | MID | Locke | *Viktor (2nd)* | Ryze (99th) | Annie (15th) | **Locke (1st)** | Orianna (16th) | *Ryze (5th)* | *Ryze (2nd)* | Ryze (13th) |
-| 16 | JNG | Pantheon | Lee Sin (27th) | *Xin Zhao (2nd)* | *Lee Sin (2nd)* | Xin Zhao (7th) | **Pantheon (1st)** | Jarvan IV (7th) | *Wukong (4th)* | *Vi (5th)* |
-| 17 | JNG | Skarner | Lee Sin (22nd) | Jarvan IV (7th) | Xin Zhao (10th) | Xin Zhao (8th) | Jarvan IV (9th) | Jarvan IV (7th) | Vi (7th) | Wukong (6th) |
-| 18 | TOP | K'Sante | Jayce (7th) | *Rumble (5th)* | **K'Sante (1st)** | Renekton (6th) | *Rumble (3rd)* | **K'Sante (1st)** | **K'Sante (1st)** | **K'Sante (1st)** |
-| 19 | TOP | Olaf | Jayce (14th) | Rumble (40th) | *Rumble (2nd)* | Rumble (14th) | Rumble (7th) | Rumble (10th) | Renekton (6th) | Rumble (8th) |
+| mv | role | actual | `soloQ-pretrain` | `pro-finetune` | `pro-patch-s0` |
+|---|---|---|---|---|---|
+| 6 | MID | Syndra | *Viktor (3rd)* | Azir (10th) | *Cassiopeia (3rd)* |
+| 7 | BOT | Yunara | **Yunara (1st)** | **Yunara (1st)** | **Yunara (1st)** |
+| 8 | SUP | Lulu | **Lulu (1st)** | **Lulu (1st)** | **Lulu (1st)** |
+| 9 | BOT | Caitlyn | *Ezreal (3rd)* | *Ezreal (2nd)* | *Ezreal (2nd)* |
+| 10 | SUP | Karma | *Bard (3rd)* | *Bard (2nd)* | *Bard (2nd)* |
+| 11 | MID | Locke | *Viktor (2nd)* | Ryze (99th) | Annie (15th) |
+| 16 | JNG | Pantheon | Lee Sin (27th) | *Xin Zhao (2nd)* | *Lee Sin (2nd)* |
+| 17 | JNG | Skarner | Lee Sin (22nd) | Jarvan IV (7th) | Xin Zhao (10th) |
+| 18 | TOP | K'Sante | Jayce (7th) | *Rumble (5th)* | **K'Sante (1st)** |
+| 19 | TOP | Olaf | Jayce (14th) | Rumble (40th) | *Rumble (2nd)* |
 
 ## Value
 
@@ -197,7 +189,7 @@ P(blue wins) after each of the 20 moves. Blue won both games.
 ## Caveats
 
 - n = 2 games, 40 next-move states, 20 hidden picks. One hit is 2.5 points; there is no interval here worth quoting.
-- The masked models never see fearless `unavailable`, so on game 2 they name champions already used in game 1 (56 of 80 slots put one in the top-5). Scope limit, not a harness bug.
+- The masked models never see fearless `unavailable`, so on game 2 they name champions already used in game 1 (19 of 30 slots put one in the top-5). Scope limit, not a harness bug.
 - 16.20 is the newest patch in every vocabulary, so its patch embedding row saw only the 196 corpus drafts on it.
 - Three of the four value heads are flat near 50%; the policy value head swings 0.01-0.99 inside one draft, matching `STATUS.md` §3.
 - The head-to-head against the kept stages is **not** on equal information: ablF never saw patch 16.20 (all 196 rows are test under the date split) and has no patch input, while the pro-only models trained on 155 of the 196 and read a patch embedding.

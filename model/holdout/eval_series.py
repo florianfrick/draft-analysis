@@ -95,29 +95,29 @@ ProDraftModel = FIN_MODEL.ProDraftModel
 
 
 # --------------------------------------------------------------------- models
-# Every distinct trained artefact in the repo. `latest.pt` duplicates of a
+# Every distinct trained artefact kept in the repo. `latest.pt` duplicates of a
 # `best.pt` are skipped (same step, worse metric), and the two `best_win.pt` /
 # `best_value.pt` heads are listed under value rather than next-move because
 # that is the only question they can answer.
+#
+# The pro-only grid is pruned to the three checkpoints that carry a claim:
+# the shipped policy (`pro-patch-s0`), the masked model it initialises from
+# (same name, masked list), and the no-patch control that the ablation is
+# measured against. The losing arms - seed 1, the wider-corpus pair, and the
+# scratch control - were deleted with their weights; their numbers survive in
+# `model/proonly/reports/` and in `FINDINGS.md` §4, but their paired
+# comparisons can no longer be re-run.
 POLICY_MODELS = [
     ("policy-ablF", "soloQ->pro (kept)",
      "model/policy/ckpt/run_20261025_000606_ablF-stage1/best_policy.pt"),
     ("pro-patch-s0", "pro-only +patch", "model/proonly/ckpt/run_20261101_183519_p-patch-s0/best.pt"),
-    ("pro-patch-s1", "pro-only +patch", "model/proonly/ckpt/run_20261101_184237_p-patch-s1/best.pt"),
     ("pro-nopatch-s0", "pro-only -patch", "model/proonly/ckpt/run_20261101_183522_p-nopatch-s0/best.pt"),
-    ("pro-nopatch-s1", "pro-only -patch", "model/proonly/ckpt/run_20261101_184228_p-nopatch-s1/best.pt"),
-    ("pro-scratch-s0", "pro-only, no masked init", "model/proonly/ckpt/run_20261101_192216_p-scratch-patch-s0/best.pt"),
 ]
 
 MASKED_MODELS = [
     ("soloQ-pretrain", "soloQ only", "model/pretraining/ckpt/run_20261029_153912_v2-D512-p8/best.pt"),
     ("pro-finetune", "soloQ->pro (kept)", "model/finetune/ckpt/run_20261017_185016_stage1-full/best_mask.pt"),
     ("pro-patch-s0", "pro-only +patch", "model/proonly/ckpt/run_20261101_182415_m-patch-s0/best.pt"),
-    ("pro-patch-s1", "pro-only +patch", "model/proonly/ckpt/run_20261101_182941_m-patch-s1/best.pt"),
-    ("pro-nopatch-s0", "pro-only -patch", "model/proonly/ckpt/run_20261101_182417_m-nopatch-s0/best.pt"),
-    ("pro-nopatch-s1", "pro-only -patch", "model/proonly/ckpt/run_20261101_182941_m-nopatch-s1/best.pt"),
-    ("pro-all-patch-s0", "pro-only +patch, 2017-26", "model/proonly/ckpt/run_20261101_185853_m-all-patch-s0/best.pt"),
-    ("pro-all-nopatch-s0", "pro-only -patch, 2017-26", "model/proonly/ckpt/run_20261101_190552_m-all-nopatch-s0b/best.pt"),
 ]
 
 VALUE_MODELS = [
@@ -415,11 +415,27 @@ def by_phase(games):
     return out
 
 
+def missing_checkpoints():
+    """Checkpoint paths this machine does not have.
+
+    Weights are git-ignored, so a fresh clone has none of them. Name the list
+    up front instead of raising `FileNotFoundError` from inside a loader.
+    """
+    wanted = [p for _n, _f, p in POLICY_MODELS + MASKED_MODELS]
+    wanted += [p for _n, _f, p, _k in VALUE_MODELS]
+    return [p for p in wanted if not (ROOT / p).exists()]
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=str(HERE / "reports" / "blg_vs_hle.json"))
-    ap.add_argument("--no-md", action="store_true")
     args = ap.parse_args(argv)
+
+    missing = missing_checkpoints()
+    if missing:
+        raise SystemExit(
+            "missing checkpoints - weights are git-ignored, so train them "
+            "first (FINDINGS.md §5.2):\n  " + "\n  ".join(missing))
 
     rows, id_to_name = load_series_rows()
     print("series: %s (%s) patch %s, fearless=%s"

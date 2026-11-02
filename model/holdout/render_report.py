@@ -251,6 +251,25 @@ def value_block(report):
     return '<div class="cards">%s</div>' % "".join(cards)
 
 
+def fearless_leaks(report):
+    """Masked slots whose top-5 names a champion already picked in game 1.
+
+    Computed rather than hardcoded: the count is a product of how many masked
+    models are in the registry, so it changes whenever the registry does.
+    """
+    games = report["series"]["games"]
+    if len(games) < 2:
+        return 0, 0
+    unavailable = set(games[1]["unavailable"])
+    leaks = total = 0
+    for d in report["masked"].values():
+        for s in d["games"][1]["slots"]:
+            total += 1
+            if unavailable & set(s.get("top5_names", [])):
+                leaks += 1
+    return leaks, total
+
+
 CSS = """
 :root{
   --bg:#0d1117; --panel:#151b23; --panel2:#1b222c; --line:#283039;
@@ -494,6 +513,7 @@ def build_html(report):
     body.append(value_block(report))
 
     body.append("<h2>What this does and does not say</h2>")
+    leaks, leak_total = fearless_leaks(report)
     body.append(
         '<ul>'
         '<li><b>The pro-only models beat the kept pipeline here, but not on '
@@ -512,9 +532,9 @@ def build_html(report):
         'direction, not magnitude.</li>'
         '<li><b>The masked models are fearless-blind.</b> They never receive '
         '<code>unavailable</code>, so on game 2 they happily name champions '
-        'that BLG and HLE had already used — %d of 80 slots put a game-1 pick '
-        'in their top-5. That is a scope limit of the masked task as trained, '
-        'not a bug in this harness.</li>'
+        'that BLG and HLE had already used — %d of %d masked slots put a '
+        'game-1 pick in their top-5. That is a scope limit of the masked task '
+        'as trained, not a bug in this harness.</li>'
         '<li><b>No value head is usable.</b> Three of the four are flat near '
         '50%%; the policy value head swings between 0.01 and 0.99 within a '
         'single draft, which is the same failure <code>STATUS.md</code> §3 '
@@ -525,7 +545,7 @@ def build_html(report):
         '</ul>'
         % (fmt_pct(report["next_move"]["pro-patch-s0"]["by_phase"]["ban1"]["top5"]),
            fmt_pct(report["next_move"]["pro-nopatch-s0"]["by_phase"]["ban1"]["top5"]),
-           56))
+           leaks, leak_total))
 
     body.append("<h2>Appendix — every checkpoint scored</h2>")
     body.append('<p>%d distinct trained artefacts, nothing excluded except '
@@ -690,9 +710,11 @@ def build_md(report):
     L.append("## Caveats\n")
     L.append("- n = 2 games, 40 next-move states, 20 hidden picks. One hit is "
              "2.5 points; there is no interval here worth quoting.")
+    _leaks, _total = fearless_leaks(report)
     L.append("- The masked models never see fearless `unavailable`, so on "
-             "game 2 they name champions already used in game 1 (56 of 80 "
-             "slots put one in the top-5). Scope limit, not a harness bug.")
+             "game 2 they name champions already used in game 1 (%d of %d "
+             "slots put one in the top-5). Scope limit, not a harness bug."
+             % (_leaks, _total))
     L.append("- 16.20 is the newest patch in every vocabulary, so its patch "
              "embedding row saw only the 196 corpus drafts on it.")
     L.append("- Three of the four value heads are flat near 50%; the policy "

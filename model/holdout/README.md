@@ -20,16 +20,22 @@ what happened next.
 
 | | |
 |---|---|
-| `pro_drafts.pt` | built 11:19, stops at 2026-10-24 23:19:46, contains neither gameid |
+| `pro_drafts.pt` | stops at 2026-10-24 23:19:46, contains neither gameid |
 | `pro_drafts_all.pt` | built 11:58, same cutoff, contains neither gameid |
 | 2026 CSV | appended to at 12:59 on 2026-11-01 — *after* both caches |
 
-Nothing here rebuilds a cache. `pipeline.build_rows` validates its cache
-against a content signature (name, size, mtime), so calling it now would notice
-the changed CSV and rescan — folding the two games into the corpus the models
-were trained on. `eval_series.load_series_rows` scans the CSV directly instead,
-and `test_holdout.py` asserts the gameids are still absent from both caches, so
-that mistake cannot pass silently later.
+`eval_series.load_series_rows` scans the CSV directly instead of calling
+`pipeline.build_rows`, and `test_holdout.py` asserts the gameids are still
+absent from both caches so the mistake cannot pass silently.
+
+**This did happen once, and the fix is `pipeline.CORPUS_MAX_DATE`.** A test
+that calls `build_rows()` with defaults noticed the changed CSV signature,
+rescanned, and overwrote `pro_drafts.pt` with 46,875 drafts — the two final
+games included. The corpus is now pinned to the date every recorded number was
+measured on, so a rescan *cannot* pull them in: games after the pin are counted
+as `after_corpus_freeze` and dropped. Rebuilding today returns exactly the
+46,813 drafts the models trained on. Moving that pin is a deliberate act and
+requires re-measuring everything.
 
 ## The confound you have to know about
 
@@ -50,14 +56,21 @@ prior, and strictly more information about 16.20.
 
 ## What is scored
 
-18 distinct checkpoints, everything except `latest.pt` (a later step of the
-same run, worse on the metric that run selected on):
+10 distinct checkpoints — every trained artefact kept in the repo, minus
+`latest.pt` (a later step of the same run, worse on the metric that run
+selected on):
 
-* **next move** — 6 policy models, 20 states per game. Top-1, top-5, the rank
+* **next move** — 3 policy models, 20 states per game. Top-1, top-5, the rank
   of the move that actually happened, and the probability it gave it.
-* **masked completion** — 8 encoder models, 10 picks per game, each hidden in
+* **masked completion** — 3 encoder models, 10 picks per game, each hidden in
   turn while the other nine stay visible.
 * **value** — 4 value heads, P(blue wins) after each of the 20 moves.
+
+The pro-only grid is pruned to the shipped policy, its masked init, and the
+no-patch control that the ablation is measured against. The losing arms (seed
+1, the wider corpus, the scratch control) were deleted with their weights;
+their numbers survive in `FINDINGS.md` §4 and `model/proonly/reports/`, and
+`test_holdout.py` asserts this registry and the committed report agree.
 
 Baseline: patch 16.20's own per-move frequency table (196 rows, backed off to
 patch-wide frequency to break ties), with legality applied — otherwise it would
@@ -72,22 +85,18 @@ Next move, 40 states:
 |---|---|---|---|---|---|
 | `policy-ablF` | soloQ->pro (kept) | 0.100 | 0.450 | 17.1 | 0.17 |
 | `pro-patch-s0` | pro-only +patch | **0.225** | **0.675** | 7.3 | **0.58** |
-| `pro-patch-s1` | pro-only +patch | 0.150 | 0.600 | 5.9 | 0.33 |
 | `pro-nopatch-s0` | pro-only -patch | 0.100 | 0.550 | 13.2 | 0.17 |
-| `pro-nopatch-s1` | pro-only -patch | 0.100 | 0.450 | 13.3 | 0.17 |
-| `pro-scratch-s0` | pro-only, no masked init | 0.200 | 0.675 | 7.8 | 0.58 |
 | patch table | 16.20 frequency | 0.050 | 0.350 | 13.6 | 0.33 |
 
 Masked completion, 20 hidden picks (top-5 / mean rank): `pro-patch-s0` 0.700 /
-4.0, `pro-finetune` 0.650 / 10.1, `pro-all-patch-s0` 0.600 / 3.4,
-`soloQ-pretrain` 0.450 / 9.2.
+4.0, `pro-finetune` 0.650 / 10.1, `soloQ-pretrain` 0.450 / 9.2.
 
 ## Three things the pooled numbers hid
 
 **1. `policy-ablF` is sharper but wilder than a frequency table.** Better top-5
 (0.450 vs 0.350), *worse* mean rank (17.1 vs 13.6): 4 of 40 states land outside
 the top 50, one at rank 148 of 173. No pro-only arm shows this — their worst is
-139 with at most two such states. "Better top-5" and "better average position"
+129 with at most two such states. "Better top-5" and "better average position"
 are different claims and this series separates them.
 
 **2. ban1 is where the arms separate**, as the branch's mechanism predicts.
@@ -96,7 +105,7 @@ arms sit at 0.17. That is 7/12 vs 2/12 states — direction, not magnitude.
 
 **3. The masked models cannot express fearless.** `ProMaskedDraftDataset` never
 receives `unavailable`, so on game 2 — where ten champions were already picked
-in game 1 — 56 of 80 model-slot pairs put a game-1 pick in their top-5. The
+in game 1 — 19 of 30 model-slot pairs put a game-1 pick in their top-5. The
 next-move models, which do get `unavailable_mask`, break fearless zero times.
 Scope limit of the masked task as trained, not a bug in this harness.
 
@@ -127,12 +136,12 @@ is scored on the identical board — that is what the step tables show.
 
 | file | what it is |
 |---|---|
-| `eval_series.py` | scans the CSV, loads all 18 checkpoints, scores every state |
+| `eval_series.py` | scans the CSV, loads all 10 checkpoints, scores every state |
 | `render_report.py` | formats the JSON into HTML + markdown; recomputes nothing |
 | `reports/blg_vs_hle.json` | every state, every model, every top-5 |
 | `REPORT_blg_vs_hle.html` | the report, colour-coded per step |
 | `REPORT_blg_vs_hle.md` | the same tables in markdown |
-| `test_holdout.py` | 10 tests, incl. the recorded-number reproduction |
+| `test_holdout.py` | 12 tests, incl. the recorded-number reproduction and the registry check |
 
 ## Reproduce
 

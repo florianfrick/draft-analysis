@@ -381,6 +381,10 @@ task than the offline null and is shown only as a tiebreaker behind denial.
 
 ## 8. Pro-only training and the patch embedding (`exp/pro-only-patch-emb`)
 
+Merged to `main`. **`FINDINGS.md` is the full record** — every experiment, the
+training recipe behind the shipped model, what it still gets wrong, and the
+plan to improve it. This section is the condensed version.
+
 Two questions, both from the same branch: **how far does pro data alone get
 you** (no soloQ pretraining, no rehearsal), and **does a patch embedding help
 once the patch is a *seen* input**?
@@ -487,10 +491,13 @@ Not settled: one architecture size (the epoch curve says the fit is
 data-limited); `rel@5` is not comparable across protocols (this window's
 baseline is 0.412 vs 0.373 patch-honest, so pro-only 1.38x and finetune 1.51x
 cannot be read as "finetune is better"); the wider corpus and the scratch
-control are seed 0 only. Kept: 9 checkpoints (482MB) under
-`model/proonly/ckpt/`, both arms and both seeds, because the paired
-comparisons need the losing arm too; the numbers that survive them are in
-`model/proonly/reports/`.
+control are seed 0 only. **Kept: 3 checkpoints (140MB)** under
+`model/proonly/ckpt/` - the shipped policy `p-patch-s0`, its masked init
+`m-patch-s0`, and the no-patch control `p-nopatch-s0` that the ablation is
+measured against. The other nine runs (seed 1, the wider-corpus pair, the
+scratch control) were deleted as losing arms: their numbers survive in
+`model/proonly/reports/` and `FINDINGS.md` §4, but their paired comparisons
+can no longer be re-run.
 
 ## 9. Held-out series walkthrough — BLG vs HLE (`model/holdout/`)
 
@@ -591,9 +598,16 @@ docker compose run --rm dev python model/holdout/eval_series.py
 docker compose run --rm dev python model/holdout/render_report.py
 ```
 
-Tests: run per file (19 suites, 282 tests + 1 skip). `model/policy/model.py`
+Tests: run per file (19 suites, 285 tests + 1 skip). `model/policy/model.py`
 claims the `model` module name and shadows `model/finetune/model.py` in a
 combined run, so a single `pytest model/` will fail for reasons unrelated to
 the code. `soloq data analysis/explorer/test_explorer.py` is excluded from that
 count: it opens an HTTP connection to a live explorer server at import time and
 errors during collection when none is running.
+
+**The corpus is pinned** at `pipeline.CORPUS_MAX_DATE = "2026-10-24 23:19:46"`,
+the date every number in this file was measured on. The 2026 OE export keeps
+growing; without the pin, the next rebuild folds the new games in, which moves
+every test number *and* trains on the series `model/holdout/` reports as a
+holdout. Rebuilding today returns the same 46,813 drafts. Raising the pin means
+re-measuring everything.
