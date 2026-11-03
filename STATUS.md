@@ -9,17 +9,17 @@ Operational docs stay separate and this file does not repeat them: `README.md`
 to get running, `DOCKER.md` for the container, and each folder's `README.md` for
 its own commands.
 
-**How to read it.** §7 is the current measurement. §4 is the older protocol's
-numbers, kept because they are the evidence behind the ablations in §6 — do not
-quote §4 as today's scores. §5 and §6 are verdicts whose runs can no longer be
-reproduced; they are here so nobody re-runs them.
+**How to read it.** §7 is the current measurement. §4 is the earlier grid, kept
+because it is the evidence behind the ablations in §6 — do not quote §4 as
+today's scores. §5 and §6 are verdicts whose runs can no longer be reproduced;
+they are here so nobody re-runs them.
 
 ## Contents
 
 1. Where it stands
 2. The model
 3. The data and the split
-4. Results, previous protocol
+4. Results, earlier runs
 5. Ban analyses
 6. Dead ends (measured, do not re-run)
 7. The test split — current numbers
@@ -165,10 +165,12 @@ exists only for `--limit-drafts` smoke runs, which subsample.
 
 ---
 
-## 4. Results, previous protocol
+## 4. Results, earlier runs
 
-Measured on 46,813 drafts and the date split. Superseded by §7 for scores; kept
-because §6's ablations are stated against these numbers.
+The first four blocks are the date split on 46,813 drafts. The last block
+(pro-only + patch embedding) is the within-patch split — the protocol §7
+reuses, but on the pre-freeze corpus, so its numbers are what §6's ablations
+are anchored to. Both grids are superseded by §7 for scores.
 
 **Pretraining** (val, 19,217 complete drafts, epoch 33 / step 11,781):
 
