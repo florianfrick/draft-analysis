@@ -9,7 +9,7 @@ function used by search (Stage 2: MCTS/lookahead).
 >
 > | path | test AUC | verdict |
 > |---|---|---|
-> | logistic role x champ additive (`model/policy/ban_search.py`) | 0.5456 | best; structurally flat in ban1 |
+> | logistic role x champ additive (ban-analysis thread, now removed) | 0.5456 | best; structurally flat in ban1 |
 > | `PoolOutcomeHeads.win` (this stage) | 0.5172 | weak, complete drafts only |
 > | `PolicyValueModel.value_head` | 0.4969 | broken at every depth - head removed from new runs |
 >
@@ -17,7 +17,8 @@ function used by search (Stage 2: MCTS/lookahead).
 > econ_skill -0.09 to -0.15 and nothing downstream reads `econ_pred`.
 > `value.py` (below) is the attempt to do better than all three on partial
 > states; it currently reaches 0.5124 on all prefixes and 0.5194 at move 19,
-> so the additive model still wins. See `ckpt/value_*/value_report.json`.
+> so the additive model still wins. See the `value_report.json` beside the
+> weights written by `--out-dir`.
 
 ## Prefix value stage (`value.py`)
 
@@ -69,7 +70,7 @@ pytest finetune/test_finetune.py -q                           # 7 tests ~3s
   `test_report.json` evaluates both best checkpoints on the held-out
   test split.
 
-## Checkpoints (ckpt/run_<ts>[_<name>]/)
+## Checkpoints (`model/checkpoints/masking-finetune/`)
 
 - `best_mask.pt` — best val masked champ_top5 (use for pro finetune
   masked eval / as a better trunk for later stages)
@@ -78,6 +79,10 @@ pytest finetune/test_finetune.py -q                           # 7 tests ~3s
 - Payload: model + config + metrics + `platt` (calibration a·x+b fitted
   on val) + `econ_mean`/`econ_std` (standardization, so inference can
   destandardize) + init provenance.
+
+`--out-dir` writes a run straight to its final name; without it the run lands
+in `ckpt/run_<ts>[_<name>]/`. The `value.py` stage writes to whatever
+`--out-dir` says, and its `value_report.json` sits next to the weights.
 
 ## Notes / known limitations
 

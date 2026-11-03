@@ -54,9 +54,11 @@ Success gate: beat `base_role_top5` on `champ_top5`, then push
   (best val `champ_top5`) + `latest.pt` - re-runs never overwrite each
   other; the folder name also lands in `last_run.json` (`run_dir`) and
   mirrors `--run-name`. Compare runs side by side; W&B runs are separate
-  too (same `--run-name` links them).
+  too (same `--run-name` links them). The kept artefact is copied to
+  `model/checkpoints/masking-soloqueue/`; `--out-dir` skips the run folder.
 - Payload = `{model, config, metrics, step, patch}` - loadable straight
   into `SoloQPretrainedModel(**config)`.
-- W&B: key in `wandb_key.txt` (or `WANDB_API_KEY` env), project
-  `lol-draft-pretrain`. Disable with `--no-wandb`; failures never kill
-  training. `last_run.json` records the final args + score.
+- W&B: key in the `WANDB_API_KEY` env var, which `docker-compose.yml` loads
+  from the git-ignored `.env`; project `lol-draft-pretrain`. Disable with
+  `--no-wandb`; failures never kill training. `last_run.json` records the
+  final args + score.

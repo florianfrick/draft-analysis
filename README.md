@@ -25,14 +25,15 @@ draft prediction (patch 16.20).
 - `model/pretraining/train.py` — masked champ+role pretraining
   (`--role-only-prob 0.10` teaches P(role|champ)).
 - `model/finetune/` — pro-play Stage 1 finetune (masked heads + win/econ).
-- `model/proonly/` — **the shipped model**: pro drafts only, no soloQ, patch
+- `model/proonly/` — the pro-only recipe: pro drafts only, no soloQ, patch
   embedding, within-patch split. Masked stage, next-pick stage, paired
   comparison. See `model/proonly/README.md`.
-- `model/holdout/` — one held-out series replayed through every checkpoint,
-  move by move (what each model *said*, not just its accuracy). See
-  `model/holdout/README.md`.
-- `FINDINGS.md` — the pro-only experiment's results, the recipe behind the
-  shipped checkpoint, and the plan to improve it.
+- `model/checkpoints/` — the five kept artefacts, one directory per inference
+  class: `masking-*` answers the role board, `nextpick-*` the next move,
+  `value-*` neither. Weights are git-ignored.
+- `model/test_split/` — three pinned Worlds 2026 series replayed through every
+  checkpoint, per class (what each model *said*, not just its accuracy). See
+  `model/test_split/README.md`.
 - `data/solo queue/` — Riot collection (puuids → match ids → match details)
   + `process matchdata/pipeline.py` (masking, batch collate).
 - `data/pro play/` — Oracle's Elixir CSV → pro draft rows.
@@ -60,9 +61,9 @@ also works verbatim on the host if you already have the pinned versions.
      expires every 24h). Used by `data/solo queue/collect_*.py` via
      `data/solo queue/riot_api.py`.
    - `WANDB_API_KEY` — W&B key (https://wandb.ai/authorize), or pass
-     `--no-wandb` to training. Used by `model/pretraining/train.py`
-     (key file `model/pretraining/wandb_key.txt` also works, but keep it
-     local — it is git-ignored).
+     `--no-wandb` to training. `docker-compose.yml` loads `.env` into the
+     container, so every trainer reads it from the environment; there is no
+     key file on disk.
 2. Rebuild data locally (all raw/derived match data is git-ignored):
    - SoloQ: `collect_puuids.py` → `collect_matchids.py` →
      `collect_match_data.py`, then the process-matchdata pipeline caches
@@ -71,8 +72,9 @@ also works verbatim on the host if you already have the pinned versions.
      `pipeline.py --rescan` to build `pro_drafts.pt`.
 3. Train: `python model/pretraining/train.py --epochs 30`
    (smoke: `--limit-drafts 4000 --epochs 2 --no-wandb`).
-   Checkpoints under `model/*/ckpt/` are git-ignored (100MB+ each);
-   share them out-of-band (releases, drive, etc.), never via git.
+   Checkpoints are git-ignored (100MB+ each) — both the kept
+   `model/checkpoints/` artefacts and any `ckpt/run_*/` a trainer writes.
+   Share them out-of-band (releases, drive, etc.), never via git.
 
 See each folder's README for full commands.
 
@@ -170,7 +172,8 @@ Pick Phase 2:	R4
 
 
 Best Model So Far (the only checkpoints still on disk — see STATUS.md):
-- policy/run_20261025_000606_ablF-stage1
-  + pretraining/run_20261029_153912_v2-D512-p8
-  + finetune/run_20261017_185016_stage1-full
-  + finetune/value_20261030_180102
+- masking-soloqueue   soloQ pretrain (kept, not retrained - it is the init)
+  masking-finetune    soloQ -> pro finetune
+  masking-proonly     pro drafts only, from scratch
+  nextpick-policy     soloQ encoder + policy head
+  nextpick-proonly    pro drafts only, encoder + policy from scratch

@@ -29,7 +29,11 @@ import pipeline as P  # noqa: E402
 from model import PolicyValueModel  # noqa: E402
 from model.pretraining.soloq_model import SoloQPretrainedModel  # noqa: E402
 
-CKPT = HERE / "ckpt" / "run_20261025_000606_ablF-stage1" / "best_policy.pt"
+# The kept soloQ-encoder policy. It used to be
+# `ckpt/run_20261025_000606_ablF-stage1/best_policy.pt`, which the 2026-11-03
+# reorganisation deleted, so this test had been skipping silently ever since -
+# a skipped test is worse than no test, because the suite still reads green.
+CKPT = HERE.parent / "checkpoints" / "nextpick-policy" / "best_policy.pt"
 
 
 def stub(num_champs=173, seed=0):

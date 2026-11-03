@@ -44,8 +44,9 @@ was collected has no useful embedding row but does have a tag row, which is
 the difference between a cold start and a random vector. `attr_dim` goes into
 the checkpoint config and every downstream stage rebuilds the adapter from it.
 
-W&B: key read from pretraining/wandb_key.txt or WANDB_API_KEY env var;
---no-wandb disables. Checkpoints: ckpt/run_<stamp>/{
+W&B: key read from the WANDB_API_KEY env var (docker-compose.yml loads it
+from .env, which is git-ignored); --no-wandb disables. Checkpoints:
+ckpt/run_<stamp>/{
   best.pt        best val champ_top5 (weights + config only)
   best_value.pt  best val win AUC
   latest.pt      every epoch, + optimizer/scheduler/scaler/best counters
@@ -80,7 +81,6 @@ from model.pretraining.soloq_model import (SoloQPretrainedModel,  # noqa: E402
                          load_champ_attr_matrix, load_encoder_state)
 
 CKPT_ROOT = HERE / "ckpt"
-KEY_FILE = HERE / "wandb_key.txt"
 
 
 def make_run_dir(run_name=""):
@@ -547,8 +547,6 @@ def setup_wandb(args):
                   "local 'wandb' folder is shadowing the install)"
                   % getattr(wandb, "__file__", "?"))
             return None
-        if "WANDB_API_KEY" not in os.environ and KEY_FILE.exists():
-            os.environ["WANDB_API_KEY"] = KEY_FILE.read_text().strip()
         run = wandb.init(project=args.wandb_project,
                          name=args.run_name or None,
                          config=vars(args),

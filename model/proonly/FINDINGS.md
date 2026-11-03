@@ -192,9 +192,12 @@ statement is the paired one above, where nothing differs but the flag.
 ### 4.6 The held-out series
 
 The 2026 Worlds final, **BLG vs HLE** (`LOLTMNT02_486564` / `_486571`, patch
-16.20, fearless on), scored by `model/holdout/`. Both caches stop at
-2026-10-24 23:19:46 and contain neither gameid; the 2026 CSV was appended to
-afterwards, so the series is a real holdout for every checkpoint.
+16.20, fearless on), scored by the series walkthrough that is now
+`model/test_split/`. Both caches stopped at 2026-10-24 23:19:46 and contained
+neither gameid; the 2026 CSV was appended to afterwards, so the series was a
+real holdout for every checkpoint. (As of 2026-11-03 the corpus pin moved past
+these games and they are the pinned test split instead — see the re-run callout
+above.)
 
 | model | top-1 | top-5 | mean rank | ban1 top-5 |
 |---|---|---|---|---|
@@ -446,9 +449,9 @@ when they are not:
 | path | what it is |
 |---|---|
 | `model/proonly/` | the winning recipe: `train_masked.py`, `train_policy.py`, `common.py`, `compare.py`, tests |
-| `model/proonly/ckpt/` | **3 checkpoints kept locally** (git-ignored, ~140MB): `p-patch-s0`, its `m-patch-s0` init, `p-nopatch-s0` as the ablation control |
+| `model/checkpoints/` | the kept artefacts (git-ignored): `masking-proonly`, `nextpick-proonly`, `masking-soloqueue` as the init, plus the finetune and soloQ-policy classes |
 | `model/proonly/reports/` | every run's `test_report.json` and every paired comparison, including the pruned arms |
-| `model/holdout/` | the series walkthrough tool: `eval_series.py`, `render_report.py`, the BLG vs HLE report, tests |
+| `model/test_split/` | the per-class evaluation on the three pinned Worlds series: `eval_test_split.py`, `render_test_split.py`, the report, tests |
 | `STATUS.md` §8-§9 | the condensed record, with the same numbers |
 
 Nine further runs (seed 1, the wider 2017-2026 corpus pair, the scratch

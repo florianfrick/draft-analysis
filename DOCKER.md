@@ -52,7 +52,7 @@ docker compose run --rm dev python model/finetune/train.py --no-wandb
 
 # evaluate a checkpoint under the eval protocol
 docker compose run --rm dev python model/policy/evaluate.py \
-    --ckpt model/policy/ckpt/run_20261025_000606_ablF-stage1/best_policy.pt
+    --ckpt model/checkpoints/nextpick-proonly/best.pt
 ```
 
 `--rm` matters: without it every invocation leaves a stopped container behind.
@@ -70,14 +70,16 @@ for t in "data/pro play/test_eval_protocol.py" \
          "data/solo queue/process matchdata/test_pipeline.py" \
          "model/tests" \
          "model/finetune/test_finetune.py" \
-         "model/policy/test_policy.py" \
-         "model/policy/test_ban_search.py" \
-         "model/policy/test_datasets_aug.py" \
-         "model/policy/test_infer.py" \
+         "model/policy" \
          "frontend/test_server.py"; do
   echo "=== $t"
   docker compose run --rm -T dev python -m pytest "$t" -q | tail -2
 done
+```
+
+`model/policy` goes in as a *directory*: `model/policy/model.py` shadows the
+`model` package when that folder is first on `sys.path`, which is what
+`pytest model/policy/test_infer.py` does.
 ```
 
 `soloq data analysis/explorer/test_explorer.py` is not a pytest suite — it is a
@@ -114,15 +116,31 @@ docker compose run --rm -T -p 127.0.0.1:8777:8777 dev \
 ```
 
 For the next-move UI, load a policy checkpoint and let the value model default
-resolve (newest `model/finetune/ckpt/value_*/best.pt`), or pin it with
-`--value`:
+resolve (newest `model/checkpoints/value-*/best.pt`, usually absent — the ban
+panel then ranks by denial only), or pin it with `--value`:
+
+```bash
+docker compose run --rm -T -p 127.0.0.1:8777:8777 dev \
+    python frontend/server.py --host 0.0.0.0 --port 8777
+```
+
+That is the whole command: both slots default to the pro-only artefacts
+(`masking-proonly` for the role board, `nextpick-proonly` for the next move).
+To pin them explicitly, or to run the role board alone:
 
 ```bash
 docker compose run --rm -T -p 127.0.0.1:8777:8777 dev \
     python frontend/server.py --host 0.0.0.0 --port 8777 \
-    --ckpt model/policy/ckpt/run_20261025_000606_ablF-stage1/best_policy.pt \
-    --value model/finetune/ckpt/value_20261030_180102/best.pt
+    --ckpt model/checkpoints/masking-finetune/best_mask.pt \
+    --policy-ckpt model/checkpoints/nextpick-policy/best_policy.pt
+
+docker compose run --rm -T -p 127.0.0.1:8777:8777 dev \
+    python frontend/server.py --host 0.0.0.0 --port 8777 --no-policy
 ```
+
+The two slots are independent: `--ckpt` takes a `masking-*` checkpoint and
+`--policy-ckpt` a `nextpick-*` one. Loading a policy checkpoint into the role
+slot is refused at load rather than failing later.
 
 The `127.0.0.1:` prefix on the publish spec is what keeps it off the network —
 `0.0.0.0` on the inside is only reachable through that mapping.

@@ -186,7 +186,8 @@ class PolicyValueModel(nn.Module):
         # OFF by default in new runs (--value-weight 0): measured test
         # win_auc 0.4969 across all 20 prefixes, flat 0.5015 on moves 0-6
         # (Brier exactly at the base rate) and anti-correlated once the
-        # draft fills - see model/policy/diagnose_value.py. The usable
+        # draft fills - measured by the (since deleted) diagnose_value.py.
+        # The usable
         # value function is model/finetune/value.py on the encoder's PMA
         # path. Kept constructible so old checkpoints still load.
         value_in_dim = pooled_dim + state_dim

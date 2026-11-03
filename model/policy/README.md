@@ -99,17 +99,19 @@ python policy/train.py --epochs 100 --no-patch \
     --run-name ablation-nopatch                           # patch ablation
 python policy/train.py --limit-drafts 2000 --epochs 2 \
     --no-wandb --run-name smoke                           # smoke
-pytest policy/test_policy.py policy/test_datasets_aug.py -q  # 30 tests ~7s
-pytest policy/test_infer.py -q                              # 20 tests ~3s (serving)
-pytest policy/test_ban_search.py policy/test_ban_propose.py -q
+pytest model/policy/test_policy.py model/policy/test_datasets_aug.py -q  # 30 tests ~7s
+pytest model/policy/test_infer.py -q                              # 20 tests ~3s (serving)
 ```
+
+Run the suite as a directory (`pytest model/policy/`), not file by file:
+`model/policy/model.py` shadows the `model` package when this directory is
+first on `sys.path`, which is what a single-file invocation does.
 
 ### Init
 
-`--init-ckpt` (default = `run_20261029_153912_v2-D512-p8/best.pt`, the only
-surviving pretraining run; `--init-ckpt auto` picks the pretraining checkpoint
-with the highest val champ_top5, which now resolves to the same file). The
-encoder is loaded and frozen.
+`--init-ckpt` (default = `model/checkpoints/masking-soloqueue/best.pt`, the
+kept soloQ pretrain; `--init-ckpt auto` resolves to the same file, the one with
+the highest val champ_top5 in that family). The encoder is loaded and frozen.
 
 ### Stages
 
@@ -177,15 +179,24 @@ standardization. `econ_rmse` alone therefore cannot fall below
 `econ_rmse_const` even for a perfect model, because the drift is in the
 level and no draft-only model can see it. Judge the head by `econ_skill`.
 
-## Checkpoints (ckpt/run_<ts>[_<name>]/)
+## Checkpoints (`model/checkpoints/nextpick-*/`)
 
-- `best_policy.pt` — best val next-move top5
-- `best_value.pt` — best val win AUC
+The two kept artefacts are `model/checkpoints/nextpick-policy/` (soloQ encoder
++ policy head) and `model/checkpoints/nextpick-proonly/` (from scratch). Each
+holds:
+
+- `best_policy.pt` — best val next-move top5 (pro-only runs name it `best.pt`)
+- `best_value.pt` — best val win AUC, when the run trains a value head
 - `latest.pt` — last epoch
 - Payload: model + config + metrics + init provenance + econ stats.
   The model state dict includes the encoder under `encoder.` plus all
   new heads/modules — loadable into `PolicyValueModel(encoder, ...)`
   after building the encoder from the init checkpoint.
+
+`--out-dir` writes a run straight to its final name; without it the run lands
+in `ckpt/run_<ts>[_<name>]/` and nothing outside the run references it. The
+directory name is the contract the frontend reads: `nextpick-*` is offered to
+the next-move slot, `masking-*` to the role board, `value-*` to neither.
 
 ## Connection to frontend and MCTS
 
@@ -198,10 +209,10 @@ draft continuations (expand via policy, evaluate via value).
 To use in the frontend: `infer.py` is that code path. `PolicyPredictor`
 builds the board from the UI's picks/bans, resolves the canonical 20-move
 order (`move_plan`, mirrored for a red first pick), runs the policy for the
-side on the clock, and — on ban moves — runs the `ban_propose` logic
-(roll out, shortlist the opponent's top-k, ban each for real, score the
-finished drafts with the value model, rank by denial). It imports no
-dataset or training module, so serving does not pull in `datasets.py`.
+side on the clock, and — on ban moves — runs the propose-and-verify logic
+itself (roll out, shortlist the opponent's top-k, ban each for real, score the
+finished drafts with the value model, rank by denial). It imports no dataset
+or training module, so serving does not pull in `datasets.py`.
 `frontend/server.py` dispatches on the state-dict keys and exposes it as
 `POST /api/next-move`; the masked-draft path stays available for
 comp-completion queries. Two caveats travel with it: the UI board has no
@@ -210,78 +221,28 @@ champion (the offline proposer is handed the real role from the pro row),
 and the value model is weak on this comparison — which is why the UI ranks
 by denial and shows simulated win% only as a tiebreaker.
 
-## Ban decisions: `ban_search.py` vs `ban_propose.py`
+## Ban decisions (moved out)
 
-Two different framings of "which champion should I ban", and the second
-one supersedes the first.
+The ban analyses that used to live here — `ban_search.py` (additive
+`W[role, champ]` negamax), `ban_intent.py` (does a ban hit what the opponent
+wanted), `ban_propose.py` (propose-and-verify rollouts), their result JSONs and
+their tests — were removed on 2026-11-03. They were a finished research thread
+whose every result recorded a checkpoint that no longer exists, so nothing in
+them could be re-run as written.
 
-**`ban_search.py`** fits an additive `W[role, champ]` and scores each
-legal ban by its negamax value. It is structurally incapable of ranking
-phase-1 bans (a symmetric additive V gives every ban the same value -
-proved, and observed as `spread 0.00000` over 19,131 decisions), and on
-phase 2 it found the human ban within 0.0046 of optimal with a 0.9
-winrate-point spread. Useful as a diagnostic; not a decision tool.
+Their conclusions are kept in `STATUS.md` §5, which is the record:
 
-**`ban_propose.py`** implements the rule "ban what they are about to
-take", with the policy proposing and a value function verifying:
+- an additive `W[role, champ]` gives every phase-1 ban the same value
+  (spread 0.00000 over 19,131 decisions), so phase 1 is structurally
+  out of reach for that model class;
+- phase-2 bans land in the opponent's predicted top-5 at 29.6% vs 8.3% for a
+  frequency baseline (3.6x lift), so the "ban what they are about to take"
+  premise is real, but only for a minority of human bans;
+- the propose-and-verify rollout is a genuine null: −0.00007 [−0.00055,
+  +0.00039] under `V` while changing the simulated draft in 87.9% of decisions.
 
-1. roll the policy forward from my ban to the opponent's first pick,
-   with *both* teams playing the policy (the stated premise);
-2. shortlist = their most likely picks;
-3. ban the top one, then let the rollout finish the draft;
-4. score the completed drafts (V), and compare against the human ban
-   and a random legal ban.
-
-The rollout is what makes this work at all: `V` reads the *picked*
-slots, so a ban on a fixed board changes nothing. Here the arms are
-different completed drafts, which is the regime V was trained for
-(0.5426 AUC on complete drafts).
-
-Measured on the test split (12,756 phase-2 decisions, policy
-`ablF-stage1`, value `value_20261030_180102`):
-
-| arm | V | verifier |
-|---|---|---|
-| proposed | 0.4759 | 0.6136 |
-| observed (human) | 0.4760 | 0.6148 |
-| random legal | 0.4762 | 0.6126 |
-
-`proposed - observed = -0.00007 [-0.00055, +0.00039]` under V and
-`-0.00114 [-0.00412, +0.00197]` under an independently trained second
-value model. The proposal changes the simulated draft in 87.9% of
-decisions (mean 2.47 champion slots), so this is a real null, not a
-no-op. Selecting on V instead (`--propose value`) yields +0.0173, which
-bounds V's resolution well below that - the effect is genuinely near
-zero, not unmeasurable.
-
-Why the null, and what it does *not* mean. An earlier version of this
-note claimed a symmetric self-play rollout can never produce a ban
-advantage, because "both teams want the same champions". **That claim is
-wrong**, and the counterexample is ordinary: blue has locked Ezreal, red
-has locked Kaisa — now blue wants Karma and red wants Nautilus. Once
-picks are on the board the two sides want *different* champions, so the
-rollout does produce genuinely asymmetric drafts (87.9% of decisions
-change at least one champion slot, mean 2.47). What cannot express that
-asymmetry is the **additive** `W[role, champ]` in `ban_search.py`: it
-scores a champion by its role alone, so Karma-vs-Nautilus has no term to
-live in. The null here is therefore evidence about (a) this value
-function's resolution — it cannot resolve a difference it cannot
-represent, and `--propose value` topping out at +0.0173 bounds that
-resolution well below the effect we were looking for — and (b) the fact
-that only a minority of human bans follow the premise at all, not a
-theorem about the game.
-
-The consequence for P3: champion×champion complementarity has to enter
-the value function before the ban search can be judged on its merits.
-Until then, the honest UI ordering is denial ("they want it"), not a
-simulated win-rate.
-
-Phase 1 remains a deliberate non-target for a different reason: pros ban
-specialists and game plans there, which is opponent-specific information
-no symmetric model has, regardless of value-function class.
-
-`ban_intent.py` measures the premise directly: observed phase-2 bans
-land in the opponent's predicted top-5 at 29.6% vs 8.3% for a frequency
-baseline (3.6x), so humans do follow this rule - but only for a
-minority of bans, and phase-1 bans show no lift at all.
-
+What survives in code is `infer.py`'s `ban_candidates`, which reimplements the
+propose-and-verify rule for the UI's ban panel. The reason the null is a
+property of the model class, not the game, is champion x champion
+complementarity: an additive `W` scores Karma by its role alone, so it has no
+term in which "Karma is worth more next to Ezreal" could live.

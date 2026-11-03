@@ -65,7 +65,7 @@ def test_corpus_is_frozen_at_the_pinned_date():
 
     The 2026 export grows during the season. Without the pin, the next rebuild
     folds the new games in - which silently moves every test number and, worse,
-    trains on the series `model/holdout/` reports as a holdout.
+    trains on the series `model/test_split/` evaluates as the test split.
     """
     rows, stats = _rows()
     cutoff = P._parse_date(P.CORPUS_MAX_DATE)

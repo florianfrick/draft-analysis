@@ -180,9 +180,6 @@ def run_wandb(args):
         return None
     try:
         import wandb
-        key = C.MODEL_DIR / "pretraining" / "wandb_key.txt"
-        if "WANDB_API_KEY" not in os.environ and key.exists():
-            os.environ["WANDB_API_KEY"] = key.read_text().strip()
         return wandb.init(project=args.wandb_project,
                           name=args.run_name or None, config=vars(args),
                           dir=str(HERE), settings=wandb.Settings(init_timeout=60))

@@ -152,20 +152,28 @@ deleted; it scored 0.5415 on complete drafts, no better.
 Three value functions on **identical** complete drafts: logistic additive
 role x champ 0.5456, this PMA model 0.5426, finetune `PoolOutcomeHeads` 0.5172.
 
-## 5. Ban analyses (no weights, results kept)
+## 5. Ban analyses (code, weights and results deleted — conclusions kept)
 
-| file | what it measures | headline |
-|---|---|---|
-| `ban_search_role.json` | depth-2 negamax over an additive `W[role, champ]` | phase-2 decision surface 0.0093 win-prob wide; humans sit at its optimum (edge +0.00004, z 4.7); human is argmax 1.5% vs 0.67% chance; frequency-table bans are *worse* than average (z -0.5) |
-| `ban_intent.json` | does a ban hit what the opponent wanted | phase 2: banned champ in opponent's predicted top-5 29.6% vs 8.3% frequency (3.6x lift). Phase 1: no lift (10.4% vs 16.0%) |
-| `ban_propose_bans2.json` | policy-rollout proposal vs the human ban | -0.00007 [-0.00055, +0.00039] under `V`; -0.00114 [-0.00412, +0.00197] under an independent verifier; the proposal changes the draft in 87.9% of decisions, so this is a real null |
-| `ban_propose_bans1.json` | same, phase 1 | +0.00066 [-0.00011, +0.00143] |
+This was a research thread that ran to a conclusion and then became
+unreproducible: every result it produced recorded a checkpoint that the
+2026-11-03 reorganisation deleted. The scripts (`ban_search.py`,
+`ban_intent.py`, `ban_propose.py`), their five result JSONs and their two test
+files were removed with it. What follows is the whole record — the numbers
+below have no artefact behind them any more, and the one thing that survives in
+code is `infer.py`'s `ban_candidates`, which reimplements the propose-and-verify
+rule for the UI's ban panel.
 
-Two structural results, both pinned by tests in `test_ban_search.py`:
-a global additive `V` gives every ban the same value (spread 0.00000, measured
-on 19,131 decisions) while predicting wins *better*; and phase 1 is flat under
-any symmetric additive `V` because both teams need the same roles from the same
-pool.
+| what it measured | headline |
+|---|---|
+| depth-2 negamax over an additive `W[role, champ]` | phase-2 decision surface 0.0093 win-prob wide; humans sit at its optimum (edge +0.00004, z 4.7); human is argmax 1.5% vs 0.67% chance; frequency-table bans are *worse* than average (z -0.5) |
+| does a ban hit what the opponent wanted | phase 2: banned champ in opponent's predicted top-5 29.6% vs 8.3% frequency (3.6x lift). Phase 1: no lift (10.4% vs 16.0%) |
+| policy-rollout proposal vs the human ban, phase 2 | -0.00007 [-0.00055, +0.00039] under `V`; -0.00114 [-0.00412, +0.00197] under an independent verifier; the proposal changes the draft in 87.9% of decisions, so this is a real null |
+| same, phase 1 | +0.00066 [-0.00011, +0.00143] |
+
+Two structural results: a global additive `V` gives every ban the same value
+(spread 0.00000, measured on 19,131 decisions) while predicting wins *better*;
+and phase 1 is flat under any symmetric additive `V` because both teams need
+the same roles from the same pool.
 
 **Important caveat on the phase-2 null.** It is a property of the *model class*,
 not of the game. An additive `W[role, champ]` cannot express "Karma is worth
@@ -732,12 +740,16 @@ docker compose run --rm dev python model/test_split/render_test_split.py
 Tests: run per directory (the suite does **not** combine cleanly into one
 `pytest model/` invocation). `finetune/train.py` and `policy/train.py` both do
 `import train` and whichever loads first wins in `sys.modules`, so the finetune
-and policy suites must be run in separate pytest invocations. Safe splits that
-are green today: `pytest model/policy model/proonly model/pretraining
-model/tests model/test_split` (147 passed, 1 skipped) and `pytest
-model/finetune` (25 passed). `soloq data analysis/explorer/test_explorer.py` is
-excluded: it opens an HTTP connection to a live explorer server at import time
-and errors during collection when none is running.
+and policy suites must be run in separate pytest invocations. `model/policy`
+also has to go in as a *directory*: `model/policy/model.py` shadows the `model`
+package when that folder is first on `sys.path`, which is what
+`pytest model/policy/test_infer.py` does. Safe splits that are green today:
+`pytest model/policy model/proonly model/pretraining model/tests model/test_split`
+(127 passed, 1 skipped), `pytest model/finetune` (25 passed) and
+`pytest "data/pro play" frontend` (105 passed).
+`soloq data analysis/explorer/test_explorer.py` is excluded: it opens an HTTP
+connection to a live explorer server at import time and errors during collection
+when none is running.
 
 **The corpus is pinned** at `pipeline.CORPUS_MAX_DATE = "2026-11-01 23:59:59"`,
 the date every number in this file was measured on. The 2026 OE export keeps

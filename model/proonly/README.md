@@ -79,11 +79,18 @@ recorded number.
 ## Compare two checkpoints
 
 ```bash
+# the two kept pro-only runs, masked vs policy
+docker compose run --rm dev python model/proonly/compare.py --task masked \
+    --a model/checkpoints/masking-proonly/best.pt \
+    --b model/checkpoints/masking-finetune/best_mask.pt
 docker compose run --rm dev python model/proonly/compare.py --task policy \
-    --a model/proonly/ckpt/run_*_p-patch-s0/best.pt \
-    --b model/proonly/ckpt/run_*_p-nopatch-s0/best.pt
-docker compose run --rm dev python model/proonly/compare.py --task masked --a A.pt --b B.pt
+    --a model/checkpoints/nextpick-proonly/best.pt \
+    --b model/checkpoints/nextpick-policy/best_policy.pt
 ```
+
+The pruned arms (`p-patch-s0`, `p-nopatch-s0`, seed 1, the pretrained-init
+six) can no longer be re-compared: their weights are gone and their numbers
+live in `reports/`.
 
 Both models are scored on the identical rows and the script asserts it, so the
 delta is paired rather than two independent percentages.

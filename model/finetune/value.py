@@ -8,13 +8,13 @@ There are three value paths in the repo and only one of them works:
   finetune PoolOutcomeHeads  test AUC 0.5172   <- weak, but complete drafts
   policy value_head          test AUC 0.4969   <- broken at every depth
 
-`model/policy/diagnose_value.py` showed the policy head is not "diluted by
-early moves": it emits a constant for moves 0-6 (Brier 0.2483, exactly the
-base-rate figure) and then varies *anti*-correlated with the label, ending at
-Brier 0.3527 on full drafts. It has no signal at any depth, so a ban search
-cannot rank bans with it - which is what the depth-2 search found (human edge
-+0.00004, z +4.7, i.e. humans already sit at the optimum of a V that is 0.9
-winrate points wide).
+A since-deleted diagnostic (`model/policy/diagnose_value.py`) showed the policy
+head is not "diluted by early moves": it emits a constant for moves 0-6 (Brier
+0.2483, exactly the base-rate figure) and then varies *anti*-correlated with
+the label, ending at Brier 0.3527 on full drafts. It has no signal at any
+depth, so a ban search cannot rank bans with it - which is what the depth-2
+search found (human edge +0.00004, z +4.7, i.e. humans already sit at the
+optimum of a V that is 0.9 winrate points wide).
 
 The fix is not a new head shape. It is: use the readout that works (PMA, not
 the 4D PAD-masked mean), train it on the states the search actually visits
@@ -29,9 +29,10 @@ starts exactly at the pretrained head and learns its ban correction on top.
 
 Scoring is accuracy (AUC / Brier / skill vs a constant), because that is what
 a value function should be scored on. The ban *decisions* derived from it are
-scored on regret by model/policy/ban_search.py - a separate question. The
-previous session showed the two can disagree: a global additive V predicted
-wins better (0.5508 vs 0.5456) while giving every ban the same value.
+a separate question, and were scored on regret by the ban-analysis thread that
+was removed on 2026-11-03 (conclusions in STATUS.md §5). The two can disagree:
+a global additive V predicted wins better (0.5508 vs 0.5456) while giving every
+ban the same value.
 
 Usage:
     python model/finetune/value.py --init-ckpt auto --epochs 12
@@ -56,7 +57,6 @@ MODEL_DIR = HERE.parent                          # .../model
 ROOT = MODEL_DIR.parent                          # .../lol draft analysis
 PRO_DIR = ROOT / "data" / "pro play"
 PRETRAIN_CKPT_GLOB = str(MODEL_DIR / "checkpoints" / "masking-soloqueue" / "*.pt")
-KEY_FILE = MODEL_DIR / "pretraining" / "wandb_key.txt"
 
 
 def _load_module_by_path(name, path):
@@ -397,8 +397,6 @@ def run_wandb(args):
         return None
     try:
         import wandb
-        if "WANDB_API_KEY" not in os.environ and KEY_FILE.exists():
-            os.environ["WANDB_API_KEY"] = KEY_FILE.read_text().strip()
         return wandb.init(project=args.wandb_project,
                           name=args.run_name or None,
                           config=vars(args), dir=str(HERE),

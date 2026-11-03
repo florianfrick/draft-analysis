@@ -47,7 +47,6 @@ PRETRAIN_CKPT_GLOB = str(MODEL_DIR / "checkpoints" /
 # renamed `masking-soloqueue` when the other families were pruned.
 # `--init-ckpt auto` resolves to the same file.
 DEFAULT_INIT = str(MODEL_DIR / "checkpoints" / "masking-soloqueue" / "best.pt")
-KEY_FILE = MODEL_DIR / "pretraining" / "wandb_key.txt"
 IGNORE_INDEX = -100
 N_MOVES = 20
 
@@ -552,8 +551,6 @@ def run_wandb(args):
         return None
     try:
         import wandb
-        if "WANDB_API_KEY" not in os.environ and KEY_FILE.exists():
-            os.environ["WANDB_API_KEY"] = KEY_FILE.read_text().strip()
         return wandb.init(project=args.wandb_project,
                           name=args.run_name or None,
                           config=vars(args), dir=str(HERE),

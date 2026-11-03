@@ -1,6 +1,6 @@
 """Pro-only next-move policy: encoder + policy head, no soloQ anywhere.
 
-    python model/proonly/train_policy.py --init-ckpt model/proonly/ckpt/run_X/best.pt
+    python model/proonly/train_policy.py --init-ckpt model/checkpoints/masking-proonly/best.pt
     python model/proonly/train_policy.py --init-ckpt scratch --patch-emb
 
 Second half of the branch's question. `train_masked.py` asks whether a
@@ -177,9 +177,6 @@ def run_wandb(args):
         return None
     try:
         import wandb
-        key = C.MODEL_DIR / "pretraining" / "wandb_key.txt"
-        if "WANDB_API_KEY" not in os.environ and key.exists():
-            os.environ["WANDB_API_KEY"] = key.read_text().strip()
         return wandb.init(project=args.wandb_project,
                           name=args.run_name or None, config=vars(args),
                           dir=str(HERE), settings=wandb.Settings(init_timeout=60))

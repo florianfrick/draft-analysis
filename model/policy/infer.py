@@ -1,9 +1,10 @@
 """Inference API for the next-move policy, plus optional value scoring.
 
 Board in, recommendation out. No CLI, no dataset import, no training code:
-`frontend/server.py` imports this, and `ban_propose.py` uses the loader so
-the analysis and the UI cannot drift apart. The offline statistics
-(bootstrap CIs, paired tests, regret) stay in `ban_propose.py`.
+`frontend/server.py` imports this, and it is the only path that serves the
+policy. The offline statistics (bootstrap CIs, paired tests, regret) lived in
+`ban_propose.py`, which was removed on 2026-11-03 along with the rest of the
+ban-analysis thread; STATUS.md §5 keeps its conclusions.
 
 Three pieces:
 
@@ -22,12 +23,13 @@ reconstructed. Roles are not part of the UI board, so they are *inferred*
 once per state from the encoder's role head (the same FLEX-role query the
 masked frontend uses) and then fed back in.
 
-Why this can differ from `ban_propose.py`
------------------------------------------
-The offline proposer simulates future picks with the roles recorded in the
-pro row, i.e. it is told which role each future pick will fill. A UI board
-has no such label, so the rollout here infers the role of each simulated
-pick from the champion. That is a strictly harder task, and it is why the
+Why this can differ from the offline proposer
+---------------------------------------------
+The offline proposer (deleted with the ban thread) simulated future picks
+with the roles recorded in the pro row, i.e. it was told which role each
+future pick would fill. A UI board has no such label, so the rollout here
+infers the role of each simulated pick from the champion. That is a strictly
+harder task, and it is why the
 numbers this produces are a UI estimate, not a reproduction of the offline
 result.
 """
