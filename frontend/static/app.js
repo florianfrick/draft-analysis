@@ -2,17 +2,21 @@ const ROLES = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"];
 let CHAMPIONS = [], BY_IDX = {}, BY_RIOT = {};
 let picks = Array(10).fill(null);          // slot -> riot id | null (pick order)
 let bans = { blue: [], red: [] };          // team -> [riot id]
-let resp = null;                           // last /api/suggest payload
+let lastSlot = null;                       // slot just filled: wins a role
+let resp = null;                           // last /api/suggest (role model)
+let respSig = null;                        // board `resp` was computed for
+let presp = null;                          // last /api/next-move (policy)
+let prespSig = null;                       // board `presp` was computed for
 let pickerCtx = null;                      // {type, slot? , team?}
 let debounceT = null, wtFilterT = null;
-let CURRENT_MODEL = null;                  // last model info from the server
+let ROLE_MODEL = null, POLICY_MODEL = null;   // server-side model slots
 let WT = null;                             // walkthrough: {draft, step, ...}
 
 async function init() {
   const d = await (await fetch('/api/champions')).json();
   CHAMPIONS = d.champions;
   CHAMPIONS.forEach(c => { BY_IDX[c.idx] = c; BY_RIOT[c.riot] = c; });
-  setModelInfo(d.model);
+  setModels(d.model, d.policy_model);
   refreshCheckpoints();
   refreshDraftList();
   buildStrips('blue');
@@ -28,60 +32,94 @@ function imgTag(c, cls) {
     + ' onerror="this.classList.add(\'broken\')">';
 }
 
-function setModelInfo(m) {
-  CURRENT_MODEL = m;
+function setModels(masked, policy) {
+  ROLE_MODEL = masked || null;
+  POLICY_MODEL = policy || null;
   renderModelInfo();
 }
 
-function renderModelInfo() {
-  const m = CURRENT_MODEL;
-  if (!m) return;
-  let txt = `model ${m.ckpt}`;
-  if (m.kind === 'policy') txt += ' · next-move policy';
-  else if (m.kind === 'finetune')
+function modelText(m, what) {
+  let txt = what + ' ' + m.ckpt;
+  if (m.kind === 'finetune')
     txt += ` · finetuned${m.stage != null ? ' (stage ' + m.stage + ')' : ''}`;
-  else if (m.kind) txt += ' · ' + m.kind;
+  else if (m.kind && m.kind !== 'pretrain' && m.kind !== 'policy')
+    txt += ' · ' + m.kind;
   txt += m.val_top5 == null ? ' · val top-5 n/a'
     : ` · val top-5 ${(100 * m.val_top5).toFixed(1)}%`;
   if (m.epoch != null) txt += ` · ep ${m.epoch}`;
   if (m.value_ckpt) txt += ` · value ${m.value_ckpt.split('/').slice(-2).join('/')}`;
-  document.getElementById('model-info').textContent = txt;
-  const isPolicy = m.kind === 'policy';
-  document.body.classList.toggle('policy-mode', isPolicy);
-  if (!isPolicy) document.getElementById('nextmove').classList.add('hidden');
+  return txt;
+}
+
+function renderModelInfo() {
+  // Two independent slots: the masked model answers the role board and the
+  // per-role targets, the policy answers the next move. Either can be absent.
+  const bits = [];
+  bits.push(ROLE_MODEL ? modelText(ROLE_MODEL, 'role')
+    : 'role model — none');
+  if (POLICY_MODEL) bits.push(modelText(POLICY_MODEL, 'next-move'));
+  document.getElementById('model-info').textContent = bits.join('   ·   ');
+  document.body.classList.toggle('no-role-model', !ROLE_MODEL);
+  document.body.classList.toggle('policy-mode', !!POLICY_MODEL);
+  if (!POLICY_MODEL) document.getElementById('nextmove').classList.add('hidden');
 }
 
 async function refreshCheckpoints() {
   let d;
   try { d = await (await fetch('/api/checkpoints')).json(); }
   catch (e) { return; }
-  const sel = document.getElementById('ckpt-select');
-  sel.innerHTML = '';
-  (d.checkpoints || []).forEach(c => {
-    const o = document.createElement('option');
-    o.value = c.path;
-    o.textContent = c.label;
-    sel.appendChild(o);
-  });
-  if (d.current && ![...sel.options].some(o => o.value === d.current)) {
-    const o = document.createElement('option');   // current ckpt outside globs
-    o.value = d.current;
-    o.textContent = d.current;
-    sel.appendChild(o);
-  }
-  if (d.current) sel.value = d.current;
+  // One list, two dropdowns: the server tags each checkpoint with the slots
+  // it can fill (masked / policy) so a policy file never shows up under
+  // "role" and vice versa.
+  const fill = (id, role, noneLabel) => {
+    const sel = document.getElementById(id);
+    sel.innerHTML = '';
+    if (noneLabel) {
+      const o = document.createElement('option');
+      o.value = ''; o.textContent = noneLabel;
+      sel.appendChild(o);
+    }
+    (d.checkpoints || []).forEach(c => {
+      if (c.roles && !c.roles.includes(role)) return;
+      const o = document.createElement('option');
+      o.value = c.path;
+      o.textContent = c.label;
+      sel.appendChild(o);
+    });
+    const cur = d.current && d.current[role];
+    if (cur && ![...sel.options].some(o => o.value === cur)) {
+      const o = document.createElement('option');   // current ckpt outside globs
+      o.value = cur;
+      o.textContent = cur;
+      sel.appendChild(o);
+    }
+    if (cur) sel.value = cur;
+    else if (noneLabel) sel.value = '';
+  };
+  fill('ckpt-select', 'masked', null);
+  fill('policy-select', 'policy', '— none (role board only) —');
 }
 
-async function switchModel(url, opts) {
-  const ids = ['btn-load-ckpt', 'btn-upload', 'btn-reset'];
+async function switchModel(url, opts, role) {
+  const ids = ['btn-load-ckpt', 'btn-load-policy', 'btn-upload', 'btn-reset'];
   ids.forEach(id => { document.getElementById(id).disabled = true; });
   document.getElementById('model-info').textContent = 'loading model…';
   let ok = false, msg = '';
   try {
     const r = await fetch(url, opts);
     const d = await r.json().catch(() => ({}));
-    if (r.ok && d.model) { ok = true; setModelInfo(d.model); }
-    else msg = d.error || ('HTTP ' + r.status);
+    if (r.ok && 'model' in d) {
+      ok = true;
+      if (d.model) {                       // null = unloaded
+        if (d.role === 'policy') POLICY_MODEL = d.model;
+        else ROLE_MODEL = d.model;
+      } else if (role === 'policy') {
+        POLICY_MODEL = null;
+      } else {
+        ROLE_MODEL = null;
+      }
+      renderModelInfo();
+    } else msg = d.error || ('HTTP ' + r.status);
   } catch (e) { msg = String(e); }
   ids.forEach(id => { document.getElementById(id).disabled = false; });
   if (!ok) {
@@ -89,7 +127,7 @@ async function switchModel(url, opts) {
     renderModelInfo();
     return;
   }
-  resp = null;
+  resp = null; presp = null; respSig = null;
   await refreshCheckpoints();
   changed();   // re-run suggestions with the new weights
 }
@@ -101,7 +139,7 @@ function currentFirstPick() {
 }
 
 function isPolicyModel() {
-  return !!(CURRENT_MODEL && CURRENT_MODEL.kind === 'policy');
+  return !!POLICY_MODEL;
 }
 
 function nextTurn(firstPick) {
@@ -138,6 +176,7 @@ function buildStrips(team) {
     el.addEventListener('click', ev => {
       if (ev.target.classList.contains('clear')) {
         picks[slot] = null;
+        lastSlot = slot;
         changed();
         return;
       }
@@ -167,8 +206,8 @@ function buildStrips(team) {
 function renderTurn() {
   // The policy model answers "whose move is it" itself (and flags boards
   // that do not fit the order), so trust its state when one is active.
-  const t = (isPolicyModel() && resp && resp.state && !resp.state.complete)
-    ? { kind: resp.state.kind, side: resp.state.side }
+  const t = (isPolicyModel() && presp && presp.state && !presp.state.complete)
+    ? { kind: presp.state.kind, side: presp.state.side }
     : nextTurn(currentFirstPick());
   ['blue', 'red'].forEach(name => {
     document.getElementById('turn-' + name).textContent = '';
@@ -198,10 +237,12 @@ function renderSlots() {
     nm.classList.toggle('muted', !c);
     const rb = el.querySelector('.rb');
     rb.className = 'rb';
-    const rp = resp && resp.roles ? resp.roles[s] : null;
-    // masked mode: the server's collision-free assignment; policy mode has
-    // no assignment, so fall back to the role head's argmax for the badge.
-    const ar = (resp && resp.assignment && resp.assignment[s] != null)
+    // Only an answer computed for THIS board may label a pick; otherwise
+    // the badge would repeat the previous board's role for a champion that
+    // has just been placed. "…" until the reply lands (a few ms).
+    const fresh = !!(resp && respSig === boardSig());
+    const rp = fresh && resp.roles ? resp.roles[s] : null;
+    const ar = (fresh && resp.assignment && resp.assignment[s] != null)
       ? resp.assignment[s]
       : (rp && rp.length ? rp[0].role : null);
     if (c && rp && rp.length && ar != null) {
@@ -243,6 +284,15 @@ function renderRoles() {
   // sits in its assigned role; an empty role shows the masked model's
   // target for it (the role-conditioned MASK query), with the next two
   // candidates as small icons.
+  //
+  // `fresh` is the whole point: an answer only describes the board it was
+  // computed for. Rendering the previous assignment against the current
+  // picks put a fresh pick in an old role (or nowhere) and left the role
+  // it belongs to showing its old target - "I picked Vi and it still says
+  // Pantheon jungle". While a newer answer is in flight the board is drawn
+  // dimmed, with no targets and no confidences, i.e. it never claims
+  // anything it does not know.
+  const fresh = !!(resp && respSig === boardSig());
   ['blue', 'red'].forEach(team => {
     const box = document.getElementById('roles-' + team);
     box.innerHTML = '';
@@ -258,17 +308,18 @@ function renderRoles() {
         ? BY_RIOT[picks[slot]] : null;
       if (c) {
         const rp = (resp && resp.roles && resp.roles[slot]) || [];
-        const conf = rp.find(x => x.role === r);
-        el.className = 'role-slot filled';
+        const conf = fresh ? rp.find(x => x.role === r) : null;
+        el.className = 'role-slot filled' + (fresh ? '' : ' busy');
         el.title = `${ROLES[r]} — ${c.name}`
-          + (conf ? ` · ${(100 * conf.prob).toFixed(1)}%` : '');
+          + (conf ? ` · ${(100 * conf.prob).toFixed(1)}%` : ' · placing…');
         el.innerHTML = `<div class="rlabel">${ROLES[r]}</div>`
           + `<div class="pic">${imgTag(c, 'ic big')}</div>`
           + `<div class="nm">${c.name}</div>`
-          + (conf ? `<div class="sub">${(100 * conf.prob).toFixed(0)}%</div>`
-            : '');
+          + `<div class="sub">${conf
+            ? (100 * conf.prob).toFixed(0) + '%' : '…'}</div>`;
       } else {
-        const list = (resp && resp[team] && resp[team][ROLES[r]]) || [];
+        const list = fresh && resp[team] && resp[team][ROLES[r]]
+          ? resp[team][ROLES[r]] : [];
         if (list.length) {
           const top = list[0];
           const rest = list.slice(1, 3);
@@ -278,12 +329,12 @@ function renderRoles() {
           el.innerHTML = `<div class="rlabel">${ROLES[r]}</div>`
             + `<div class="pic">${imgTag(BY_IDX[top.idx], 'ic big')}</div>`
             + `<div class="nm">${top.name}</div>`
-            + `<div class="sub">${(100 * top.prob).toFixed(1)}%</div>`
+            + `<div class="sub">${(100 * top.prob).toFixed(1)}%`
             + (rest.length
-              ? `<div class="mini">${
+              ? `<span class="mini">${
                 rest.map(x => imgTag(BY_IDX[x.idx], 'ic mini')).join('')
-              }</div>`
-              : '');
+              }</span>`
+              : '') + '</div>';
           el.addEventListener('click', () => addPick(team, top.idx));
           el.querySelectorAll('.mini img').forEach((img, i) =>
             img.addEventListener('click', ev => {
@@ -291,9 +342,10 @@ function renderRoles() {
               addPick(team, rest[i].idx);
             }));
         } else {
-          el.className = 'role-slot empty';
+          el.className = 'role-slot empty' + (fresh ? '' : ' busy');
           el.innerHTML = `<div class="rlabel">${ROLES[r]}</div>`
-            + '<div class="pic"></div><div class="nm muted">—</div>';
+            + '<div class="pic"></div>'
+            + `<div class="nm muted">${fresh ? '—' : '…'}</div>`;
         }
       }
       box.appendChild(el);
@@ -302,9 +354,14 @@ function renderRoles() {
 }
 
 function addPick(team, idx) {
+  // Clicking a target card. Refuse anything already on the board: the card
+  // may come from an answer that is a moment old, and a duplicate makes the
+  // server reject the whole board (which used to freeze it).
+  const c = BY_IDX[idx];
+  if (!c || picks.includes(c.riot) || allBansFlat().includes(c.riot)) return;
   const base = team === 'blue' ? 0 : 5;
   for (let s = base; s < base + 5; s++) {
-    if (picks[s] == null) { picks[s] = BY_IDX[idx].riot; break; }
+    if (picks[s] == null) { picks[s] = c.riot; lastSlot = s; break; }
   }
   changed();
 }
@@ -345,7 +402,7 @@ function renderPickerGrid(q) {
     b.innerHTML = imgTag(c, 'ic') + `<span>${c.name}</span>`;
     b.addEventListener('click', () => {
       if (pickerCtx.type === 'ban') bans[pickerCtx.team].push(c.riot);
-      else picks[pickerCtx.slot] = c.riot;
+      else { picks[pickerCtx.slot] = c.riot; lastSlot = pickerCtx.slot; }
       closePicker();
       changed();
     });
@@ -373,49 +430,82 @@ function closePicker() {
 
 function requestSuggest() {
   clearTimeout(debounceT);
-  debounceT = setTimeout(async () => {
-    const policy = isPolicyModel();
-    const body = policy
-      ? {
-        picks: picks,
-        bans: allBansFlat(),
-        first_pick: currentFirstPick(),
-        k: 8,
-        ban_k: 4,
-        rollout: document.getElementById('nm-rollout').checked
-      }
-      : { picks: picks, bans: allBansFlat() };
-    let r;
-    try {
-      r = await (await fetch(policy ? '/api/next-move' : '/api/suggest', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      })).json();
-    } catch (e) { return; }
-    if (r.error) {
-      resp = null;
-      renderNextMoveError(r.error);
-      return;
+  const sig = boardSig();
+  debounceT = setTimeout(() => runSuggest(sig), 120);
+}
+
+async function postJSON(url, body) {
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    return await r.json();
+  } catch (e) { return { error: String(e) }; }
+}
+
+async function runSuggest(sig) {
+  // Both models answer the same board, independently: the masked one the
+  // role board + per-role targets, the policy one the next move. A reply is
+  // only accepted if the board has not moved since the request went out -
+  // rendering an older assignment against newer picks is what made a fresh
+  // pick look like it was ignored.
+  const maskedP = ROLE_MODEL
+    ? postJSON('/api/suggest',
+      { picks: picks, bans: allBansFlat(), last_slot: lastSlot })
+    : null;
+  const policyP = isPolicyModel()
+    ? postJSON('/api/next-move', {
+      picks: picks, bans: allBansFlat(), first_pick: currentFirstPick(),
+      k: 8, ban_k: 4,
+      rollout: document.getElementById('nm-rollout').checked
+    })
+    : null;
+
+  if (maskedP) {
+    const m = await maskedP;
+    if (sig !== boardSig()) return;            // a newer board is in flight
+    if (m && m.error) {
+      resp = null; respSig = null;
+      boardError(m.error);
+    } else {
+      resp = m; respSig = sig;
+      boardError('');
     }
-    resp = r;
     renderSlots(); renderRoles(); renderTurn();
+  }
+  if (policyP) {
+    const p = await policyP;
+    if (sig !== boardSig()) return;
+    if (p && !p.error) { presp = p; prespSig = sig; }
+    else {
+      presp = null; prespSig = null;
+      if (p) { boardError(p.error); renderNextMoveError(p.error); }
+    }
     renderNextMove();
     renderExplain();       // hides itself if the board moved
-    renderCompare();
-  }, 200);
+  }
+  renderCompare();
+}
+
+function boardError(msg) {
+  const el = document.getElementById('board-error');
+  if (!el) return;
+  el.textContent = msg ? 'board: ' + msg : '';
+  el.classList.toggle('hidden', !msg);
 }
 
 // ---- next-move policy panel --------------------------------------------
 
 function renderNextMove() {
   const box = document.getElementById('nextmove');
-  if (!isPolicyModel() || !resp || !resp.state) {
+  if (!isPolicyModel() || !presp || !presp.state) {
     box.classList.add('hidden');
     return;
   }
   box.classList.remove('hidden');
-  const st = resp.state;
+  const st = presp.state;
   const sideName = st.side === 0 ? 'Blue' : 'Red';
   document.getElementById('nm-turn').innerHTML = st.complete
     ? '<b>Draft complete</b>'
@@ -432,7 +522,7 @@ function renderNextMove() {
   const chips = document.getElementById('nm-chips');
   chips.innerHTML = '';
   if (!st.complete) {
-    (resp.suggestions || []).forEach(c => {
+    (presp.suggestions || []).forEach(c => {
       const b = document.createElement('button');
       b.className = 'nm-chip';
       b.innerHTML = imgTag(BY_IDX[c.idx])
@@ -444,7 +534,7 @@ function renderNextMove() {
     });
   }
   const banBox = document.getElementById('nm-bans');
-  const bd = resp.bans;
+  const bd = presp.bans;
   if (st.kind === 'ban' && bd && bd.candidates && bd.candidates.length) {
     banBox.classList.remove('hidden');
     document.getElementById('nm-ban-sub').innerHTML =
@@ -591,7 +681,7 @@ function renderExplain() {
       out.push('<div class="ex-note">the model\'s account, in its own words —'
         + ' only the citations below are checked</div>');
     }
-    const cand = (resp && resp.suggestions || []).find(s => s.name === ex.recommend);
+    const cand = (presp && presp.suggestions || []).find(s => s.name === ex.recommend);
     const pick = cand
       ? `<button class="ex-pick" data-apply="${cand.idx}"
            title="apply ${esc(ex.recommend)}">${imgTag(BY_IDX[cand.idx])}`
@@ -670,9 +760,9 @@ function renderExplain() {
 
   document.getElementById('ex-body').innerHTML = out.join('');
   const apply = document.querySelector('#ex-body [data-apply]');
-  if (apply && resp && resp.state && !resp.state.complete) {
+  if (apply && presp && presp.state && !presp.state.complete) {
     apply.addEventListener('click', () =>
-      applyMove(resp.state.kind, resp.state.side, +apply.dataset.apply));
+      applyMove(presp.state.kind, presp.state.side, +apply.dataset.apply));
   }
 }
 
@@ -686,7 +776,7 @@ function applyMove(kind, side, idx) {
   } else {
     const base = side === 0 ? 0 : 5;
     for (let s = base; s < base + 5; s++) {
-      if (picks[s] == null) { picks[s] = c.riot; break; }
+      if (picks[s] == null) { picks[s] = c.riot; lastSlot = s; break; }
     }
   }
   changed();
@@ -723,10 +813,12 @@ function renderCompare() {
     return;
   }
   const role = ROLES[m.role];
+  // The move being judged is the one the board is about to take, so the
+  // answer to judge it against is the one for the *current* board - and
+  // only if it actually describes this board.
+  const fresh = boardSig();
   if (isPolicyModel()) {
-    // the policy is role-free, so judge the move against the next-move
-    // list it produced *before* this move was applied
-    const list = (WT.prev && WT.prev.suggestions) || [];
+    const list = (presp && prespSig === fresh && presp.suggestions) || [];
     const k = list.findIndex(c => c.idx === m.idx);
     let verdict;
     if (k >= 0) {
@@ -740,7 +832,8 @@ function renderCompare() {
       + ` <span class="muted">(${role})</span> — ${verdict}`;
     return;
   }
-  const lists = resp && resp[sideName] ? resp[sideName] : {};
+  const lists = (resp && respSig === fresh && resp[sideName])
+    ? resp[sideName] : {};
   const inRole = lists[role] || [];
   let rank = -1, prob = 0;
   inRole.forEach((c, k) => {
@@ -770,8 +863,8 @@ function renderCompare() {
 function wtApply() {
   picks = Array(10).fill(null);
   bans = { blue: [], red: [] };
+  lastSlot = null;
   if (WT) {
-    WT.prev = resp;              // suggestions for the pre-move board
     WT.actualRole = {};
     const next = [0, 0];                 // next free pick slot per team
     for (let k = 0; k < WT.step; k++) {
@@ -779,7 +872,9 @@ function wtApply() {
       if (m.kind === 'ban') {
         bans[m.side === 0 ? 'blue' : 'red'].push(m.riot);
       } else if (m.side < 2 && next[m.side] < 5) {
-        picks[m.side * 5 + next[m.side]++] = m.riot;
+        lastSlot = m.side * 5 + next[m.side];   // newest real pick
+        picks[lastSlot] = m.riot;
+        next[m.side] += 1;
         WT.actualRole[m.riot] = m.role;
       }
     }
@@ -819,6 +914,7 @@ function wtExit() {
 function resetDraft() {
   picks = Array(10).fill(null);
   bans = { blue: [], red: [] };
+  lastSlot = null;
   changed();
   renderWalkthrough();
   renderCompare();
@@ -897,18 +993,27 @@ document.addEventListener('keydown', ev => {
 document.getElementById('picker-search').addEventListener('input', ev =>
   renderPickerGrid(ev.target.value));
 
-// model selection: server-side list + upload a file from this machine
-document.getElementById('ckpt-select').addEventListener('focus',
-  refreshCheckpoints);   // pick up newly trained runs without a restart
-document.getElementById('btn-load-ckpt').addEventListener('click', () => {
-  const path = document.getElementById('ckpt-select').value;
-  if (!path) return;
+// model selection: server-side list + upload a file from this machine.
+// Two independent slots - "role" (masked) and "next move" (policy) - so
+// loading one never unloads the other.
+const loadInto = (role) => {
+  const id = role === 'policy' ? 'policy-select' : 'ckpt-select';
+  const path = document.getElementById(id).value;
+  if (!path && role !== 'policy') return;
   switchModel('/api/load', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: path })
-  });
-});
+    body: JSON.stringify({ path: path || null, role: role })
+  }, role);
+};
+document.getElementById('ckpt-select').addEventListener('focus',
+  refreshCheckpoints);   // pick up newly trained runs without a restart
+document.getElementById('policy-select').addEventListener('focus',
+  refreshCheckpoints);
+document.getElementById('btn-load-ckpt').addEventListener('click',
+  () => loadInto('masked'));
+document.getElementById('btn-load-policy').addEventListener('click',
+  () => loadInto('policy'));
 document.getElementById('btn-upload').addEventListener('click', () =>
   document.getElementById('file-input').click());
 document.getElementById('file-input').addEventListener('change', async ev => {

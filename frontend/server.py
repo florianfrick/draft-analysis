@@ -5,33 +5,39 @@ Open:   http://127.0.0.1:8777   (binds 127.0.0.1 only - no external access)
 
 UI: 5 ban + 5 pick slots per team (horizontal, role-free; the next pro
 pick/ban to move is HIGHLIGHTED, never enforced - sequence follows
-model/README.md draft format, mirrored when red has first pick), the
-model's likely role assignments for the picked champs (role head on a
-FLEX-role query), role-conditioned top-5 suggestions for all 5 roles per
-team (flex picks flagged), dDragon champion art
-(https://ddragon.leagueoflegends.com/cdn/16.20.1/img/champion/... via the
-manifest, cached, deterministic name fallback offline), and a walkthrough
-of real pro games (GET /api/drafts + GET /api/draft) showing what the
-model suggested vs what the pros actually moved.
+model/README.md draft format, mirrored when red has first pick), a role
+board per team (TOP..UTILITY, picked champs placed in their assigned role,
+empty roles showing the champion that role is looking for), dDragon
+champion art (https://ddragon.leagueoflegends.com/cdn/16.20.1/img/champion/
+... via the manifest, cached, deterministic name fallback offline), and a
+walkthrough of real pro games (GET /api/drafts + GET /api/draft) showing
+what the model suggested vs what the pros actually moved.
 
-Checkpoints - BOTH families load (default: the shipped pro-only policy
-model/proonly/ckpt/run_20261101_183519_p-patch-s0/best.pt, else the best
-pretraining best.pt by val champ_top5):
+Two model slots, loaded at the same time and chosen independently:
+  * role model (masked: pretraining / finetune / proonly best.pt) - the
+    role head and the per-role MASK queries, i.e. /api/suggest. Default:
+    the pro-only masked model m-patch-s0, else best pretraining by val
+    champ_top5.
+  * next-move model (policy: best_policy.pt or a proonly policy best.pt) -
+    /api/next-move and /api/explain. Default: the shipped pro-only policy
+    p-patch-s0. Optional (--no-policy runs the role board alone).
+Both default to a checkpoint under model/proonly/ckpt/; other families:
   * pretraining  model/pretraining/ckpt/run_*/*.pt
   * pro finetune model/finetune/ckpt/run_*/*.pt (best_mask/best_win/
     latest). Those payloads wrap the shared encoder under `encoder.` plus
     win/econ outcome heads under `heads.`; we strip the prefix, drop the
     heads (no MCTS here) and serve suggestions from the finetuned encoder.
-Select a model via --ckpt <path> (CLI), the header dropdown
-(GET /api/checkpoints + POST /api/load), or the "From file..." button
-(POST /api/upload -> saved under model/uploaded/).
+Select via --ckpt / --policy-ckpt (CLI), the two header dropdowns
+(GET /api/checkpoints + POST /api/load with a `role`), or "From file..."
+(POST /api/upload -> saved under model/uploaded/, filed by kind).
 
 Inference contract (model/README.md): every empty slot is a MASK query
 with its ROLE GIVEN (role-conditional, matches the 10% role-visible
 training condition); no PADs ever, so a team is never fully padded.
 Bans are NOT model inputs - applied as a post-filter (the model already
 -inf's already-picked visible champs). suggest() runs 1 FLEX-role pass
-(role head over the picked champs) plus <=5 role-conditioned MASK passes
+(role head over the picked champs -> the one-to-one role assignment, with
+the slot just filled pinned first) plus <=5 role-conditioned MASK passes
 (every role queried for both teams); pick-order slots are fine - the
 encoder is permutation-invariant within a team.
 """
@@ -66,9 +72,13 @@ CKPT_PATTERNS = (                 # what the dropdown offers (no torch.load)
     ("value", str(ROOT / "model" / "finetune" / "ckpt" / "value_*" / "best.pt")),
     ("uploaded", str(ROOT / "model" / "uploaded" / "*.pt")),
 )
-# Shipped default: the strongest next-move policy (pro-only, patch-embedded).
-# The frontend previously defaulted to the best pretraining checkpoint; the
-# pro-only model is the one the project actually ships, so serve it first.
+# Shipped defaults, one per job. The role board needs a *masked* checkpoint
+# (role head + MASK queries); the next-move panel needs a *policy* one. They
+# are separate slots so both can be loaded at once - the masked model that
+# answers "which role / what is this team still missing" is not the model
+# that ranks the next pick.
+MASKED_DEFAULT = (ROOT / "model" / "proonly" / "ckpt"
+                  / "run_20261101_182415_m-patch-s0" / "best.pt")
 PROONLY_DEFAULT = (ROOT / "model" / "proonly" / "ckpt"
                    / "run_20261101_183519_p-patch-s0" / "best.pt")
 VALUE_GLOB = str(ROOT / "model" / "finetune" / "ckpt" / "value_*" / "best.pt")
@@ -494,14 +504,24 @@ def peek_kind(payload):
     return "pretrain"
 
 
-def _assign_roles(role_dists, filled):
-    """One-to-one slot -> role assignment per team, maximizing the summed
-    role probability.
+def _assign_roles(role_dists, filled, newest=None):
+    """One-to-one slot -> role assignment per team.
 
     The role head is per-slot, so two picks on one team can argmax the same
-    role. A team's five roles are distinct, so resolve collisions with an
-    exhaustive search over injective assignments (<=5 picks -> <=120
-    leaves). Returns a length-10 list of role ids (None for empty slots).
+    role. A team's five roles are distinct, so collisions are resolved with
+    an exhaustive search over injective assignments (<=5 picks -> <=120
+    leaves).
+
+    `newest` (the slot just filled) is pinned to its own argmax first and
+    the rest are then optimised jointly. That ordering matters: a pure
+    sum-of-probabilities optimum happily leaves an older pick in a
+    contested role - pick Vi (JUNGLE .97) while Pantheon (JUNGLE .60, TOP
+    .30) is already there and the optimum keeps Pantheon in JUNGLE and
+    pushes Vi to TOP, so the board looks like it ignored the click. Pinning
+    the newest pick is lexicographic: the pick the user just made keeps the
+    role the model likes best for it, and the older ones move aside.
+
+    Returns a length-10 list of role ids (None for empty slots).
     """
     out = [None] * len(role_dists)
     for team in (0, 1):
@@ -509,25 +529,36 @@ def _assign_roles(role_dists, filled):
                  if filled[s] and role_dists[s]]
         if not slots:
             continue
+        if newest in slots:
+            first, rest = newest, [s for s in slots if s != newest]
+        else:
+            first, rest = None, slots
         used = [False] * 5
+        if first is not None:
+            for cand in role_dists[first]:        # already prob-descending
+                r = cand["role"]
+                if 0 <= r < 5 and not used[r]:
+                    out[first] = r
+                    used[r] = True
+                    break
         cur = {}
         best = {"score": -1.0, "assign": {}}
 
         def rec(i, score):
-            if i == len(slots):
+            if i == len(rest):
                 if score > best["score"]:
                     best["score"] = score
                     best["assign"] = dict(cur)
                 return
-            for cand in role_dists[slots[i]]:
+            for cand in role_dists[rest[i]]:
                 r = cand["role"]
                 if not (0 <= r < 5) or used[r]:
                     continue
                 used[r] = True
-                cur[slots[i]] = r
+                cur[rest[i]] = r
                 rec(i + 1, score + cand["prob"])
                 used[r] = False
-                del cur[slots[i]]
+                del cur[rest[i]]
 
         rec(0, 0.0)
         for s, r in best["assign"].items():
@@ -619,9 +650,10 @@ class Predictor:
         return lg, p
 
     @torch.no_grad()
-    def suggest(self, picks, bans_idx, mapping):
+    def suggest(self, picks, bans_idx, mapping, last_slot=None):
         """picks: len-10 riot ids or None - blue 0-4 / red 5-9 in PICK
-        ORDER (slots carry no role meaning); bans_idx: banned champ idx.
+        ORDER (slots carry no role meaning); bans_idx: banned champ idx;
+        last_slot: the slot just filled (wins a contested role).
         -> {"roles": [10 x [{role, prob}...]] (filled slots, desc),
             "assignment": [10 x role id | None] (one per team, distinct),
             "blue"/"red": {role_name: [{idx, prob, flex?}] <=5}}
@@ -679,8 +711,10 @@ class Predictor:
                           for r in real])
         # One consistent, collision-free role per team. The role head is
         # per-slot, so two picks can argmax the same role; the assignment
-        # below drives both the MASK queries and the UI's role board.
-        pred_role = _assign_roles(roles, filled)
+        # below drives both the MASK queries and the UI's role board. The
+        # slot the user just filled is pinned to its own argmax, so a new
+        # pick is never displaced by an older one.
+        pred_role = _assign_roles(roles, filled, newest=last_slot)
 
         # passes: role-conditioned MASK queries, every role x both teams.
         # One pass covers (5 - picks) roles per team; <=5 passes total.
@@ -772,6 +806,31 @@ def resolve_ckpt_path(spec, confine=True):
     return p
 
 
+def _ckpt_roles(path, kind):
+    """Which model slots a checkpoint can fill, from its path alone.
+
+    The UI has two slots (role model / next-move model) and offering the
+    whole list in both would make most picks fail on load. torch.load'ing
+    forty checkpoints at startup just to classify them is not worth it, and
+    the families are already separated by path: model/pretraining and
+    model/finetune are masked, model/policy is policy, and the pro-only
+    runs are named m-* (masked init) / p-* (policy). Anything we cannot
+    tell (uploads) is offered in both and validated on load.
+    """
+    if kind == "policy":
+        return ["policy"]
+    if kind == "value":
+        return []                       # outcome head only, not servable
+    if kind in ("pretrain", "finetune"):
+        return ["masked"]
+    text = Path(path).as_posix()
+    if "/proonly/" in text:
+        m = re.search(r"run_\d+_\d+_([mp])-", text)
+        if m:
+            return ["masked"] if m.group(1) == "m" else ["policy"]
+    return ["masked", "policy"]
+
+
 def list_checkpoints():
     """Every .pt under the known ckpt dirs; cheap (payload not read).
 
@@ -785,7 +844,9 @@ def list_checkpoints():
             pp = Path(hit)
             if pp.name == "latest.pt":
                 continue
-            out.append({"path": _rel(hit), "kind": kind,
+            rel = _rel(hit)
+            out.append({"path": rel, "kind": kind,
+                        "roles": _ckpt_roles(hit, kind),
                         "label": "[%s] %s/%s" % (kind, pp.parent.name,
                                                 pp.name)})
     return out
@@ -826,13 +887,22 @@ def make_predictor(path, device=None, value_path=None):
     return pred
 
 
-def load_predictor(path, device=None):
-    """Build a new model first, then swap it in (the old one stays on
+def load_predictor(path, device=None, role="auto"):
+    """Build a model first, then swap it into its slot (the old one stays on
     failure) - concurrent requests keep a valid model.
+
+    `role` files the model: a policy checkpoint answers the next move, every
+    other kind answers the role board. The two slots are independent, so a
+    masked role model and a policy next-move model are loaded at the same
+    time; "auto" picks the slot from the checkpoint kind.
     """
     with LOAD_LOCK:
         pred = make_predictor(path, device=device)
-        APP["predictor"] = pred
+        slot = "policy" if pred.kind == "policy" else "masked"
+        if role in ("masked", "policy") and role != slot:
+            raise ValueError("%s is a %s checkpoint, not a %s one"
+                             % (Path(path).name, pred.kind, role))
+        APP[slot] = pred
     return pred
 
 
@@ -898,7 +968,8 @@ def get_draft(i):
     return out
 
 
-APP = {}  # main(): mapping, names_by_idx, champions, predictor, device
+APP = {}  # main(): mapping, names_by_idx, champions, device, value_path,
+          #        masked (role model), policy (next-move model)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -919,11 +990,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         path = self.path.split("?")[0]
         if path == "/api/champions":
-            pred = APP["predictor"]
+            masked, policy = APP.get("masked"), APP.get("policy")
             self._send(200, {
                 "champions": APP["champions"],
                 "roles": ROLE_ROWS,
-                "model": model_info(pred),
+                "model": model_info(masked) if masked else None,
+                "policy_model": model_info(policy) if policy else None,
             })
             return
         if path == "/api/drafts":
@@ -956,10 +1028,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(500, {"error": "cannot load draft: %s" % exc})
             return
         if path == "/api/checkpoints":
-            pred = APP.get("predictor")
-            self._send(200, {"checkpoints": list_checkpoints(),
-                             "current": (model_info(pred)["path"]
-                                         if pred else None)})
+            self._send(200, {
+                "checkpoints": list_checkpoints(),
+                "current": {slot: (model_info(APP[slot])["path"]
+                                   if APP.get(slot) else None)
+                            for slot in ("masked", "policy")},
+            })
             return
         if path.startswith("/api/"):
             self._send(404, {"error": "unknown endpoint"})
@@ -1000,17 +1074,23 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_suggest(self):
         try:
             payload = self._read_json()
-            pred = APP["predictor"]               # one stable reference
-            if pred.kind == "policy":
+            pred = APP.get("masked")              # one stable reference
+            if pred is None:
                 raise ValueError(
-                    "the active model is a next-move policy; the UI uses "
-                    "/api/next-move for it")
+                    "no role model loaded - pick a masked checkpoint "
+                    "(pretraining / finetune / proonly best.pt) as the "
+                    "role model")
             picks = payload["picks"]              # len 10, riot id or None
             bans = payload.get("bans", [])        # riot ids
+            last_slot = payload.get("last_slot")
+            if last_slot is not None:
+                last_slot = int(last_slot)
+                if not 0 <= last_slot < N_SLOTS:
+                    raise ValueError("last_slot must be a slot index 0-9")
             mapping, names = APP["mapping"], APP["names_by_idx"]
             bans_idx = [mapping[b] for b in bans if b in mapping]
-            res = pred.suggest(picks, bans_idx, mapping)
-        except (ValueError, KeyError, json.JSONDecodeError) as exc:
+            res = pred.suggest(picks, bans_idx, mapping, last_slot=last_slot)
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             self._send(400, {"error": str(exc)})
             return
         out = {"blue": {}, "red": {}, "roles": res["roles"],
@@ -1038,11 +1118,11 @@ class Handler(BaseHTTPRequestHandler):
         """
         try:
             payload = self._read_json()
-            pred = APP["predictor"]
-            if pred.kind != "policy":
+            pred = APP.get("policy")
+            if pred is None:
                 raise ValueError(
-                    "the active model is %s, not a next-move policy - load a "
-                    "best_policy.pt to use this panel" % pred.kind)
+                    "no next-move policy loaded - pick a best_policy.pt as "
+                    "the next-move model to use this panel")
             mapping, names = APP["mapping"], APP["names_by_idx"]
             picks = payload.get("picks") or [None] * 10
             bans = payload.get("bans") or []
@@ -1102,11 +1182,11 @@ class Handler(BaseHTTPRequestHandler):
         """
         try:
             payload = self._read_json()
-            pred = APP["predictor"]
-            if pred.kind != "policy":
+            pred = APP.get("policy")
+            if pred is None:
                 raise ValueError(
-                    "/api/explain needs a next-move policy checkpoint; the "
-                    "active model is %r" % pred.kind)
+                    "/api/explain needs a next-move policy checkpoint; none "
+                    "is loaded")
             mapping, names = APP["mapping"], APP["names_by_idx"]
             picks = payload.get("picks") or [None] * 10
             bans = payload.get("bans") or []
@@ -1158,10 +1238,26 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, out)
 
     def _handle_load(self):
-        """POST {"path": "<repo-relative .pt>"} -> swap the live model."""
+        """POST {"path": ".pt", "role": "masked"|"policy"|"auto"} -> swap
+        that slot's model. `role` defaults to auto (decided by the kind);
+        a null path unloads the slot, which is how the UI turns the
+        next-move panel off without touching the role board."""
         try:
-            path = resolve_ckpt_path(self._read_json()["path"])
-            pred = load_predictor(path)
+            payload = self._read_json()
+            role = payload.get("role") or "auto"
+            if role not in ("auto", "masked", "policy"):
+                raise ValueError("role must be masked, policy or auto")
+            spec = payload.get("path")
+            if not spec:
+                if role == "auto":
+                    raise ValueError("unloading a model needs an explicit role")
+                with LOAD_LOCK:
+                    APP.pop(role, None)
+                print("%s model unloaded" % role)
+                self._send(200, {"model": None, "role": role})
+                return
+            path = resolve_ckpt_path(spec)
+            pred = load_predictor(path, role=role)
         except FileNotFoundError as exc:
             self._send(404, {"error": str(exc)})
             return
@@ -1172,7 +1268,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(500, {"error": "cannot load checkpoint: %s" % exc})
             return
         print("checkpoint <- %s (%s)" % (pred.ckpt_path, pred.kind))
-        self._send(200, {"model": model_info(pred)})
+        self._send(200, {"model": model_info(pred),
+                         "role": "policy" if pred.kind == "policy"
+                         else "masked"})
 
     def _handle_upload(self):
         """Raw .pt bytes with ?name=x.pt -> model/uploaded/x.pt, then load."""
@@ -1202,7 +1300,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, {"error": "not a usable checkpoint: %s" % exc})
             return
         print("checkpoint <- %s (uploaded)" % pred.ckpt_path)
-        self._send(200, {"model": model_info(pred)})
+        self._send(200, {"model": model_info(pred),
+                         "role": "policy" if pred.kind == "policy"
+                         else "masked"})
 
     def _handle_breakdown(self):
         """POST {game_i, models:[repo-relative .pt]} -> per-move breakdown.
@@ -1245,11 +1345,17 @@ def main():
     ap.add_argument("--device", default="cpu",
                     help="cpu keeps GPU free; cuda also fine")
     ap.add_argument("--ckpt", default="",
-                    help="checkpoint .pt path - pretraining/finetune "
-                         "best*.pt, a proonly best.pt, or a policy "
-                         "best_policy.pt (default: the shipped pro-only "
-                         "policy model/proonly/ckpt/run_20261101_183519_"
-                         "p-patch-s0/best.pt, else best pretraining)")
+                    help="role-model checkpoint (masked family: pretraining / "
+                         "finetune / proonly best.pt) - drives the role board "
+                         "and the per-role targets (default: the pro-only "
+                         "masked model m-patch-s0, else best pretraining)")
+    ap.add_argument("--policy-ckpt", default="",
+                    help="next-move checkpoint (a best_policy.pt or a "
+                         "proonly policy best.pt) - loaded alongside the role "
+                         "model, not instead of it (default: the shipped "
+                         "pro-only policy p-patch-s0)")
+    ap.add_argument("--no-policy", action="store_true",
+                    help="run the role board only, without a next-move model")
     ap.add_argument("--value", default="",
                     help="prefix value checkpoint used to score simulated "
                          "drafts in the ban panel (default: newest under "
@@ -1259,21 +1365,34 @@ def main():
     mapping, names_by_idx, champions = load_champ_data()
     value_path = args.value or str(find_value_ckpt() or "")
     APP.update(device=args.device, value_path=value_path or None)
+
+    # Slot 1 - the role model (masked): role board + per-role targets.
     if args.ckpt:
-        ckpt = resolve_ckpt_path(args.ckpt, confine=False)
+        masked_ckpt = resolve_ckpt_path(args.ckpt, confine=False)
+    elif MASKED_DEFAULT.is_file():
+        masked_ckpt = MASKED_DEFAULT
     else:
-        if PROONLY_DEFAULT.is_file():
-            ckpt = PROONLY_DEFAULT
-            print("default: pro-only policy %s" % ckpt)
-        else:
-            ckpt, val = find_best_ckpt()
-            print("best pretraining ckpt: %s (val top-5 %s)" % (ckpt, val))
-    predictor = load_predictor(ckpt, device=args.device)
-    print("checkpoint: %s (%s)" % (ckpt, predictor.kind))
-    if getattr(predictor, "value_path", None):
-        print("value: %s" % predictor.value_path)
-    APP.update(mapping=mapping, names_by_idx=names_by_idx,
-               champions=champions, predictor=predictor)
+        masked_ckpt, val = find_best_ckpt()
+        print("best pretraining ckpt: %s (val top-5 %s)" % (masked_ckpt, val))
+    # Slot 2 - the next-move model (policy). Optional: the role board works
+    # without it, and --no-policy runs the frontend masked-only.
+    policy_ckpt = None
+    if not args.no_policy:
+        if args.policy_ckpt:
+            policy_ckpt = resolve_ckpt_path(args.policy_ckpt, confine=False)
+        elif PROONLY_DEFAULT.is_file():
+            policy_ckpt = PROONLY_DEFAULT
+
+    masked = load_predictor(masked_ckpt, device=args.device, role="masked")
+    print("role model:   %s (%s)" % (masked_ckpt, masked.kind))
+    if policy_ckpt is not None:
+        policy = load_predictor(policy_ckpt, device=args.device, role="policy")
+        print("next-move:    %s (%s)" % (policy_ckpt, policy.kind))
+        if getattr(policy, "value_path", None):
+            print("value:        %s" % policy.value_path)
+    else:
+        print("next-move:    (none - role board only)")
+    APP.update(mapping=mapping, names_by_idx=names_by_idx, champions=champions)
     print("champions: %d, device: %s" % (len(mapping), args.device))
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)

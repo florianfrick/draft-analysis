@@ -1,17 +1,22 @@
 # Draft Assistant (local prototype)
 
-Local-only web UI with **two modes**, selected by whichever checkpoint you
-load, plus a **breakdown page** (`/breakdown.html`) that scores one real pro
-game under several checkpoints and shows the real move next to each model's
+Local-only web UI with **two model slots that are loaded at the same time**,
+plus a **breakdown page** (`/breakdown.html`) that scores one real pro game
+under several checkpoints and shows the real move next to each model's
 prediction.
 
-| loaded checkpoint | mode | what you get |
+| slot | checkpoint family | what it answers |
 |---|---|---|
-| pretraining / finetune (`pma.*`, `heads.*`) | **masked completion** | top-5 suggestions for every empty role slot on both teams |
-| policy (`policy_head.*`) | **next move** | one ranked list for the side on the clock, plus denial-ranked ban candidates |
+| **role model** | masked (`pma.*`, `heads.*`) | the role board: each pick's role, and the target champion for every empty role (role-conditioned MASK queries) |
+| **next move** | policy (`policy_head.*`) | one ranked list for the side on the clock, plus denial-ranked ban candidates |
 
-The family is read from the state-dict keys, not the filename, so any kept
-checkpoint just works.
+They are different models doing different jobs — the masked model that can say
+"this team still wants a MID" is not the policy that ranks the next pick — so
+they are two slots rather than one switch. Loading either leaves the other
+alone, and the next-move slot can be empty (`— none —`), which runs the role
+board alone. The family is read from the state-dict keys, not the filename, so
+any kept checkpoint just works, and `--ckpt` / `--policy-ckpt` are validated
+against the slot they are asked to fill.
 
 ## Run
 
@@ -20,34 +25,40 @@ cd E:\VSCode\code\lol draft analysis
 python frontend\server.py --port 8777     # http://127.0.0.1:8777
 ```
 
-Binds `127.0.0.1` only. `--ckpt <path>` pins a checkpoint (default: the
-shipped pro-only policy `model/proonly/ckpt/run_20261101_183519_p-patch-s0/
-best.pt`; if it is absent, the `best.pt` with highest val champ-top5 under
-`model/pretraining/ckpt/run_*/`), `--value <path>` pins the value model used by
-ban ranking (default: the newest `model/finetune/ckpt/value_*/best.pt`),
-`--device cuda` for GPU inference (CPU default keeps the GPU free).
+Binds `127.0.0.1` only. `--ckpt <path>` pins the **role model** (default: the
+pro-only masked `model/proonly/ckpt/run_20261101_182415_m-patch-s0/best.pt`;
+if it is absent, the `best.pt` with highest val champ-top5 under
+`model/pretraining/ckpt/run_*/`), `--policy-ckpt <path>` pins the **next-move
+model** (default: the shipped pro-only policy
+`model/proonly/ckpt/run_20261101_183519_p-patch-s0/best.pt`), `--no-policy`
+skips it entirely, `--value <path>` pins the value model used by ban ranking
+(default: the newest `model/finetune/ckpt/value_*/best.pt`), and `--device
+cuda` for GPU inference (CPU default keeps the GPU free).
 
 Through Docker, pass `--host 0.0.0.0` (a published port arrives on the
 container's `eth0`, not its loopback) — see `DOCKER.md` §"The frontend".
 
 ## Choosing a model
 
-The header always shows the active model (label, kind, val metric). Three ways
-to switch:
+The header shows both slots (label, kind, val metric each) with a `role` +
+**Load** pair and a `next move` + **Load** pair. Three ways to switch:
 
-1. **CLI** — `--ckpt` accepts any family:
+1. **CLI** — `--ckpt` fills the role slot, `--policy-ckpt` the next-move slot:
    ```powershell
-   python frontend\server.py --ckpt "model\policy\ckpt\run_20261025_000606_ablF-stage1\best_policy.pt"
    python frontend\server.py --ckpt "model\finetune\ckpt\run_20261017_185016_stage1-full\best_mask.pt"
+   python frontend\server.py --policy-ckpt "model\policy\ckpt\run_20261025_000606_ablF-stage1\best_policy.pt"
    ```
-2. **Header dropdown** — every `best_*` file under `model/pretraining/ckpt/run_*/`,
-   `model/finetune/ckpt/run_*/`, `model/policy/ckpt/run_*/`,
-   `model/proonly/ckpt/run_*/` and `model/uploaded/`; refreshed when the select
-   gains focus (so freshly trained runs appear without a restart), then press
-   **Load**.
+2. **Header dropdowns** — every `best_*` file under
+   `model/pretraining/ckpt/run_*/`, `model/finetune/ckpt/run_*/`,
+   `model/policy/ckpt/run_*/`, `model/proonly/ckpt/run_*/` and
+   `model/uploaded/`, **split by the slot each one can fill**: the family is
+   taken from the path, and the pro-only runs are named `m-*` for the masked
+   init and `p-*` for the policy. Uploads are offered in both and validated on
+   load. Refreshed when a select gains focus (so freshly trained runs appear
+   without a restart), then press **Load**.
 3. **From file…** — opens the OS file picker; the file is POSTed to
-   `/api/upload`, saved as `model/uploaded/<name>.pt` and loaded (a file that
-   fails to load is deleted).
+   `/api/upload`, saved as `model/uploaded/<name>.pt` and filed into the slot
+   its kind belongs to (a file that fails to load is deleted).
 
 Finetune payloads store the shared encoder under `encoder.` plus the win/econ
 outcome `heads.`; the server strips the prefix, drops the heads and serves
@@ -56,12 +67,17 @@ the right pick for suggestions (`best_win.pt` is calibrated for win
 probability, not champ prediction). A policy checkpoint carries
 `policy_head.*` and is routed to the next-move path instead.
 
-Endpoints: `GET /api/checkpoints`, `POST /api/load {"path": …}` (paths must
-resolve inside the project), `POST /api/upload?name=x.pt` (raw bytes, 512 MB
+Endpoints: `GET /api/checkpoints` (each entry carries `roles`, the slots it can
+fill; `current` is per slot), `POST /api/load {"path": …, "role":
+"masked"|"policy"|"auto"}` (paths must resolve inside the project; a null
+`path` unloads that slot), `POST /api/upload?name=x.pt` (raw bytes, 512 MB
 cap), `GET /api/drafts?q=&limit=&offset=&random=` and `GET /api/draft?i=<row>`
-for the walkthrough, `/api/champions` (champions carry dDragon `img` URLs),
-`POST /api/suggest` (masked; response adds `roles` — likely role per filled
-slot — and per-candidate `flex`), and `POST /api/next-move`:
+for the walkthrough, `/api/champions` (champions carry dDragon `img` URLs;
+`model` and `policy_model` describe the two slots), `POST /api/suggest`
+(always the role model; response adds `roles` — the role distribution per
+filled slot —, `assignment` — one role per pick, distinct within a team — and
+per-candidate `flex`), and `POST /api/next-move` (always the next-move
+model):
 
 ```json
 {"picks": ["Ezreal", null, "…"], "bans": ["Ashe", "…"],
@@ -95,9 +111,8 @@ under each one:
 `POST /api/breakdown {"game_i": <row>, "models": ["<repo-relative .pt>", …]}`
 → `{game, models:[{path, label, kind, val_top5, score{top1, top5, mean_rank,
 n}, rows{<move>: {real_*, top1_*, top5[], target_rank, target_prob,
-hit_top1, hit_top5}}}]}`. It does **not** touch the live header model —
-predictors are cached per path, so the header model and the page stay
-independent.
+hit_top1, hit_top5}}}]}`. It does **not** touch the live slots — predictors
+are cached per path, so the header models and the page stay independent.
 
 ## Behavior
 
@@ -113,12 +128,13 @@ independent.
   header shows "▶ to ban"/"▶ to pick". Highlight only — nothing is enforced,
   any slot can be filled any time.
 
-### Next-move mode (policy checkpoint)
+### Next-move panel (policy slot)
 
-A panel sits under the header: **"Blue to ban · move 1/20 · bans1"**, eight
-champion chips with the policy's probability for the side on the clock, and —
-on ban moves — a ban-candidate list. Clicking either places the champion and
-the whole panel re-runs for the next move.
+A panel sits under the header whenever a policy checkpoint is loaded: **"Blue
+to ban · move 1/20 · bans1"**, eight champion chips with the policy's
+probability for the side on the clock, and — on ban moves — a ban-candidate
+list. Clicking either places the champion and the whole panel re-runs for the
+next move. It runs alongside the role board, not instead of it.
 
 - `ban rollout` (checkbox, default on) enables the ban-candidate list; it costs
   ~0.6 s per query because it plays the rest of the draft `ban_k` times.
@@ -131,12 +147,12 @@ the whole panel re-runs for the next move.
   tiebreaker, not a decision.
 - Without `--value` (or with a missing value checkpoint) the list still works,
   ranked by denial alone, and the subtitle says so.
-- The **role board** row is hidden in this mode (`body.policy-mode`) — it
-  belongs to the masked model, which is the only checkpoint family that can
-  answer "what is this team still missing at MID". The role head still labels
-  each pick on the slot itself (argmax role + confidence, amber when the
-  runner-up role is ≥ 15%, red when it disagrees with the pro's actual role in
-  a walkthrough).
+- The **role board** row belongs to the masked slot and is hidden only when
+  *no* role model is loaded (`body.no-role-model`) — the masked model is the
+  only family that can answer "what is this team still missing at MID". Every
+  pick still carries its role badge (assigned role + confidence, amber when
+  the runner-up role is ≥ 15%, red when it disagrees with the pro's actual role
+  in a walkthrough).
 - An illegal board (more bans than a phase allows, 6+ bans on one side, a
   champion twice) is rejected by the endpoint and shown as a board warning
   rather than silently repaired.
@@ -219,20 +235,38 @@ Three states matter:
   `unverified citations` and the rejected items are listed in amber rather than
   hidden.
 
-### Masked mode (pretraining / finetune checkpoint)
+### Role board (masked slot)
 
 - **Role board**: five slots per team, laid out TOP / JUNGLE / MID / BOTTOM /
-  UTILITY left to right. Two things fill it:
+  UTILITY left to right, **the same card size as the picks** (76 × 93 px) so
+  the two strips read as a pair; the role label rides on the icon as a tag
+  rather than taking a line of its own. Two things fill it:
   - a **picked** champion sits in its *most likely* role. The role head is
     per-slot (`Linear(D, 5)` over each pick's own embedding), so two picks can
     argmax the same role; the server therefore solves a **one-to-one assignment
-    per team** by exhaustive search over ≤ 120 permutations, maximising the sum
-    of the role probabilities. That is why the badge on a pick and the slot it
-    occupies always agree — and why a slot never appears twice.
+    per team** (exhaustive over ≤ 120 permutations). That is why the badge on a
+    pick and the slot it occupies always agree — and why a slot never appears
+    twice.
   - an **empty** role shows the model's **target** for it: the top-1 champion
     of the role-conditioned MASK query for that role, gold-outlined, with the
-    next two candidates as small icons. Clicking the card (or a mini icon)
-    adds that pick, which is the fastest way to try a suggestion.
+    next two candidates as small clickable icons. Clicking the card (or a mini
+    icon) adds that pick, which is the fastest way to try a suggestion.
+- **The pick you just made wins its role.** `_assign_roles` takes the slot the
+  client just filled (`last_slot`) and pins it to its own argmax *before*
+  optimising the rest. A pure sum-of-probabilities optimum is wrong here: pick
+  Vi (JUNGLE .97) onto a team that already shows Pantheon (JUNGLE .60, TOP .30)
+  and the optimum keeps Pantheon in JUNGLE and pushes Vi to TOP — the board
+  looks like it ignored the click. Pinning is lexicographic, so the newest pick
+  always keeps the role the model likes best for it and the older ones move
+  aside (Pantheon → TOP in that example).
+- **A board is only ever drawn from an answer computed for it.** Responses
+  carry the board signature they were computed for; `renderRoles`/`renderSlots`
+  use a response only while it still matches, and a board change dims the
+  cards (`…`, no targets, no confidences) until the reply lands. Rendering an
+  old assignment against new picks is what made a fresh pick land in an old
+  role while the role it belongs to kept its old target. A rejected board
+  (duplicate champion, etc.) now shows the reason in a red bar instead of
+  silently freezing the previous board.
 - **Per-role MASK queries**: top-5 for all 5 roles × both teams (≤ 6 tiny
   forwards per board change); bans and already-picked champions are
   post-filtered out. Once a team has all five roles filled, every slot is
@@ -244,26 +278,27 @@ Three states matter:
   `flex` styling on a pick badge is a post-hoc annotation (runner-up role
   ≥ 15%), not a class the model predicts.
 
-### Both modes
+### Both slots at once
 
 - **Walkthrough of real games**: the "Real draft" bar lists the 46.6k pro
   drafts (filter by team/league/date/gameid, or 🎲 random). Picking one shows
   date, league, teams, game number, patch and winner; ◀ / ▶ (or the arrow
-  keys) step through the 20 real moves, and the compare line shows what the
-  model suggested at each point vs what the pros actually did — e.g. "model
-  ranked it #2 for TOP (17.4%) · also MID #4", or in next-move mode "top-5",
-  "outside top-8".
+  keys) step through the 20 real moves, and the compare line shows what each
+  model suggested at that point vs what the pros actually did — "policy ranked
+  it #8 (2.8%)" from the policy slot, or "model ranked it #2 for TOP (17.4%) ·
+  also MID #4" from the role slot. Each line is only shown while its answer
+  still matches the current board.
 - Champion art: `https://ddragon.leagueoflegends.com/cdn/16.20.1/img/champion/…`
   resolved through the dDragon manifest (cached in `frontend/.cache/`; a
   deterministic name-based fallback keeps URLs sane offline — the images
   themselves need internet).
-- Inference: masked mode is 1 FLEX-role pass (role head over the picked
+- Inference: the role slot is 1 FLEX-role pass (role head over the picked
   champs → the one-to-one role assignment) plus role-conditioned MASK passes
   covering every role of both teams, with each picked champion held at its
-  *assigned* role as context; bans/picks filtered from logits post-hoc.
-  Next-move mode is 1 policy forward for the
-  move, plus `1 + ban_k` short rollouts when the ban list is requested.
-  Header shows the active checkpoint, its kind and its val metric.
+  *assigned* role as context; bans/picks filtered from logits post-hoc. The
+  policy slot is 1 forward for the
+  move, plus `1 + ban_k` short rollouts when the ban list is requested. The
+  header shows each slot's checkpoint, its kind and its val metric.
 
 ## Limits (prototype)
 
@@ -278,11 +313,15 @@ Three states matter:
 - A team's five role lists come from (5 − picks) MASKed slots per pass, so once
   several picks are filled, later roles are conditioned on slightly different
   empty-slot role inputs than earlier ones (≤ 6 tiny forwards).
-- The default (no `--ckpt`) is resolved once at startup; freshly trained runs
-  are reachable via the dropdown without restarting, but the startup default
-  only updates when you relaunch.
+- Which slot a checkpoint fills is guessed from its path (`_ckpt_roles`), not
+  from the payload: reading forty checkpoints at startup to classify them is
+  not worth it. A wrong guess is caught on load (`not a masked one`), never
+  silently.
+- The defaults (no `--ckpt` / `--policy-ckpt`) are resolved once at startup;
+  freshly trained runs are reachable via the dropdowns without restarting, but
+  the startup defaults only update when you relaunch.
 - Walkthrough data comes from the cached `data/pro play/pro_drafts.pt` (46.6k
   games, loaded lazily on first use).
 
-Tests: `python -m pytest frontend/test_server.py -q` (24) and
+Tests: `python -m pytest frontend/test_server.py -q` (30) and
 `python -m pytest model/policy/test_infer.py -q` (20).

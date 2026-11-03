@@ -21,7 +21,8 @@ def app():
     ckpt, score = S.find_best_ckpt()
     pred = S.Predictor(ckpt, device="cpu")
     S.APP.update(mapping=mapping, names_by_idx=names, champions=champs,
-                 predictor=pred)
+                 masked=pred)
+    S.APP.pop("policy", None)      # role board only unless a test loads one
     return S.APP
 
 
@@ -46,16 +47,16 @@ def test_find_best_ckpt_picks_the_best_available(app):
     Hard-coding 0.281 tied this test to one checkpoint that has since been
     deleted; the contract is "max over ckpt/", which survives churn.
     """
-    ckpt = Path(app["predictor"].ckpt_path)
+    ckpt = Path(app["masked"].ckpt_path)
     assert "run_" in str(ckpt)
     expected = _best_available_score()
     assert expected > 0.0, "no readable pretraining checkpoint under ckpt/"
-    assert app["predictor"].val_top5 == pytest.approx(expected, abs=1e-6)
+    assert app["masked"].val_top5 == pytest.approx(expected, abs=1e-6)
 
 
 def test_suggest_empty_draft(app):
     picks = [None] * 10
-    out = app["predictor"].suggest(picks, set(), app["mapping"])
+    out = app["masked"].suggest(picks, set(), app["mapping"])
     assert len(out["roles"]) == 10
     assert all(r == [] for r in out["roles"])   # nothing filled yet
     for team in ("blue", "red"):
@@ -79,7 +80,7 @@ def test_suggest_roles_and_exclusions(app):
     riot_b = next(r for r in mapping if r != riot_a)   # ban another
     picks = [None] * 10
     picks[0] = riot_a
-    out = app["predictor"].suggest(picks, {mapping[riot_b]}, mapping)
+    out = app["masked"].suggest(picks, {mapping[riot_b]}, mapping)
     # filled slot -> likely-role distribution over the 5 roles
     rp = out["roles"][0]
     assert len(rp) == 5
@@ -109,7 +110,7 @@ def test_role_assignment_is_one_to_one(app):
     mapping = app["mapping"]
     riot = list(mapping)[:5]                    # a full blue team
     picks = riot + [None] * 5
-    out = app["predictor"].suggest(picks, set(), mapping)
+    out = app["masked"].suggest(picks, set(), mapping)
     asg = out["assignment"]
     assert len(asg) == 10
     assert sorted(asg[:5]) == [0, 1, 2, 3, 4]   # full team -> every role once
@@ -120,9 +121,14 @@ def test_role_assignment_is_one_to_one(app):
 
 def test_assign_roles_breaks_collisions():
     """Two picks whose argmax is the same role must still land in two
-    different slots. The assignment maximises the SUM of role probs over
-    injective assignments, so the weaker pick takes its runner-up role
-    instead of duplicating the stronger one's argmax."""
+    different slots - but the NEWEST pick wins the contested role.
+
+    This is the "locking in" contract. A pure sum-of-probabilities optimum
+    would give slot 0 TOP (0.60 + 0.40 > 0.30 + 0.55), so the pick the user
+    just placed would slide to its runner-up and the role it was picked for
+    would keep showing its old occupant. Pinning `newest` first is what
+    makes a fresh pick land where the model thinks it belongs.
+    """
     def dist(pairs):
         return [{"role": r, "prob": p} for r, p in pairs]
     role_dists = [None] * 10
@@ -130,11 +136,52 @@ def test_assign_roles_breaks_collisions():
     role_dists[0] = dist([(0, 0.60), (1, 0.30), (2, 0.10)])   # argmax TOP
     role_dists[1] = dist([(0, 0.55), (1, 0.40), (2, 0.05)])   # argmax TOP too
     filled[0] = filled[1] = True
-    out = S._assign_roles(role_dists, filled)
+
+    out = S._assign_roles(role_dists, filled)                 # no hint
     assert out[0] != out[1], "collision: both picks assigned the same role"
-    assert sorted(out[:2]) == [0, 1]            # 0.60+0.40 beats 0.30+0.55
-    assert out[0] == 0 and out[1] == 1          # stronger pick keeps its argmax
+    assert sorted(out[:2]) == [0, 1]
     assert out[2:] == [None] * 8                # empty slots get no role
+
+    out = S._assign_roles(role_dists, filled, newest=1)       # slot 1 just picked
+    assert out[1] == 0, "the newest pick must keep its own argmax"
+    assert out[0] == 1, "the older pick moves to its runner-up"
+    assert out[2:] == [None] * 8
+
+
+def test_newest_pick_takes_the_role_it_was_picked_for():
+    """Pantheon JUNGLE .60 / TOP .30, then Vi JUNGLE .97: the board must put
+    Vi in JUNGLE, not keep Pantheon there because it was picked first."""
+    def dist(pairs):
+        return [{"role": r, "prob": p} for r, p in pairs]
+    role_dists = [None] * 10
+    filled = [False] * 10
+    role_dists[5] = dist([(1, 0.60), (0, 0.30), (2, 0.10)])   # Pantheon
+    role_dists[6] = dist([(1, 0.97), (0, 0.02), (3, 0.01)])   # Vi
+    filled[5] = filled[6] = True
+    out = S._assign_roles(role_dists, filled, newest=6)
+    assert out[6] == 1, "Vi was just picked for JUNGLE"
+    assert out[5] == 0, "Pantheon moves to TOP, its runner-up"
+
+
+def test_last_slot_wins_its_argmax(app):
+    """`last_slot` (the slot the user just filled) is pinned to its own
+    argmax, whatever the rest of the team would prefer jointly."""
+    mapping = app["mapping"]
+    riot = list(mapping)[:3]
+    picks = riot + [None] * 7
+    for slot in (0, 1, 2):
+        out = app["masked"].suggest(picks, set(), mapping, last_slot=slot)
+        asg = out["assignment"]
+        assert asg[slot] == out["roles"][slot][0]["role"], \
+            "slot %d did not keep its argmax" % slot
+        assert sorted(x for x in asg[:3] if x is not None) == \
+            sorted(set(asg[:3])), "assignment collided"
+
+
+def test_suggest_rejects_a_bad_last_slot(app, httpd):
+    body = json.dumps({"picks": [None] * 10, "bans": [], "last_slot": 12})
+    status, d = _post(httpd, "/api/suggest", body)
+    assert status == 400 and "last_slot" in d["error"]
 
 
 def test_outputs_are_only_real_classes(app):
@@ -142,7 +189,7 @@ def test_outputs_are_only_real_classes(app):
     Sec.2): suggestions must always be real champions (< num_champs)
     and role predictions must always be one of the 5 real roles -
     the model never 'guesses' a special token as an output class."""
-    pred = app["predictor"]
+    pred = app["masked"]
     assert pred.model.champ_head.out_features == pred.num_champs  # 173
     assert pred.model.role_head.out_features == S.NUM_ROLES       # 5, no FLEX
     mapping = app["mapping"]
@@ -218,9 +265,13 @@ def httpd(app):
     srv = S.ThreadingHTTPServer(("127.0.0.1", 0), S.Handler)
     t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
-    orig_pred = app["predictor"]
+    orig = {slot: app.get(slot) for slot in ("masked", "policy")}
     yield srv
-    app["predictor"] = orig_pred
+    for slot, pred in orig.items():
+        if pred is None:
+            app.pop(slot, None)
+        else:
+            app[slot] = pred
     srv.shutdown()
 
 
@@ -261,6 +312,34 @@ def test_list_checkpoints_covers_both_kinds():
     assert {"pretrain", "finetune"} <= kinds
     assert all(not Path(c["path"]).is_absolute() for c in cps)
     assert all(c["label"].startswith("[" + c["kind"] + "]") for c in cps)
+    # every entry says which model slot it can fill (value checkpoints are
+    # outcome-head-only and fill neither)
+    assert all(c["roles"] for c in cps if c["kind"] != "value")
+    assert all(c["roles"] == [] for c in cps if c["kind"] == "value")
+    assert all(set(c["roles"]) <= {"masked", "policy"} for c in cps)
+
+
+def test_ckpt_roles_follow_the_family():
+    """A dropdown must not offer a policy checkpoint under "role" (or the
+    reverse): loading it would fail, and most of the list would fail."""
+    assert S._ckpt_roles("model/pretraining/ckpt/run_1/best.pt",
+                         "pretrain") == ["masked"]
+    assert S._ckpt_roles("model/finetune/ckpt/run_1/best_mask.pt",
+                         "finetune") == ["masked"]
+    assert S._ckpt_roles("model/policy/ckpt/run_1/best_policy.pt",
+                         "policy") == ["policy"]
+    assert S._ckpt_roles("model/finetune/ckpt/value_1/best.pt",
+                         "value") == []
+    # pro-only runs are named m-* (masked init) / p-* (policy)
+    assert S._ckpt_roles(
+        "model/proonly/ckpt/run_20261101_182415_m-patch-s0/best.pt",
+        "proonly") == ["masked"]
+    assert S._ckpt_roles(
+        "model/proonly/ckpt/run_20261101_183519_p-patch-s0/best.pt",
+        "proonly") == ["policy"]
+    # unknown (an upload) is offered in both and validated on load
+    assert S._ckpt_roles("model/uploaded/x.pt", "uploaded") == \
+        ["masked", "policy"]
 
 
 def test_resolve_ckpt_path_validation():
@@ -283,7 +362,7 @@ def test_load_endpoint_switches_model(app, httpd):
     status, d = _post(httpd, "/api/load", json.dumps({"path": rel}))
     assert status == 200, d
     assert d["model"]["kind"] == "finetune"
-    assert app["predictor"].kind == "finetune"
+    assert app["masked"].kind == "finetune"
     # suggestions keep flowing through the API with the new weights
     status, sug = _post(httpd, "/api/suggest",
                         json.dumps({"picks": [None] * 10, "bans": []}))
@@ -320,7 +399,7 @@ def test_upload_endpoint(app, httpd):
         assert d["model"]["kind"] == "finetune"
         assert d["model"]["path"] == str(dest.relative_to(S.ROOT))
         assert dest.exists()
-        assert app["predictor"].ckpt_path == str(dest)
+        assert app["masked"].ckpt_path == str(dest)
         # shows up in the dropdown listing afterwards
         listed = {c["path"] for c in S.list_checkpoints()}
         assert str(dest.relative_to(S.ROOT)) in listed
@@ -479,17 +558,58 @@ def test_next_move_honours_first_pick(app, httpd, policy_ckpt):
     assert d["state"]["side"] == 1 and d["state"]["first_pick"] == 1
 
 
-def test_next_move_rejects_a_masked_model(app, httpd):
-    S.load_predictor(S.find_best_ckpt()[0])
+def test_next_move_without_a_policy_model_is_an_error(app, httpd):
+    """The two slots are independent: loading only a role model must not
+    silently make the next-move panel answer with it."""
+    app.pop("policy", None)
     status, d = _post(httpd, "/api/next-move", _empty_board())
-    assert status == 400 and "not a next-move policy" in d["error"]
+    assert status == 400 and "no next-move policy" in d["error"]
 
 
-def test_suggest_rejects_a_policy_model(app, httpd, policy_ckpt):
-    S.load_predictor(Path(policy_ckpt))
+def test_both_models_answer_the_same_board(app, httpd, policy_ckpt):
+    """The point of the two slots: one board, two answers.
+
+    The role model keeps answering the role board while a policy model is
+    loaded, and the policy keeps answering the next move while the role
+    model is loaded - neither load evicts the other.
+    """
+    assert app["masked"].kind != "policy"
+    S.load_predictor(Path(policy_ckpt))            # lands in the policy slot
+    assert app["masked"].kind != "policy"
+    assert app["policy"].kind == "policy"
+    status, sug = _post(httpd, "/api/suggest",
+                        json.dumps({"picks": [None] * 10, "bans": []}))
+    assert status == 200, sug
+    assert sug["model"]["kind"] != "policy"
+    assert len(sug["roles"]) == 10 and sug["assignment"] == [None] * 10
+    status, nm = _post(httpd, "/api/next-move", _empty_board())
+    assert status == 200, nm
+    assert nm["model"]["kind"] == "policy" and nm["state"]["kind"] == "ban"
+
+
+def test_suggest_without_a_role_model_is_an_error(app, httpd):
+    app.pop("masked", None)
     status, d = _post(httpd, "/api/suggest",
                       json.dumps({"picks": [None] * 10, "bans": []}))
-    assert status == 400 and "next-move" in d["error"]
+    assert status == 400 and "no role model" in d["error"]
+
+
+def test_load_files_a_checkpoint_into_the_right_slot(app, httpd, policy_ckpt):
+    """`role` is honoured, and a mismatched role is rejected rather than
+    quietly filing a policy checkpoint under the role board."""
+    rel = str(Path(policy_ckpt).relative_to(S.ROOT))
+    status, d = _post(httpd, "/api/load",
+                      json.dumps({"path": rel, "role": "masked"}))
+    assert status == 400 and "not a masked one" in d["error"]
+    status, d = _post(httpd, "/api/load",
+                      json.dumps({"path": rel, "role": "policy"}))
+    assert status == 200 and d["role"] == "policy", d
+    assert app["policy"].kind == "policy"
+    # unloading the next-move model leaves the role board alone
+    status, d = _post(httpd, "/api/load",
+                      json.dumps({"path": None, "role": "policy"}))
+    assert status == 200 and d["model"] is None
+    assert "policy" not in app and app["masked"] is not None
 
 
 def test_next_move_rejects_an_illegal_board(app, httpd, policy_ckpt):
@@ -578,8 +698,7 @@ def test_explain_returns_the_reasoning_the_ui_renders(app, httpd, policy_ckpt,
     assert d["llm"]["configured"] is True
 
 
-def test_explain_rejects_a_masked_model(app, httpd):
-    ckpt, _score = S.find_best_ckpt()
-    S.APP["predictor"] = S.Predictor(ckpt, device="cpu")
+def test_explain_without_a_policy_model_is_an_error(app, httpd):
+    app.pop("policy", None)
     status, d = _post(httpd, "/api/explain", _empty_board())
     assert status == 400 and "policy" in d["error"]

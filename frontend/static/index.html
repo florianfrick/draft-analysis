@@ -8,11 +8,20 @@
 <body>
 <header>
   <h1>Draft Assistant</h1>
-  <div id="model-info" class="muted">loading model…</div>
-  <div class="model-pick">
-    <select id="ckpt-select" title="checkpoints on this machine"></select>
-    <button id="btn-load-ckpt" title="load the selected checkpoint">Load</button>
-    <button id="btn-upload" title="upload a .pt file from this machine">From file…</button>
+  <div id="model-info" class="muted">loading models…</div>
+  <div class="model-pick" title="masked checkpoint: the role board, the role
+    of each pick and the target champion for every empty role">
+    <span class="mp-label">role</span>
+    <select id="ckpt-select"></select>
+    <button id="btn-load-ckpt" title="load the selected role model">Load</button>
+  </div>
+  <div class="model-pick" title="policy checkpoint: the next pick/ban, the ban
+    candidates and the explanation panel - loaded alongside the role model">
+    <span class="mp-label">next move</span>
+    <select id="policy-select"></select>
+    <button id="btn-load-policy" title="load the selected next-move model">Load</button>
+    <button id="btn-upload" title="upload a .pt file from this machine (filed
+      by its kind)">From file…</button>
   </div>
   <div class="spacer"></div>
   <label class="muted fp-label" title="who has first pick (mirrors the whole
@@ -25,6 +34,8 @@
   <button id="btn-reset">Reset draft</button>
   <input id="file-input" type="file" accept=".pt" class="hidden">
 </header>
+
+<div id="board-error" class="hidden"></div>
 
 <section id="nextmove" class="hidden">
   <div class="nm-head">
@@ -108,15 +119,18 @@
 </main>
 
 <footer class="muted">
-  Masked model (pretraining / finetune): each team's five roles in
-  TOP&rarr;UTILITY order, picked champions placed in their most likely role,
-  and the model's target for every empty role (top-3 from the
-  role-conditioned masked queries). Next-move policy: one ranked list for
-  the side on the clock, plus ban candidates ranked by how likely the
-  opponent was to take them. Banned &amp; picked champions are always
-  excluded · highlighted slot = next move in a standard pro draft
-  (highlight only, nothing enforced) · champion art from Riot's dDragon CDN
-  (needs internet once) · local only
+  Two models, loaded at the same time and chosen independently. <b>Role
+  model</b> (masked checkpoint): each team's five roles in
+  TOP&rarr;UTILITY order, picked champions placed in their most likely role
+  &mdash; the champion you just picked always keeps the role the model likes
+  best for it &mdash; and the model's target for every empty role (top-3
+  from the role-conditioned masked queries). <b>Next move</b> (policy
+  checkpoint): one ranked list for the side on the clock, plus ban
+  candidates ranked by how likely the opponent was to take them. Banned
+  &amp; picked champions are always excluded &middot; highlighted slot =
+  next move in a standard pro draft (highlight only, nothing enforced)
+  &middot; champion art from Riot's dDragon CDN (needs internet once)
+  &middot; local only
 </footer>
 
 <div id="picker" class="hidden">
