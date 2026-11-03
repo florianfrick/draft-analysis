@@ -102,7 +102,7 @@ def attr_matrix_for_config(cfg, num_champs=None):
 class DraftSlotEmbedding(nn.Module):
     """LayerNorm(champ_lookup + role_lookup [+ attr_proj(champ_attrs)] [+ patch]).
 
-    `attr_matrix` turns on the kit-attribute residual from plan-model-v2 P3.1.
+    `attr_matrix` turns on the kit-attribute residual (STATUS.md §6).
     The projection is zero-initialised, so with the same champ/role tables this
     module computes exactly what it did before the adapter existed. That is the
     whole point: "attributes on/off" becomes a single-variable comparison

@@ -81,7 +81,7 @@ SOLOQ_PROC_DIR = BASE_DIR.parent / "solo queue" / "process matchdata"
 MAPPING_PATH = SOLOQ_PROC_DIR / "champ_mapping.json"
 CHAMP_NAMES_PATH = SOLOQ_PROC_DIR / "champ_names.json"
 CSV_GLOB_ALL = str(BASE_DIR / "*OraclesElixir*.csv")
-# The corpus every recorded number is measured on (STATUS.md: 46,813 drafts).
+# The corpus every recorded number is measured on (STATUS.md: 46,875 drafts).
 # Pinned to 2022+ on purpose: the folder also holds 2014-2021 exports, and a
 # bare "*" glob would silently swap the corpus out from under every existing
 # script the moment those files appear. The wider set is opt-in via
@@ -94,7 +94,7 @@ CACHE_PATH = BASE_DIR / "pro_drafts.pt"
 CACHE_PATH_ALL = BASE_DIR / "pro_drafts_all.pt"
 CACHE_VERSION = 3  # v3: prior_picks + data-driven fearless flag
 
-# Corpus freeze. Every number in STATUS.md and FINDINGS.md is measured on the
+# Corpus freeze. Every number in STATUS.md is measured on the
 # drafts that existed up to this date, which is also the last date in both
 # caches. The OE exports keep growing, and a rebuild would otherwise fold the
 # 2026 Worlds knockout stage - including the three series that

@@ -2,10 +2,7 @@
 
 > **Current state of the project: see [STATUS.md](STATUS.md)** — one section per
 > stage (pretraining, finetune, policy, prefix value), the exact checkpoints
-> kept, and the evaluation numbers for each.
->
-> **The pro-only model — results, recipe, and improvement plan:
-> [FINDINGS.md](FINDINGS.md).**
+> kept, the evaluation numbers for each, what failed and why, and the plan.
 
 Project Goals:
 

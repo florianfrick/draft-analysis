@@ -4,9 +4,8 @@ The model that ships: **pro drafts only, from scratch, no solo queue anywhere.**
 Encoder D=256 / 2 intra + 1 cross / 8 heads, plus a patch embedding, trained on
 a within-patch split where the patch is a *seen* input.
 
-Results, ablations and the improvement plan live in **`FINDINGS.md`** at the
-repo root — that is the single record. This file is only about running the
-folder.
+Results, ablations and the improvement plan live in **`STATUS.md`** at the repo
+root — that is the single record. This file is only about running the folder.
 
 ## What is here
 
@@ -35,12 +34,12 @@ inference and the stage:
 The three runs this table used to list (`p-patch-s0`, `m-patch-s0`,
 `p-nopatch-s0`) were the previous generation: `p-nopatch-s0` was the no-patch
 ablation control and is gone with its weights, and the other two were replaced
-by the retrain above. **Their numbers survive** in `reports/` and in
-`FINDINGS.md` §4, but their paired comparisons can no longer be re-run. The
-current scores are in `STATUS.md` §9 and
-`model/test_split/REPORT_test_split_evaluation.md`. The six pretrained-initialisation arms were moved to
-`model/finetune/` + `model/policy/` — the pipeline is now where soloQ
-initialisation is studied, and this folder is from-scratch only by design.
+by the retrain above. **Their numbers survive** in `reports/` and in `STATUS.md`
+§4, but their paired comparisons can no longer be re-run. The current scores are
+in `STATUS.md` §7 and `model/test_split/REPORT_test_split_evaluation.md`. The six
+pretrained-initialisation arms were moved to `model/finetune/` +
+`model/policy/` — the pipeline is now where soloQ initialisation is studied, and
+this folder is from-scratch only by design.
 
 ## Train it
 

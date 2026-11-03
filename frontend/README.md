@@ -187,7 +187,7 @@ curl -s localhost:8777/api/explain -H 'Content-Type: application/json' \
 - **Patch notes** come from `data/patch notes/clean/patch_<M>_<m>.md`, the
   draft-relevant subset. **That corpus is local only** — it is git-ignored and
   a fresh clone does not have it (see `.gitignore`; the evidence against it as
-  a training signal is in `STATUS.md` §P3.1). With the corpus present the
+  a training signal is in `STATUS.md` §6). With the corpus present the
   explanation can cite patch changes; without it `patch.available` is `false`,
   the prompt tells the model not to claim anything about patch changes, and
   everything else — retrieval, validation, the endpoint — works unchanged.

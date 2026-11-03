@@ -1,11 +1,11 @@
-"""Grounded explanation for a draft recommendation (plan-model-v2.md P3.3).
+"""Grounded explanation for a draft recommendation (STATUS.md §8).
 
 Three parts, each usable without a network:
 
   ProIndex   what pros actually did from a board like this one
   bullets()  what the patch notes say about the candidates (optional: the
              corpus is local-only, and an absent corpus simply means no patch
-             evidence - see `.gitignore` and STATUS.md P3.1 for why)
+             evidence - see `.gitignore` and STATUS.md §6 for why)
   explain()  prompt -> LLM -> validated answer, cached on disk
 
 The rule that keeps this honest: **every claim must cite evidence that

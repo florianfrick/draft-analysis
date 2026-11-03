@@ -45,7 +45,7 @@ them out of training. `test_test_split.py` asserts both halves: present in
 `pro_drafts.pt`, absent from every train and val index.
 
 Cost, stated plainly: raising the pin invalidates every number recorded before
-it. Everything was re-measured on 2026-11-03 (`STATUS.md` §9).
+it. Everything was re-measured on 2026-11-03 (`STATUS.md` §7).
 
 ## What is compared
 

@@ -1,6 +1,6 @@
 """Hand-tagged champion kit attributes -> ``data/champ_attrs.json``.
 
-Why this exists (plan-model-v2.md §P3.1): the champion embedding table is
+Why this exists (STATUS.md §6): the champion embedding table is
 learned from one patch of solo-queue data, so it cannot transfer to a
 champion it has never seen and cannot express anything the co-occurrence
 statistics do not happen to encode. A fixed ``[173, K]`` matrix of kit
