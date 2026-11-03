@@ -98,6 +98,45 @@ def test_suggest_roles_and_exclusions(app):
                 "banned champ leaked (%s %s)" % (team, role)
 
 
+def test_role_assignment_is_one_to_one(app):
+    """The role board puts each pick in exactly ONE role per team.
+
+    The role head is per-slot (`Linear(D, 5)`), so two picks can argmax the
+    same role. `_assign_roles` solves an injective assignment and the UI reads
+    `assignment` for both the pick badges and the role board - a collision
+    would draw two champions in one slot and leave another role empty.
+    """
+    mapping = app["mapping"]
+    riot = list(mapping)[:5]                    # a full blue team
+    picks = riot + [None] * 5
+    out = app["predictor"].suggest(picks, set(), mapping)
+    asg = out["assignment"]
+    assert len(asg) == 10
+    assert sorted(asg[:5]) == [0, 1, 2, 3, 4]   # full team -> every role once
+    assert asg[5:] == [None] * 5                # red untouched
+    for s in range(5):                          # assigned role was predicted
+        assert asg[s] in {r["role"] for r in out["roles"][s]}
+
+
+def test_assign_roles_breaks_collisions():
+    """Two picks whose argmax is the same role must still land in two
+    different slots. The assignment maximises the SUM of role probs over
+    injective assignments, so the weaker pick takes its runner-up role
+    instead of duplicating the stronger one's argmax."""
+    def dist(pairs):
+        return [{"role": r, "prob": p} for r, p in pairs]
+    role_dists = [None] * 10
+    filled = [False] * 10
+    role_dists[0] = dist([(0, 0.60), (1, 0.30), (2, 0.10)])   # argmax TOP
+    role_dists[1] = dist([(0, 0.55), (1, 0.40), (2, 0.05)])   # argmax TOP too
+    filled[0] = filled[1] = True
+    out = S._assign_roles(role_dists, filled)
+    assert out[0] != out[1], "collision: both picks assigned the same role"
+    assert sorted(out[:2]) == [0, 1]            # 0.60+0.40 beats 0.30+0.55
+    assert out[0] == 0 and out[1] == 1          # stronger pick keeps its argmax
+    assert out[2:] == [None] * 8                # empty slots get no role
+
+
 def test_outputs_are_only_real_classes(app):
     """[MASK]/[PAD]/FLEX are INPUT-only vocabulary (model/README.md
     Sec.2): suggestions must always be real champions (< num_champs)

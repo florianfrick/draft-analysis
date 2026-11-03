@@ -131,9 +131,12 @@ the whole panel re-runs for the next move.
   tiebreaker, not a decision.
 - Without `--value` (or with a missing value checkpoint) the list still works,
   ranked by denial alone, and the subtitle says so.
-- The per-role suggestion tables are hidden in this mode (`body.policy-mode`) —
-  they belong to the masked model. The role head still labels the picks under
-  "Likely roles".
+- The **role board** row is hidden in this mode (`body.policy-mode`) — it
+  belongs to the masked model, which is the only checkpoint family that can
+  answer "what is this team still missing at MID". The role head still labels
+  each pick on the slot itself (argmax role + confidence, amber when the
+  runner-up role is ≥ 15%, red when it disagrees with the pro's actual role in
+  a walkthrough).
 - An illegal board (more bans than a phase allows, 6+ bans on one side, a
   champion twice) is rejected by the endpoint and shown as a board warning
   rather than silently repaired.
@@ -218,20 +221,28 @@ Three states matter:
 
 ### Masked mode (pretraining / finetune checkpoint)
 
-- **Likely roles**: below each strip, every picked champion gets its predicted
-  role from the model's role head (FLEX-role query); a gold second badge
-  appears when the runner-up role is ≥ 15% (flex), and a red badge when the
-  model disagrees with the pro's actual role (walkthrough).
-- **Suggestions per role**: top-5 for all 5 roles × both teams from
-  role-conditioned MASK queries (≤ 6 tiny forwards per change); champs
-  suggested under 2+ roles of the same team carry a `flex` badge; click a chip
-  to add the pick. Bans/picked champs are post-filtered out.
+- **Role board**: five slots per team, laid out TOP / JUNGLE / MID / BOTTOM /
+  UTILITY left to right. Two things fill it:
+  - a **picked** champion sits in its *most likely* role. The role head is
+    per-slot (`Linear(D, 5)` over each pick's own embedding), so two picks can
+    argmax the same role; the server therefore solves a **one-to-one assignment
+    per team** by exhaustive search over ≤ 120 permutations, maximising the sum
+    of the role probabilities. That is why the badge on a pick and the slot it
+    occupies always agree — and why a slot never appears twice.
+  - an **empty** role shows the model's **target** for it: the top-1 champion
+    of the role-conditioned MASK query for that role, gold-outlined, with the
+    next two candidates as small icons. Clicking the card (or a mini icon)
+    adds that pick, which is the fastest way to try a suggestion.
+- **Per-role MASK queries**: top-5 for all 5 roles × both teams (≤ 6 tiny
+  forwards per board change); bans and already-picked champions are
+  post-filtered out. Once a team has all five roles filled, every slot is
+  filled and no target cards remain.
 - Output contract (model/README.md §2): `[MASK]`/`[PAD]`/FLEX exist only on
   the **input** side — the champ head is `Linear(D, 173)` and the role head
   `Linear(D, 5)`, so a suggestion can never be a special token and a role
-  prediction can never be FLEX (hard-filtered + regression-tested). The UI's
-  `flex` badge is a post-hoc annotation (same champ appearing under 2+ role
-  lists), not a class the model predicts.
+  prediction can never be FLEX (hard-filtered + regression-tested). The amber
+  `flex` styling on a pick badge is a post-hoc annotation (runner-up role
+  ≥ 15%), not a class the model predicts.
 
 ### Both modes
 
@@ -247,9 +258,10 @@ Three states matter:
   deterministic name-based fallback keeps URLs sane offline — the images
   themselves need internet).
 - Inference: masked mode is 1 FLEX-role pass (role head over the picked
-  champs, roles fed as context are the model's own predictions) plus
-  role-conditioned MASK passes covering every role of both teams; bans/picks
-  filtered from logits post-hoc. Next-move mode is 1 policy forward for the
+  champs → the one-to-one role assignment) plus role-conditioned MASK passes
+  covering every role of both teams, with each picked champion held at its
+  *assigned* role as context; bans/picks filtered from logits post-hoc.
+  Next-move mode is 1 policy forward for the
   move, plus `1 + ban_k` short rollouts when the ban list is requested.
   Header shows the active checkpoint, its kind and its val metric.
 
@@ -272,5 +284,5 @@ Three states matter:
 - Walkthrough data comes from the cached `data/pro play/pro_drafts.pt` (46.6k
   games, loaded lazily on first use).
 
-Tests: `python -m pytest frontend/test_server.py -q` (22) and
+Tests: `python -m pytest frontend/test_server.py -q` (24) and
 `python -m pytest model/policy/test_infer.py -q` (20).

@@ -199,17 +199,24 @@ function renderSlots() {
     const rb = el.querySelector('.rb');
     rb.className = 'rb';
     const rp = resp && resp.roles ? resp.roles[s] : null;
-    if (c && rp && rp.length) {
-      rb.textContent = ROLES[rp[0].role] + ' ' +
-        Math.round(100 * rp[0].prob) + '%';
+    // masked mode: the server's collision-free assignment; policy mode has
+    // no assignment, so fall back to the role head's argmax for the badge.
+    const ar = (resp && resp.assignment && resp.assignment[s] != null)
+      ? resp.assignment[s]
+      : (rp && rp.length ? rp[0].role : null);
+    if (c && rp && rp.length && ar != null) {
+      const conf = rp.find(x => x.role === ar) || rp[0];
+      rb.textContent = ROLES[ar] + ' ' + Math.round(100 * conf.prob) + '%';
       const proRole = WT && WT.actualRole ? WT.actualRole[riot] : undefined;
       rb.title = rp.slice(0, 3).map(x =>
         `${ROLES[x.role]} ${(100 * x.prob).toFixed(0)}%`).join(' · ')
         + (proRole != null ? ` · pro played ${ROLES[proRole]}` : '');
-      if (proRole != null && proRole !== rp[0].role)
+      if (proRole != null && proRole !== ar)
         rb.classList.add('mismatch');           // model vs pro disagreement
-      else if (rp[1] && rp[1].prob >= 0.15)
-        rb.classList.add('flex-rb');
+      else {
+        const second = rp.find(x => x.role !== ar);
+        if (second && second.prob >= 0.15) rb.classList.add('flex-rb');
+      }
     } else {
       rb.textContent = '';
       rb.title = '';
@@ -232,62 +239,65 @@ function renderBans() {
 }
 
 function renderRoles() {
+  // Role board: five slots per team in TOP..UTILITY order. A picked champ
+  // sits in its assigned role; an empty role shows the masked model's
+  // target for it (the role-conditioned MASK query), with the next two
+  // candidates as small icons.
   ['blue', 'red'].forEach(team => {
     const box = document.getElementById('roles-' + team);
     box.innerHTML = '';
-    let any = false;
-    for (let s = 0; s < 5; s++) {
-      const slot = team === 'blue' ? s : 5 + s;
-      const c = picks[slot] != null ? BY_RIOT[picks[slot]] : null;
-      if (!c) continue;
-      any = true;
-      const rp = (resp && resp.roles && resp.roles[slot]) || [];
+    const base = team === 'blue' ? 0 : 5;
+    const assign = (resp && resp.assignment) || [];
+    const roleSlot = {};
+    for (let s = base; s < base + 5; s++)
+      if (assign[s] != null) roleSlot[assign[s]] = s;
+    for (let r = 0; r < 5; r++) {
       const el = document.createElement('div');
-      el.className = 'role-ass';
-      let html = imgTag(c) + `<span class="nm">${c.name}</span>`;
-      if (rp.length) {
-        html += `<span class="rb hi">${ROLES[rp[0].role]}`
-          + ` ${(100 * rp[0].prob).toFixed(0)}%</span>`;
-        if (rp[1] && rp[1].prob >= 0.15)
-          html += `<span class="rb alt">${ROLES[rp[1].role]}`
-            + ` ${(100 * rp[1].prob).toFixed(0)}%</span>`;
-        el.title = rp.slice(0, 3).map(x =>
-          `${ROLES[x.role]} ${(100 * x.prob).toFixed(1)}%`).join(' · ');
+      const slot = roleSlot[r];
+      const c = (slot != null && picks[slot] != null)
+        ? BY_RIOT[picks[slot]] : null;
+      if (c) {
+        const rp = (resp && resp.roles && resp.roles[slot]) || [];
+        const conf = rp.find(x => x.role === r);
+        el.className = 'role-slot filled';
+        el.title = `${ROLES[r]} — ${c.name}`
+          + (conf ? ` · ${(100 * conf.prob).toFixed(1)}%` : '');
+        el.innerHTML = `<div class="rlabel">${ROLES[r]}</div>`
+          + `<div class="pic">${imgTag(c, 'ic big')}</div>`
+          + `<div class="nm">${c.name}</div>`
+          + (conf ? `<div class="sub">${(100 * conf.prob).toFixed(0)}%</div>`
+            : '');
       } else {
-        html += '<span class="rb muted-r">…</span>';
+        const list = (resp && resp[team] && resp[team][ROLES[r]]) || [];
+        if (list.length) {
+          const top = list[0];
+          const rest = list.slice(1, 3);
+          el.className = 'role-slot empty target';
+          el.title = `${ROLES[r]} — model target: ${top.name}`
+            + ` (${(100 * top.prob).toFixed(1)}%)`;
+          el.innerHTML = `<div class="rlabel">${ROLES[r]}</div>`
+            + `<div class="pic">${imgTag(BY_IDX[top.idx], 'ic big')}</div>`
+            + `<div class="nm">${top.name}</div>`
+            + `<div class="sub">${(100 * top.prob).toFixed(1)}%</div>`
+            + (rest.length
+              ? `<div class="mini">${
+                rest.map(x => imgTag(BY_IDX[x.idx], 'ic mini')).join('')
+              }</div>`
+              : '');
+          el.addEventListener('click', () => addPick(team, top.idx));
+          el.querySelectorAll('.mini img').forEach((img, i) =>
+            img.addEventListener('click', ev => {
+              ev.stopPropagation();
+              addPick(team, rest[i].idx);
+            }));
+        } else {
+          el.className = 'role-slot empty';
+          el.innerHTML = `<div class="rlabel">${ROLES[r]}</div>`
+            + '<div class="pic"></div><div class="nm muted">—</div>';
+        }
       }
-      el.innerHTML = html;
       box.appendChild(el);
     }
-    if (!any) box.innerHTML = '<span class="muted">no picks yet</span>';
-  });
-}
-
-function renderSuggestions() {
-  ['blue', 'red'].forEach(team => {
-    const box = document.getElementById('sugs-' + team);
-    box.innerHTML = '';
-    ROLES.forEach(role => {
-      const row = document.createElement('div');
-      row.className = 'sug-row';
-      const list = (resp && resp[team] && resp[team][role]) || [];
-      let html = `<span class="rt">${role}</span><div class="chips">`;
-      if (!list.length) html += '<span class="muted">—</span>';
-      list.forEach(cand => {
-        html += `<button class="sug${cand.flex ? ' flex' : ''}"`
-          + ` data-team="${team}" data-idx="${cand.idx}">`
-          + imgTag(BY_IDX[cand.idx])
-          + `<span class="nm">${cand.name}</span>`
-          + `<span class="p">${(100 * cand.prob).toFixed(1)}%</span>`
-          + (cand.flex ? '<span class="fb">flex</span>' : '')
-          + '</button>';
-      });
-      row.innerHTML = html + '</div>';
-      box.appendChild(row);
-    });
-    box.querySelectorAll('.sug').forEach(b =>
-      b.addEventListener('click', () =>
-        addPick(b.dataset.team, +b.dataset.idx)));
   });
 }
 
@@ -301,7 +311,7 @@ function addPick(team, idx) {
 
 function renderAll() {
   renderSlots(); renderBans(); renderRoles();
-  renderSuggestions(); renderTurn(); renderNextMove();
+  renderTurn(); renderNextMove();
 }
 
 function changed() {
@@ -389,7 +399,7 @@ function requestSuggest() {
       return;
     }
     resp = r;
-    renderSlots(); renderRoles(); renderSuggestions(); renderTurn();
+    renderSlots(); renderRoles(); renderTurn();
     renderNextMove();
     renderExplain();       // hides itself if the board moved
     renderCompare();

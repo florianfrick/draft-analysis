@@ -82,13 +82,11 @@
       <span class="row-label">Picks</span>
       <div class="strip" id="slots-blue"></div>
     </div>
-    <div class="row">
-      <span class="row-label">Likely roles</span>
-      <div class="strip roles-strip" id="roles-blue"></div>
+    <div class="row role-row">
+      <span class="row-label" title="picked champions placed in their most
+        likely role; an empty role shows the model's target for it">Role board</span>
+      <div class="strip role-strip" id="roles-blue"></div>
     </div>
-    <div class="sugs-head">Suggested picks per role
-      <span class="muted">(flex = suggested for 2+ roles)</span></div>
-    <div class="sug-table" id="sugs-blue"></div>
   </section>
 
   <section class="team" id="team-red">
@@ -101,19 +99,19 @@
       <span class="row-label">Picks</span>
       <div class="strip" id="slots-red"></div>
     </div>
-    <div class="row">
-      <span class="row-label">Likely roles</span>
-      <div class="strip roles-strip" id="roles-red"></div>
+    <div class="row role-row">
+      <span class="row-label" title="picked champions placed in their most
+        likely role; an empty role shows the model's target for it">Role board</span>
+      <div class="strip role-strip" id="roles-red"></div>
     </div>
-    <div class="sugs-head">Suggested picks per role
-      <span class="muted">(flex = suggested for 2+ roles)</span></div>
-    <div class="sug-table" id="sugs-red"></div>
   </section>
 </main>
 
 <footer class="muted">
-  Masked model (pretraining / finetune): 5 role-conditioned suggestions per
-  role &amp; team, flex picks flagged. Next-move policy: one ranked list for
+  Masked model (pretraining / finetune): each team's five roles in
+  TOP&rarr;UTILITY order, picked champions placed in their most likely role,
+  and the model's target for every empty role (top-3 from the
+  role-conditioned masked queries). Next-move policy: one ranked list for
   the side on the clock, plus ban candidates ranked by how likely the
   opponent was to take them. Banned &amp; picked champions are always
   excluded · highlighted slot = next move in a standard pro draft

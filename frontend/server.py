@@ -494,6 +494,47 @@ def peek_kind(payload):
     return "pretrain"
 
 
+def _assign_roles(role_dists, filled):
+    """One-to-one slot -> role assignment per team, maximizing the summed
+    role probability.
+
+    The role head is per-slot, so two picks on one team can argmax the same
+    role. A team's five roles are distinct, so resolve collisions with an
+    exhaustive search over injective assignments (<=5 picks -> <=120
+    leaves). Returns a length-10 list of role ids (None for empty slots).
+    """
+    out = [None] * len(role_dists)
+    for team in (0, 1):
+        slots = [s for s in range(team * 5, team * 5 + 5)
+                 if filled[s] and role_dists[s]]
+        if not slots:
+            continue
+        used = [False] * 5
+        cur = {}
+        best = {"score": -1.0, "assign": {}}
+
+        def rec(i, score):
+            if i == len(slots):
+                if score > best["score"]:
+                    best["score"] = score
+                    best["assign"] = dict(cur)
+                return
+            for cand in role_dists[slots[i]]:
+                r = cand["role"]
+                if not (0 <= r < 5) or used[r]:
+                    continue
+                used[r] = True
+                cur[slots[i]] = r
+                rec(i + 1, score + cand["prob"])
+                used[r] = False
+                del cur[slots[i]]
+
+        rec(0, 0.0)
+        for s, r in best["assign"].items():
+            out[s] = r
+    return out
+
+
 class Predictor:
     """Wraps the loaded checkpoint; one forward -> top-5 per empty slot."""
 
@@ -582,6 +623,7 @@ class Predictor:
         """picks: len-10 riot ids or None - blue 0-4 / red 5-9 in PICK
         ORDER (slots carry no role meaning); bans_idx: banned champ idx.
         -> {"roles": [10 x [{role, prob}...]] (filled slots, desc),
+            "assignment": [10 x role id | None] (one per team, distinct),
             "blue"/"red": {role_name: [{idx, prob, flex?}] <=5}}
 
         Pass 1 queries picked champs with a FLEX role INPUT (= "role
@@ -625,7 +667,7 @@ class Predictor:
         # cannot come back out - the filter defends it anyway.
         out = self._forward(champ_ids, torch.full(
             (1, N_SLOTS), ROLE_FLEX_ID, dtype=torch.long))
-        roles, pred_role = [], [None] * N_SLOTS
+        roles = []
         for s in range(N_SLOTS):
             if not filled[s]:
                 roles.append([])
@@ -635,7 +677,10 @@ class Predictor:
             real = [int(r) for r in order if 0 <= int(r) < NUM_ROLES]
             roles.append([{"role": r, "prob": float(probs[r])}
                           for r in real])
-            pred_role[s] = real[0]
+        # One consistent, collision-free role per team. The role head is
+        # per-slot, so two picks can argmax the same role; the assignment
+        # below drives both the MASK queries and the UI's role board.
+        pred_role = _assign_roles(roles, filled)
 
         # passes: role-conditioned MASK queries, every role x both teams.
         # One pass covers (5 - picks) roles per team; <=5 passes total.
@@ -679,7 +724,8 @@ class Predictor:
                 for c in sugs[team][rname]:
                     if seen[c["idx"]] > 1:
                         c["flex"] = True
-        return {"roles": roles, "blue": sugs["blue"], "red": sugs["red"]}
+        return {"roles": roles, "assignment": pred_role,
+                "blue": sugs["blue"], "red": sugs["red"]}
 
 
 def _rel(p):
@@ -968,6 +1014,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, {"error": str(exc)})
             return
         out = {"blue": {}, "red": {}, "roles": res["roles"],
+               "assignment": res["assignment"],
                "model": model_info(pred)}
         for team in ("blue", "red"):
             for role, cands in res[team].items():
