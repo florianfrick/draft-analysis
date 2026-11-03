@@ -30,8 +30,7 @@ def _best_available_score():
     """The champ_top5 find_best_ckpt is supposed to pick, from the files."""
     import torch
     best = 0.0
-    pattern = str(S.ROOT / "model" / "pretraining" / "ckpt" / "run_*" / "best.pt")
-    for path in glob.glob(pattern):
+    for path in glob.glob(S.CKPT_GLOB):
         try:
             payload = torch.load(path, map_location="cpu", weights_only=False)
         except Exception:  # noqa: BLE001  unreadable ckpt is not this test
@@ -45,12 +44,13 @@ def test_find_best_ckpt_picks_the_best_available(app):
     """The default must be the highest val champ_top5 present, not run1.
 
     Hard-coding 0.281 tied this test to one checkpoint that has since been
-    deleted; the contract is "max over ckpt/", which survives churn.
+    deleted; the contract is "max over model/checkpoints/", which survives
+    churn.
     """
     ckpt = Path(app["masked"].ckpt_path)
-    assert "run_" in str(ckpt)
+    assert "checkpoints" in ckpt.as_posix()
     expected = _best_available_score()
-    assert expected > 0.0, "no readable pretraining checkpoint under ckpt/"
+    assert expected > 0.0, "no readable checkpoint under model/checkpoints/"
     assert app["masked"].val_top5 == pytest.approx(expected, abs=1e-6)
 
 
@@ -252,7 +252,8 @@ def test_http_api(app):
 
 # --- finetune checkpoints + runtime model switching ---------------------
 
-FINETUNE_GLOB = str(S.ROOT / "model" / "finetune" / "ckpt" / "run_*" / "*.pt")
+FINETUNE_GLOB = str(S.ROOT / "model" / "checkpoints"
+                    / "masking-finetune" / "*.pt")
 
 
 def _finetune_paths():
@@ -309,28 +310,46 @@ def test_predictor_loads_finetune_ckpt():
 def test_list_checkpoints_covers_both_kinds():
     cps = S.list_checkpoints()
     kinds = {c["kind"] for c in cps}
-    assert {"pretrain", "finetune"} <= kinds
+    assert "checkpoints" in kinds
     assert all(not Path(c["path"]).is_absolute() for c in cps)
-    assert all(c["label"].startswith("[" + c["kind"] + "]") for c in cps)
-    # every entry says which model slot it can fill (value checkpoints are
-    # outcome-head-only and fill neither)
-    assert all(c["roles"] for c in cps if c["kind"] != "value")
-    assert all(c["roles"] == [] for c in cps if c["kind"] == "value")
+    # the kept artefacts are labelled by directory name, which is the name
+    # that states the inference; uploads keep the family tag
+    assert all(c["label"].startswith("[%s]" % c["kind"])
+               for c in cps if c["kind"] != "checkpoints")
+    assert all(c["label"].startswith(Path(c["path"]).parent.name + "/")
+               for c in cps if c["kind"] == "checkpoints")
     assert all(set(c["roles"]) <= {"masked", "policy"} for c in cps)
 
 
-def test_ckpt_roles_follow_the_family():
+def test_ckpt_roles_follow_the_name():
     """A dropdown must not offer a policy checkpoint under "role" (or the
-    reverse): loading it would fail, and most of the list would fail."""
+    reverse): loading it would fail, and most of the list would fail.
+
+    The kept artefacts are named for the inference they serve, so the name is
+    the whole rule. Paths from before the rename (or an upload) fall back to
+    the family rules, which is why those cases are still asserted.
+    """
+    # the name decides
+    assert S._ckpt_roles("model/checkpoints/masking-proonly/best.pt",
+                         "checkpoints") == ["masked"]
+    assert S._ckpt_roles("model/checkpoints/masking-finetune/best_mask.pt",
+                         "checkpoints") == ["masked"]
+    assert S._ckpt_roles("model/checkpoints/masking-soloqueue/best.pt",
+                         "checkpoints") == ["masked"]
+    assert S._ckpt_roles("model/checkpoints/nextpick-policy/best_policy.pt",
+                         "checkpoints") == ["policy"]
+    assert S._ckpt_roles("model/checkpoints/nextpick-proonly/best.pt",
+                         "checkpoints") == ["policy"]
+    # a value artefact fills neither slot
+    assert S._ckpt_roles("model/checkpoints/value-x/best.pt",
+                         "checkpoints") == []
+    # legacy families, still reachable by uploading an old checkpoint
     assert S._ckpt_roles("model/pretraining/ckpt/run_1/best.pt",
                          "pretrain") == ["masked"]
     assert S._ckpt_roles("model/finetune/ckpt/run_1/best_mask.pt",
                          "finetune") == ["masked"]
     assert S._ckpt_roles("model/policy/ckpt/run_1/best_policy.pt",
                          "policy") == ["policy"]
-    assert S._ckpt_roles("model/finetune/ckpt/value_1/best.pt",
-                         "value") == []
-    # pro-only runs are named m-* (masked init) / p-* (policy)
     assert S._ckpt_roles(
         "model/proonly/ckpt/run_20261101_182415_m-patch-s0/best.pt",
         "proonly") == ["masked"]
@@ -474,8 +493,8 @@ def test_drafts_endpoints(app, httpd):
 
 # --- next-move policy models --------------------------------------------
 
-POLICY_GLOB = str(S.ROOT / "model" / "policy" / "ckpt"
-                  / "run_*" / "best_policy.pt")
+POLICY_GLOB = str(S.ROOT / "model" / "checkpoints"
+                  / "nextpick-policy" / "best_policy.pt")
 
 
 @pytest.fixture()

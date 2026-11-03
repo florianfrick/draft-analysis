@@ -17,37 +17,47 @@ folder.
 | `train_policy.py` | stage 2 — next-pick, initialised from stage 1 |
 | `compare.py` | paired comparison of two checkpoints on identical rows (McNemar + game bootstrap + per-year) |
 | `test_proonly.py` | 6 tests: patch id reaches the encoder, checkpoints round-trip, both trainers resolve the same split |
-| `ckpt/` | **local only** (git-ignored) — 3 runs, ~140MB |
+| `ckpt/` | **local only** (git-ignored) — scratch runs from `--out-dir`-less invocations; the kept artefacts are in `model/checkpoints/` |
 | `reports/` | every run's `test_report.json` and every paired comparison, committed |
 
 ## The checkpoints that are kept
 
-| run | role | test top-5 |
-|---|---|---|
-| `p-patch-s0` | **the shipped model** | 0.4839 (3.14x baseline) |
-| `m-patch-s0` | its masked init, also the masked-completion model | 0.5669 |
-| `p-nopatch-s0` | the no-patch control the ablation is measured against | 0.3894 |
+The pro-only runs no longer live in `model/proonly/ckpt/`. On 2026-11-03 every
+checkpoint outside the soloQ pretrain was deleted and each model class was
+retrained once into `model/checkpoints/<name>/`, where the name states the
+inference and the stage:
 
-Nine further runs (seed 1, the wider 2017-2026 corpus pair, the scratch
-control, and the six pretrained-initialisation arms) were removed as losing or
-relocated arms. **Their numbers are preserved** in `reports/` and in
-`FINDINGS.md` §4, but their weights are gone, so their paired comparisons can no
-longer be re-run. The six pretrained-initialisation arms were moved to
+| directory | stage | what it answers |
+|---|---|---|
+| `masking-proonly` | this folder's `train_masked.py` | masked completion, role board |
+| `nextpick-proonly` | this folder's `train_policy.py` | next-move ranking |
+
+The three runs this table used to list (`p-patch-s0`, `m-patch-s0`,
+`p-nopatch-s0`) were the previous generation: `p-nopatch-s0` was the no-patch
+ablation control and is gone with its weights, and the other two were replaced
+by the retrain above. **Their numbers survive** in `reports/` and in
+`FINDINGS.md` §4, but their paired comparisons can no longer be re-run. The
+current scores are in `STATUS.md` §9 and
+`model/test_split/REPORT_test_split_evaluation.md`. The six pretrained-initialisation arms were moved to
 `model/finetune/` + `model/policy/` — the pipeline is now where soloQ
 initialisation is studied, and this folder is from-scratch only by design.
 
 ## Train it
 
 ```bash
-# stage 1: masked completion (~6 min)
+# stage 1: masked completion (~8 min)
 docker compose run --rm dev python model/proonly/train_masked.py \
-    --run-name m-patch-s0 --seed 0
+    --run-name masking-proonly --out-dir model/checkpoints/masking-proonly --seed 0
 
-# stage 2: next-pick, from that checkpoint (~9 min)
+# stage 2: next-pick, from that checkpoint (~13 min)
 docker compose run --rm dev python model/proonly/train_policy.py \
-    --run-name p-patch-s0 --seed 0 \
-    --init-ckpt model/proonly/ckpt/run_*/best.pt --epochs 32
+    --run-name nextpick-proonly --out-dir model/checkpoints/nextpick-proonly \
+    --seed 0 --init-ckpt model/checkpoints/masking-proonly/best.pt --epochs 40
 ```
+
+`--out-dir` is what gives the artefact its stable, self-describing name; without
+it the run lands in `ckpt/run_<timestamp>_<name>/`, which the frontend would
+list but nobody would be able to read.
 
 Add `--no-patch-emb` to either for the ablation arm. The patch table is
 zero-initialised, so the two arms are bit-identical at step 0.

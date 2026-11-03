@@ -175,8 +175,9 @@ def test_split_no_series_leakage():
 
 
 def test_within_patch_split_is_chronological_and_leak_free():
+    """The fractional-tail machinery, exercised with the pin switched off."""
     rows, _ = _rows()
-    splits = P.split_within_patch(rows)
+    splits = P.split_within_patch(rows, pinned_test=())
     all_idx = sorted(splits["train"] + splits["val"] + splits["test"])
     assert all_idx == list(range(len(rows))), "splits must cover all rows"
     assert not set(splits["train"]) & set(splits["val"])
@@ -210,6 +211,39 @@ def test_within_patch_split_is_chronological_and_leak_free():
     assert len(patches["test"]) > 90
 
 
+def test_pinned_test_series_are_the_whole_test_split():
+    """The default split's test set is exactly TEST_SERIES and nothing else."""
+    rows, _ = _rows()
+    splits = P.split_within_patch(rows)
+    assert len(P.TEST_SERIES) == 3
+    got = {rows[i]["series_id"] for i in splits["test"]}
+    assert got == set(P.TEST_SERIES)
+    # whole series, all of them, at their real game counts
+    counts = defaultdict(int)
+    for i in splits["test"]:
+        counts[rows[i]["series_id"]] += 1
+    assert dict(counts) == {
+        "WLDs|Bilibili Gaming|Hanwha Life Esports|2026-10-31|s1": 2,
+        "WLDs|Karmine Corp|Movistar KOI|2026-10-31|s1": 2,
+        "WLDs|LYON|LØS|2026-10-31|s1": 3,
+    }
+    # the pin overrides the fractional tail rather than adding to it
+    assert len(splits["test"]) == 7
+    # and val is still carved from each patch's tail
+    assert 0.07 < len(splits["val"]) / len(rows) < 0.13
+    # a pinned series never leaks into train or val, by series id
+    for name in ("train", "val"):
+        assert not ({rows[i]["series_id"] for i in splits[name]}
+                    & set(P.TEST_SERIES))
+
+
+def test_pinned_test_raises_when_a_series_is_missing():
+    """A typo must be loud, not an empty test split."""
+    rows, _ = _rows()
+    with pytest.raises(ValueError, match="pinned test series not found"):
+        P.split_within_patch(rows, pinned_test=("WLDs|Nobody|Nobody|2026-10-31|s1",))
+
+
 def test_within_patch_split_respects_min_patch_rows():
     """A patch below the floor stays whole in train: its tail would be 1 game."""
     rows, _ = _rows()
@@ -218,17 +252,18 @@ def test_within_patch_split_respects_min_patch_rows():
         sizes[P.patch_key(r["patch"])] += 1
     tiny = {p for p, n in sizes.items() if n < 40}
     assert tiny, "corpus is expected to contain small patches"
-    splits = P.split_within_patch(rows, min_patch_rows=40)
+    splits = P.split_within_patch(rows, min_patch_rows=40, pinned_test=())
     in_test = {P.patch_key(rows[i]["patch"]) for i in splits["test"]}
     assert not (tiny & in_test)
     # ... and the opposite: with no floor they do get a tail
-    loose = P.split_within_patch(rows, min_patch_rows=0)
+    loose = P.split_within_patch(rows, min_patch_rows=0, pinned_test=())
     assert tiny & {P.patch_key(rows[i]["patch"]) for i in loose["test"]}
 
 
 def test_split_fractions_are_roughly_honoured():
     rows, _ = _rows()
-    splits = P.split_within_patch(rows, val_frac=0.10, test_frac=0.10)
+    splits = P.split_within_patch(rows, val_frac=0.10, test_frac=0.10,
+                                  pinned_test=())
     n = len(rows)
     for key in ("val", "test"):
         frac = len(splits[key]) / n

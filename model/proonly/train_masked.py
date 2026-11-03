@@ -92,6 +92,10 @@ def parse_args(argv=None):
     ap.add_argument("--no-wandb", action="store_true")
     ap.add_argument("--wandb-project", default="lol-draft-proonly")
     ap.add_argument("--run-name", default="")
+    ap.add_argument("--out-dir", default="",
+                    help="write the run here instead of ckpt/run_<ts>_<name>. "
+                         "Used to give the kept artefacts a stable, "
+                         "self-describing name (model/checkpoints/masking-proonly).")
     return ap.parse_args(argv)
 
 
@@ -255,8 +259,9 @@ def train(args):
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
     scaler = torch.amp.GradScaler("cuda", enabled=amp)
     run = run_wandb(args)
-    run_dir = HERE / "ckpt" / ("run_" + time.strftime("%Y%m%d_%H%M%S") +
-                               (("_" + args.run_name) if args.run_name else ""))
+    run_dir = Path(args.out_dir) if args.out_dir else \
+        HERE / "ckpt" / ("run_" + time.strftime("%Y%m%d_%H%M%S") +
+                         (("_" + args.run_name) if args.run_name else ""))
     run_dir.mkdir(parents=True, exist_ok=True)
     print("checkpoints ->", run_dir)
 
@@ -318,8 +323,10 @@ def train(args):
     # ---- test report on the selected checkpoint
     report = {"protocol": {
         "corpus": args.corpus, "patch_emb": bool(args.patch_emb),
-        "n_patches": n_patches, "split": "within-patch (train=head, "
-        "val/test=tail)", "val_frac": args.val_frac,
+        "n_patches": n_patches,
+        "split": "within-patch (train=head, val=tail); "
+                 "test = the pinned TEST_SERIES",
+        "val_frac": args.val_frac,
         "test_frac": args.test_frac, "seed": args.seed,
         "n_train": len(splits["train"]), "n_val": len(splits["val"]),
         "n_test": len(splits["test"]),

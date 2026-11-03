@@ -55,7 +55,7 @@ HERE = Path(__file__).resolve().parent           # .../model/finetune
 MODEL_DIR = HERE.parent                          # .../model
 ROOT = MODEL_DIR.parent                          # .../lol draft analysis
 PRO_DIR = ROOT / "data" / "pro play"
-PRETRAIN_CKPT_GLOB = str(MODEL_DIR / "pretraining" / "ckpt" / "run_*" / "*.pt")
+PRETRAIN_CKPT_GLOB = str(MODEL_DIR / "checkpoints" / "masking-soloqueue" / "*.pt")
 KEY_FILE = MODEL_DIR / "pretraining" / "wandb_key.txt"
 
 

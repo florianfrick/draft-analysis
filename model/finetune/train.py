@@ -38,13 +38,12 @@ MODEL_DIR = HERE.parent                          # .../model
 ROOT = MODEL_DIR.parent                          # .../lol draft analysis
 PRO_DIR = ROOT / "data" / "pro play"
 SOLOQ_PROC_DIR = ROOT / "data" / "solo queue" / "process matchdata"
-PRETRAIN_CKPT_GLOB = str(MODEL_DIR / "pretraining" / "ckpt" /
-                         "run_*" / "best.pt")
-# The one pretraining run kept in the repo. `--init-ckpt auto` overrides
-# this by picking the best champ_top5 across ckpt/, which resolves to the
-# same file now that the old ablations are gone.
-DEFAULT_INIT = str(MODEL_DIR / "pretraining" / "ckpt" /
-                   "run_20261029_153912_v2-D512-p8" / "best.pt")
+PRETRAIN_CKPT_GLOB = str(MODEL_DIR / "checkpoints" /
+                         "masking-soloqueue" / "*.pt")
+# The one soloQ-pretrained checkpoint kept in the repo, renamed
+# `masking-soloqueue` when the other families were pruned. `--init-ckpt auto`
+# resolves to the same file (best champ_top5 across the family).
+DEFAULT_INIT = str(MODEL_DIR / "checkpoints" / "masking-soloqueue" / "best.pt")
 KEY_FILE = MODEL_DIR / "pretraining" / "wandb_key.txt"
 IGNORE_INDEX = -100
 
@@ -116,6 +115,10 @@ def parse_args(argv=None):
     ap.add_argument("--no-wandb", action="store_true")
     ap.add_argument("--wandb-project", default="lol-draft-finetune")
     ap.add_argument("--run-name", default="")
+    ap.add_argument("--out-dir", default="",
+                    help="write the run here instead of ckpt/run_<ts>_<name>. "
+                         "Used to give the kept artefacts a stable, "
+                         "self-describing name (model/checkpoints/masking-finetune).")
     return ap.parse_args(argv)
 
 
@@ -168,7 +171,10 @@ def load_pro_rows(args):
     # untestable and inflated val (val was 81.5% patches-seen vs 100% unseen at
     # test). `patch_honest_val` is meaningless once val and test share the same
     # condition, so it is disabled.
-    splits = PRO_PIPE.split_within_patch(rows)
+    # `limit` truncates the scan, so a smoke run cannot expect to hold the
+    # pinned test series out; relax the pin for it only.
+    splits = PRO_PIPE.split_within_patch(rows,
+                                         strict_pin=not args.limit_drafts)
     args.patch_honest_val = False
     return rows, splits
 
@@ -523,8 +529,9 @@ def train(args):
 
     sq_epoch, sq_it = 0, None
     run = run_wandb(args)
-    run_dir = HERE / "ckpt" / ("run_" + time.strftime("%Y%m%d_%H%M%S") +
-                               (("_" + args.run_name) if args.run_name else ""))
+    run_dir = Path(args.out_dir) if args.out_dir else \
+        HERE / "ckpt" / ("run_" + time.strftime("%Y%m%d_%H%M%S") +
+                         (("_" + args.run_name) if args.run_name else ""))
     run_dir.mkdir(parents=True, exist_ok=True)
     print("checkpoints ->", run_dir)
 
@@ -675,7 +682,7 @@ def train(args):
 
 
     # held-out test report on both best checkpoints
-    report = {"protocol": {"split": "within-patch (train=head, val/test=tail)",
+    report = {"protocol": {"split": "within-patch (train=head, val=tail); test = the pinned TEST_SERIES",
                            "patch_honest_val": getattr(args, "patch_honest_val",
                                                       None),
                            "focus_patch": EP.FOCUS_PATCH,

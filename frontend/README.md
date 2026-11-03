@@ -25,15 +25,15 @@ cd E:\VSCode\code\lol draft analysis
 python frontend\server.py --port 8777     # http://127.0.0.1:8777
 ```
 
-Binds `127.0.0.1` only. `--ckpt <path>` pins the **role model** (default: the
-pro-only masked `model/proonly/ckpt/run_20261101_182415_m-patch-s0/best.pt`;
-if it is absent, the `best.pt` with highest val champ-top5 under
-`model/pretraining/ckpt/run_*/`), `--policy-ckpt <path>` pins the **next-move
-model** (default: the shipped pro-only policy
-`model/proonly/ckpt/run_20261101_183519_p-patch-s0/best.pt`), `--no-policy`
-skips it entirely, `--value <path>` pins the value model used by ban ranking
-(default: the newest `model/finetune/ckpt/value_*/best.pt`), and `--device
-cuda` for GPU inference (CPU default keeps the GPU free).
+Binds `127.0.0.1` only. `--ckpt <path>` pins the **role model** (default:
+`model/checkpoints/masking-proonly/best.pt`; if it is absent, the `best.pt`
+with the highest val champ-top5 under `model/checkpoints/*/`),
+`--policy-ckpt <path>` pins the **next-move model** (default:
+`model/checkpoints/nextpick-proonly/best.pt`), `--no-policy` skips it
+entirely, `--value <path>` pins the value model used by ban ranking (default:
+the newest `model/checkpoints/value-*/best.pt` — no such artefact is kept, so
+the frontend normally runs without one), and `--device cuda` for GPU inference
+(CPU default keeps the GPU free).
 
 Through Docker, pass `--host 0.0.0.0` (a published port arrives on the
 container's `eth0`, not its loopback) — see `DOCKER.md` §"The frontend".
@@ -45,15 +45,22 @@ The header shows both slots (label, kind, val metric each) with a `role` +
 
 1. **CLI** — `--ckpt` fills the role slot, `--policy-ckpt` the next-move slot:
    ```powershell
-   python frontend\server.py --ckpt "model\finetune\ckpt\run_20261017_185016_stage1-full\best_mask.pt"
-   python frontend\server.py --policy-ckpt "model\policy\ckpt\run_20261025_000606_ablF-stage1\best_policy.pt"
+   python frontend\server.py --ckpt "model\checkpoints\masking-finetune\best_mask.pt"
+   python frontend\server.py --policy-ckpt "model\checkpoints\nextpick-policy\best_policy.pt"
    ```
-2. **Header dropdowns** — every `best_*` file under
-   `model/pretraining/ckpt/run_*/`, `model/finetune/ckpt/run_*/`,
-   `model/policy/ckpt/run_*/`, `model/proonly/ckpt/run_*/` and
-   `model/uploaded/`, **split by the slot each one can fill**: the family is
-   taken from the path, and the pro-only runs are named `m-*` for the masked
-   init and `p-*` for the policy. Uploads are offered in both and validated on
+2. **Header dropdowns** — every `.pt` under `model/checkpoints/<name>/` and
+   `model/uploaded/`, **split by the slot each one can fill**. The kept
+   artefacts are named for the inference they serve, and the name is the whole
+   rule:
+
+   | prefix | slot | what it answers |
+   |---|---|---|
+   | `masking-` | role model | masked completion + the role board |
+   | `nextpick-` | next-move model | next-move ranking |
+   | `value-` | neither | outcome head only, not servable |
+
+   Paths from before the rename (and uploads) fall back to the old family rules,
+   and anything still unrecognised is offered in both slots and validated on
    load. Refreshed when a select gains focus (so freshly trained runs appear
    without a restart), then press **Load**.
 3. **From file…** — opens the OS file picker; the file is POSTed to
@@ -96,10 +103,10 @@ real pro game. Pick a game (same 46.6k-draft list as the walkthrough), tick the
 models (the checkpoint list plus an upload), and it scores the whole draft
 under each one:
 
-- **Policy** models score all 20 moves with the holdout methodology
-  (`model/holdout/eval_series.py`): the real patch id, exact role-keyed slots,
-  and the real move's rank over the model's full next-move distribution. They
-  cover bans and picks.
+- **Policy** models score all 20 moves with the test-split methodology
+  (`model/test_split/eval_test_split.py`): the real patch id, exact role-keyed
+  slots, and the real move's rank over the model's full next-move
+  distribution. They cover bans and picks.
 - **Masked** models hide one pick slot at a time and rank the real pick. The
   displayed top-5 is filtered to legal champions (not already taken / banned);
   the reported rank is over the full distribution. They show "—" on bans.
@@ -170,7 +177,7 @@ curl -s localhost:8777/api/explain -H 'Content-Type: application/json' \
        "bans":[1,2,3,4,5,6],"first_pick":0}'
 ```
 
-- **Retrieval** (`frontend/llm.py: ProIndex`) scans all 46,813 pro drafts. Each
+- **Retrieval** (`frontend/llm.py: ProIndex`) scans all 46,875 pro drafts. Each
   row keeps its final draft as one 173-bit integer, so the coarse pass is a
   `bit_count()` sweep (~20 ms); the top 600 are then re-ranked on the champions
   that were on the board **at the query move**, not on the final draft. A row

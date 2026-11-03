@@ -2,7 +2,18 @@
 
 Branch `exp/pro-only-patch-emb`, merged into `main`. Everything below is
 measured on this repo's own data, in Docker, with the commands in
-`model/proonly/README.md` and `model/holdout/README.md`.
+`model/proonly/README.md` and `model/test_split/README.md`.
+
+> **Re-run 2026-11-03.** The checkpoints these numbers were measured on were
+> deleted and both pro-only stages were retrained once under new names —
+> `masking-proonly` and `nextpick-proonly`, in `model/checkpoints/` — on a
+> corpus whose freeze moved to 2026-11-01 (46,875 drafts) and whose test split
+> is now three pinned Worlds series rather than a fractional patch tail.
+> Everything below this line is the record of the *previous* runs and their
+> ablations; the current numbers are in `STATUS.md` §9 and
+> `model/test_split/REPORT_test_split_evaluation.md`. Read §1–§4 as the
+> evidence for the patch-embedding claim (which stands — the arm was not
+> re-abated), not as the current checkpoint scores.
 
 **The short version.** A 3.35M-parameter model trained on 37,313 pro drafts
 alone — no solo queue, no rehearsal, random init — predicts the next draft move

@@ -60,7 +60,12 @@ def add_corpus_args(ap):
                          "all = 2017-2026, 81,161 drafts")
     ap.add_argument("--val-frac", type=float, default=0.10,
                     help="share of each patch's tail held out for val")
-    ap.add_argument("--test-frac", type=float, default=0.10)
+    ap.add_argument("--test-frac", type=float, default=0.10,
+                    help="share of each patch's tail held out for test. "
+                         "IGNORED while the pinned test split is active "
+                         "(pipeline.TEST_SERIES); it only applies to "
+                         "--limit-drafts smoke runs, which cannot hold the "
+                         "pinned series out")
     ap.add_argument("--min-patch-rows", type=int, default=40,
                     help="patches smaller than this stay entirely in train "
                          "(their tail would be 1-2 games)")
@@ -84,9 +89,13 @@ def load_split(args, verbose=True):
         rows = rows[::stride][:args.limit_drafts]
         print("limited run: %d drafts (stride %d)" % (len(rows), stride))
     PRO_PIPE.assign_weights(rows, args.half_life)
+    # A smoke run subsamples the corpus, so the pinned test series are
+    # usually gone; relax the pin rather than abort, and fall back to the
+    # fractional tail. Never true for a measured run.
     splits = PRO_PIPE.split_within_patch(
         rows, val_frac=args.val_frac, test_frac=args.test_frac,
-        min_patch_rows=args.min_patch_rows, verbose=verbose)
+        min_patch_rows=args.min_patch_rows,
+        strict_pin=not args.limit_drafts, verbose=verbose)
     patch_vocab, patch_index = PRO_DATA.build_patch_vocab(rows)
     if verbose:
         print("corpus %s: %d drafts, %d patches (%s..%s)"

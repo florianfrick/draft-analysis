@@ -14,22 +14,25 @@ walkthrough of real pro games (GET /api/drafts + GET /api/draft) showing
 what the model suggested vs what the pros actually moved.
 
 Two model slots, loaded at the same time and chosen independently:
-  * role model (masked: pretraining / finetune / proonly best.pt) - the
-    role head and the per-role MASK queries, i.e. /api/suggest. Default:
-    the pro-only masked model m-patch-s0, else best pretraining by val
-    champ_top5.
-  * next-move model (policy: best_policy.pt or a proonly policy best.pt) -
-    /api/next-move and /api/explain. Default: the shipped pro-only policy
-    p-patch-s0. Optional (--no-policy runs the role board alone).
-Both default to a checkpoint under model/proonly/ckpt/; other families:
-  * pretraining  model/pretraining/ckpt/run_*/*.pt
-  * pro finetune model/finetune/ckpt/run_*/*.pt (best_mask/best_win/
-    latest). Those payloads wrap the shared encoder under `encoder.` plus
-    win/econ outcome heads under `heads.`; we strip the prefix, drop the
-    heads (no MCTS here) and serve suggestions from the finetuned encoder.
-Select via --ckpt / --policy-ckpt (CLI), the two header dropdowns
-(GET /api/checkpoints + POST /api/load with a `role`), or "From file..."
-(POST /api/upload -> saved under model/uploaded/, filed by kind).
+  * role model (masking: `masking-*` checkpoints) - the role head and the
+    per-role MASK queries, i.e. /api/suggest.
+  * next-move model (`nextpick-*` checkpoints) - /api/next-move and
+    /api/explain. Optional (--no-policy runs the role board alone).
+Every kept artefact lives in model/checkpoints/<name>/ and the directory
+name *is* the contract: the prefix states which inference the checkpoint
+can do, the suffix which stage produced it.
+
+  masking-soloqueue   soloQ-pretrained encoder (masking-finetune's init)
+  masking-finetune    soloQ encoder fine-tuned on pro drafts
+  masking-proonly     pro drafts only, from scratch
+  nextpick-policy     soloQ encoder + policy head
+  nextpick-proonly    pro drafts only, encoder + policy head from scratch
+
+`_ckpt_roles` reads that prefix, so the dropdown never offers a policy
+checkpoint to the role board. Select via --ckpt / --policy-ckpt (CLI), the
+two header dropdowns (GET /api/checkpoints + POST /api/load with a `role`),
+or "From file..." (POST /api/upload -> saved under model/uploaded/, offered
+in both slots and validated on load).
 
 Inference contract (model/README.md): every empty slot is a MASK query
 with its ROLE GIVEN (role-conditional, matches the 10% role-visible
@@ -61,27 +64,23 @@ ROOT = FRONTEND_DIR.parent                     # .../lol draft analysis
 PROC_DIR = ROOT / "data" / "solo queue" / "process matchdata"
 MODEL_DIR = ROOT / "model"
 STATIC_DIR = FRONTEND_DIR / "static"
-CKPT_GLOB = str(ROOT / "model" / "pretraining" / "ckpt" / "run_*" / "best.pt")
+CKPT_DIR = ROOT / "model" / "checkpoints"
+# Only the masking family: `nextpick-*/best.pt` also matches a bare
+# `*/best.pt` glob, and picking a policy checkpoint as the fallback role model
+# would fail at load. The name says which inference, so the glob uses it.
+CKPT_GLOB = str(CKPT_DIR / "masking-*" / "best.pt")
 CKPT_PATTERNS = (                 # what the dropdown offers (no torch.load)
-    ("pretrain", str(ROOT / "model" / "pretraining" / "ckpt"
-                     / "run_*" / "*.pt")),
-    ("finetune", str(ROOT / "model" / "finetune" / "ckpt" / "run_*" / "*.pt")),
-    ("policy", str(ROOT / "model" / "policy" / "ckpt"
-                   / "run_*" / "best_policy.pt")),
-    ("proonly", str(ROOT / "model" / "proonly" / "ckpt" / "run_*" / "best.pt")),
-    ("value", str(ROOT / "model" / "finetune" / "ckpt" / "value_*" / "best.pt")),
+    ("checkpoints", str(CKPT_DIR / "*" / "*.pt")),
     ("uploaded", str(ROOT / "model" / "uploaded" / "*.pt")),
 )
-# Shipped defaults, one per job. The role board needs a *masked* checkpoint
-# (role head + MASK queries); the next-move panel needs a *policy* one. They
-# are separate slots so both can be loaded at once - the masked model that
-# answers "which role / what is this team still missing" is not the model
-# that ranks the next pick.
-MASKED_DEFAULT = (ROOT / "model" / "proonly" / "ckpt"
-                  / "run_20261101_182415_m-patch-s0" / "best.pt")
-PROONLY_DEFAULT = (ROOT / "model" / "proonly" / "ckpt"
-                   / "run_20261101_183519_p-patch-s0" / "best.pt")
-VALUE_GLOB = str(ROOT / "model" / "finetune" / "ckpt" / "value_*" / "best.pt")
+# Shipped defaults, one per job. The role board needs a *masking* checkpoint
+# (role head + MASK queries); the next-move panel needs a *nextpick* one. They
+# are separate slots so both can be loaded at once - the model that answers
+# "which role / what is this team still missing" is not the model that ranks
+# the next pick.
+MASKED_DEFAULT = CKPT_DIR / "masking-proonly" / "best.pt"
+POLICY_DEFAULT = CKPT_DIR / "nextpick-proonly" / "best.pt"
+VALUE_GLOB = str(CKPT_DIR / "value-*" / "best.pt")
 UPLOAD_DIR = ROOT / "model" / "uploaded"
 MAX_UPLOAD_BYTES = 512 * 1024 * 1024      # generous; ckpts are 20-150 MB
 LOAD_LOCK = threading.Lock()              # serialize runtime model swaps
@@ -108,8 +107,8 @@ ROLE_ROWS = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"]
 N_SLOTS = 10
 
 # --- breakdown scoring -------------------------------------------------------
-# Mirrors model/holdout/eval_series.py so the breakdown page reproduces the
-# holdout report's per-move methodology (real patch id, exact role-keyed
+# Mirrors model/test_split/eval_test_split.py so the breakdown page reproduces
+# the test-split report's per-move methodology (real patch id, exact role-keyed
 # slots, target rank/prob) instead of the UI's inferred-role / UNK-patch
 # next-move path. Kept self-contained: importing the pro pipeline here would
 # pull heavy data-processing modules into the (already import-light) server.
@@ -254,9 +253,9 @@ def score_policy_model(pred, row, idx_to_img, names):
 def score_masked_model(pred, row, idx_to_img, names):
     """Hide each picked slot in turn; did the model return the real champ?
 
-    Mirrors eval_series.score_masked: the board carries the exact roles and
+    Mirrors eval_test_split.score_masked: the board carries the exact roles and
     the real patch id, and the rank is taken over the FULL distribution so
-    the scoreboard matches the holdout report. The displayed top-5 is
+    the scoreboard matches the test-split report. The displayed top-5 is
     filtered to legal champions (not already taken / banned) for UX.
     """
     nc = pred.num_champs
@@ -386,7 +385,7 @@ _PRO_INDEX = None
 
 
 def pro_index():
-    """The 46,813-draft retrieval index, built once per process (~1 s)."""
+    """The 46,875-draft retrieval index, built once per process (~1 s)."""
     global _PRO_INDEX
     if _PRO_INDEX is None:
         with _INDEX_LOCK:
@@ -811,19 +810,35 @@ def _ckpt_roles(path, kind):
 
     The UI has two slots (role model / next-move model) and offering the
     whole list in both would make most picks fail on load. torch.load'ing
-    forty checkpoints at startup just to classify them is not worth it, and
-    the families are already separated by path: model/pretraining and
-    model/finetune are masked, model/policy is policy, and the pro-only
-    runs are named m-* (masked init) / p-* (policy). Anything we cannot
-    tell (uploads) is offered in both and validated on load.
+    every checkpoint at startup just to classify them is not worth it, and
+    it is not necessary: every kept artefact lives in
+    model/checkpoints/<name>/, and the name states the inference it serves.
+
+      masking-*    masked champion + role completion -> the role board
+      nextpick-*   next-move ranking                -> the next-move panel
+      value-*      outcome head only                -> neither (not servable)
+
+    Paths outside that layout (uploads, checkpoints from before the rename)
+    fall back to the old family rules, and anything still unrecognised is
+    offered in both slots and validated on load.
     """
-    if kind == "policy":
-        return ["policy"]
     if kind == "value":
         return []                       # outcome head only, not servable
+    text = Path(path).as_posix()
+    m = re.search(r"/checkpoints/([^/]+)/", text)
+    if m:
+        name = m.group(1)
+        if name.startswith("masking-"):
+            return ["masked"]
+        if name.startswith("nextpick-"):
+            return ["policy"]
+        if name.startswith("value-"):
+            return []
+    # legacy families: still reachable via an upload of an old checkpoint
+    if kind == "policy":
+        return ["policy"]
     if kind in ("pretrain", "finetune"):
         return ["masked"]
-    text = Path(path).as_posix()
     if "/proonly/" in text:
         m = re.search(r"run_\d+_\d+_([mp])-", text)
         if m:
@@ -845,10 +860,12 @@ def list_checkpoints():
             if pp.name == "latest.pt":
                 continue
             rel = _rel(hit)
+            label = ("%s/%s" % (pp.parent.name, pp.name)
+                     if kind == "checkpoints"
+                     else "[%s] %s/%s" % (kind, pp.parent.name, pp.name))
             out.append({"path": rel, "kind": kind,
                         "roles": _ckpt_roles(hit, kind),
-                        "label": "[%s] %s/%s" % (kind, pp.parent.name,
-                                                pp.name)})
+                        "label": label})
     return out
 
 
@@ -1345,21 +1362,20 @@ def main():
     ap.add_argument("--device", default="cpu",
                     help="cpu keeps GPU free; cuda also fine")
     ap.add_argument("--ckpt", default="",
-                    help="role-model checkpoint (masked family: pretraining / "
-                         "finetune / proonly best.pt) - drives the role board "
-                         "and the per-role targets (default: the pro-only "
-                         "masked model m-patch-s0, else best pretraining)")
+                    help="role-model checkpoint (a masking-* checkpoint) - "
+                         "drives the role board and the per-role targets "
+                         "(default: model/checkpoints/masking-proonly/best.pt, "
+                         "else the best masking checkpoint by val champ_top5)")
     ap.add_argument("--policy-ckpt", default="",
-                    help="next-move checkpoint (a best_policy.pt or a "
-                         "proonly policy best.pt) - loaded alongside the role "
-                         "model, not instead of it (default: the shipped "
-                         "pro-only policy p-patch-s0)")
+                    help="next-move checkpoint (a nextpick-* checkpoint) - "
+                         "loaded alongside the role model, not instead of it "
+                         "(default: model/checkpoints/nextpick-proonly/best.pt)")
     ap.add_argument("--no-policy", action="store_true",
                     help="run the role board only, without a next-move model")
     ap.add_argument("--value", default="",
                     help="prefix value checkpoint used to score simulated "
                          "drafts in the ban panel (default: newest under "
-                         "model/finetune/ckpt/value_*/best.pt)")
+                         "model/checkpoints/value-*/best.pt, usually absent)")
     args = ap.parse_args()
 
     mapping, names_by_idx, champions = load_champ_data()
@@ -1380,8 +1396,8 @@ def main():
     if not args.no_policy:
         if args.policy_ckpt:
             policy_ckpt = resolve_ckpt_path(args.policy_ckpt, confine=False)
-        elif PROONLY_DEFAULT.is_file():
-            policy_ckpt = PROONLY_DEFAULT
+        elif POLICY_DEFAULT.is_file():
+            policy_ckpt = POLICY_DEFAULT
 
     masked = load_predictor(masked_ckpt, device=args.device, role="masked")
     print("role model:   %s (%s)" % (masked_ckpt, masked.kind))

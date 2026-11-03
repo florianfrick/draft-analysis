@@ -1,32 +1,39 @@
 # Project status
 
-Last updated: 2026-11-02. Scope: what is trained, what is measured, what is kept.
+Last updated: 2026-11-03. Scope: what is trained, what is measured, what is kept.
 
-Four trained artefacts remain, one per stage. Everything else (21 runs,
-~7.6GB) was deleted; the conclusions those runs produced are recorded under
-[Discarded ablations](#discarded-ablations-and-what-they-showed) so the
-evidence survives without the weights.
+Five checkpoints remain, one per model class, all under `model/checkpoints/`.
+The directory name states the inference the checkpoint serves and the stage
+that produced it, and `frontend/server._ckpt_roles` reads that prefix to decide
+which of the two UI slots may load it. Everything else — the 2026-11-02 pipeline
+runs, the old-protocol anchors, the value heads — was deleted on 2026-11-03.
+Their conclusions survive in §1–§8 and in `model/proonly/FINDINGS.md`.
 
-| stage | kept checkpoint | purpose |
+| class | kept checkpoint | inference |
 |---|---|---|
-| Pretraining (soloQ) | `model/pretraining/ckpt/run_20261029_153912_v2-D512-p8/best.pt` | encoder + value head |
-| Finetune (pro, stage-1) | `model/finetune/ckpt/run_20261102_220121_f-patch-s0/best_mask.pt` | masked draft completion (redesigned: within-patch + patch-emb) |
-| Policy (next-move) | `model/policy/ckpt/run_20261102_221226_p-patch-s0/best_policy.pt` | pick/ban recommendation (redesigned) |
-| Prefix value (P4 input) | `model/finetune/ckpt/value_20261030_180102/best.pt` | `V(state)` for search |
+| pretraining (soloQ) | `model/checkpoints/masking-soloqueue/best.pt` | masked completion; the init for `masking-finetune` |
+| finetune (soloQ → pro) | `model/checkpoints/masking-finetune/best_mask.pt` | masked completion, role board |
+| pro-only (from scratch) | `model/checkpoints/masking-proonly/best.pt` | masked completion, role board |
+| policy (soloQ encoder) | `model/checkpoints/nextpick-policy/best_policy.pt` | next-move ranking |
+| policy (pro-only) | `model/checkpoints/nextpick-proonly/best.pt` | next-move ranking |
 
-The two pipeline stages were **re-trained on 2026-11-02** under the same
-`split_within_patch` + patch-embedding protocol as the pro-only branch (see
-[§8](#8-pro-only-training-and-the-patch-embedding-exp-pro-only-patch-emb) and
-[§9](#9-held-out-series-walkthrough--blg-vs-hle-modelholdout)); the previous
-runs (`run_20261017_185016_stage1-full`, `run_20261025_000606_ablF-stage1`)
-are retained as **old-protocol anchors** and still back the confound narrative
-in §9 and the §3 results. §2 and §3 below describe that earlier protocol and
-are superseded for the masked/policy comparison by §9.
+**Everything was re-measured on 2026-11-03.** Two things changed at once:
 
-Data: 46,813 pro drafts (173 champions, 5 roles, 20 moves), split
-train 40,609 / val 2,458 / test 3,189, where val and test are
-**patch-honest** (557 rows, 18.5%, dropped for sharing a patch with train).
-SoloQ pretraining uses complete drafts only.
+1. **`CORPUS_MAX_DATE` moved** from `2026-10-24 23:19:46` to
+   `2026-11-01 23:59:59`: 46,813 → **46,875** drafts. The pin had to move
+   because the requested test split is three Worlds final-day series played on
+   2026-10-31, and a series the corpus has never seen cannot be a test split —
+   only a holdout nothing can be trained against.
+2. **The test split is pinned by series id**, not by a fraction:
+   `pipeline.TEST_SERIES` names BLG vs HLE (2 games), Karmine Corp vs Movistar
+   KOI (2) and LYON vs LØS (3) — 7 games, all patch 16.20.
+   `split_within_patch` holds them out of train and val *by id*, so the test set
+   cannot move when the corpus is rebuilt. Train and val are still the head and
+   the tail of every patch.
+
+Split: **42,100 train / 4,768 val / 7 test**. §1–§8 below predate this and
+record the measurements they were written against — read them as history, not
+as current numbers. The current comparison is §9.
 
 ---
 
@@ -580,151 +587,161 @@ Caveats: seed 0, one soloQ checkpoint, one corpus; the trunk LR differs by
 construction (1e-4 pretrained vs 1e-3 scratch). The six arms are kept
 (693MB) so the paired comparisons stay re-runnable.
 
-## 9. Held-out series walkthrough — BLG vs HLE (`model/holdout/`)
+## 9. Test split evaluation — every model class, same seven games
 
-Everything above is pooled over thousands of games, which answers "how good on
-average" and never "what would it have said here". This section is the
-opposite: one series, both games outside every cache, replayed move by move
-through all 18 distinct checkpoints (6 next-move, 8 masked, 4 value).
+`model/test_split/` (renamed from `model/holdout/`). Everything above is pooled
+over thousands of games, which answers "how good on average" and never "what
+would it say here". This section is the opposite, and it is now the *only*
+split nothing trains on.
 
-**The series.** 2026 Worlds final, Bilibili Gaming vs Hanwha Life Esports,
-`LOLTMNT02_486564` / `LOLTMNT02_486571`, patch 16.20, 2026-10-31, fearless on,
-BLG blue in both and won both.
+**The split.** Three series, seven games, patch 16.20, all played on
+2026-10-31, the last day of Worlds 2026:
 
-**Why it is a real holdout.** `pro_drafts.pt` stops at 2026-10-24 23:19:46 and
-`pro_drafts_all.pt` likewise; neither contains either gameid. The 2026 CSV was
-appended to at 12:59 on 2026-11-01, after both caches were written. Nothing in
-`model/holdout/` rebuilds a cache - `build_rows` would see the changed CSV
-signature and rescan, which would fold the games into the corpus the models
-were trained on. The rows are scanned straight from the CSV instead, and
-`test_holdout.py` asserts the gameids stay absent from both caches.
+| series | games | gameids |
+|---|---|---|
+| Bilibili Gaming vs Hanwha Life Esports | 2 | `LOLTMNT02_486564`, `_486571` |
+| Karmine Corp vs Movistar KOI | 2 | `LOLTMNT02_485476`, `_486541` |
+| LYON vs LØS | 3 | `LOLTMNT02_485482`, `_485488`, `_486555` |
 
-**The confound, stated up front.** Patch 16.20 has 196 corpus drafts. Under
-`split_series_by_date` all 196 are test rows, so `policy-ablF` and
-`pro-finetune` have trained on **zero** of them - and ablF has no patch input
-at all. The pro-only models (`pro-patch-s0`, `pro-nopatch-s0`) use
-`split_within_patch` and trained on **155** of the 196, plus a patch-embedding
-row for it. So the old-pipeline head-to-head is the deployment comparison (a
-patch arrives, you have its first 80%), not a like-for-like one. **The
-redesigned pipeline was re-trained on 2026-11-02 with the same
-`split_within_patch` + patch-embedding protocol** (`policy-patch-s0`,
-`finetune-patch-s0`), so the pro-only vs redesigned-pipeline rows below *are*
-like-for-like on patch 16.20: both saw its first 80% and both have a patch
-row. The gap between them is then a real fit/prior difference, not a data
-leakage one.
+They are `pipeline.TEST_SERIES`, pinned by `series_id`.
+`split_within_patch(pinned_test=TEST_SERIES)` holds them out of train and val
+*by id*, so the test set cannot move when the corpus is rebuilt. A pinned id
+that is missing from the corpus raises rather than quietly shrinking the test
+set.
 
-**Next move** (40 states, 20 per game; baseline = patch 16.20's own per-move
-frequency table, legality applied):
+**Why the pin moved.** These games used to be a *holdout* — outside the corpus
+entirely, because `CORPUS_MAX_DATE` was `2026-10-24 23:19:46`. A series the
+corpus has never seen cannot be a test split; it can only be a holdout that
+nothing can be trained against, and retraining forces a decision about it. So
+the pin moved to `2026-11-01 23:59:59` (46,813 → **46,875** drafts), the games
+are in the corpus, and the split is what keeps them out of training.
+`test_test_split.py` asserts both halves. Split: **42,100 / 4,768 / 7**.
 
-| model | training | top-1 | top-5 | mean rank | ban1 top-5 |
-|---|---|---|---|---|---|
-| `policy-ablF` | soloQ->pro, old protocol | 0.100 | 0.450 | 17.1 | 0.17 |
-| `pro-patch-s0` | pro-only +patch | **0.225** | **0.675** | 7.3 | **0.58** |
-| `pro-nopatch-s0` | pro-only -patch | 0.100 | 0.550 | 13.2 | 0.17 |
-| `policy-patch-s0` | soloQ->pro, redesigned +patch | 0.150 | 0.500 | 11.3 | 0.33 |
+**What is compared.** One checkpoint per model class (5 checkpoints, down from
+18 — everything else was deleted on 2026-11-03):
 
-The old holdout run also listed the deleted seed-1 (`pro-patch-s1` 0.600,
-`pro-nopatch-s1` 0.450) and scratch (`pro-scratch-s0` 0.675) pro-only arms and
-the 16.20 frequency table (0.350) as rows; those weights are gone, so the
-numbers survive only in `model/proonly/reports/`, not in the regenerated
-report.
+| directory | training |
+|---|---|
+| `masking-soloqueue` | soloQ pretrain only — the reference, and the init for `masking-finetune` |
+| `masking-finetune` | soloQ → pro finetune |
+| `masking-proonly` | pro drafts only, from scratch |
+| `nextpick-policy` | soloQ encoder + policy head |
+| `nextpick-proonly` | pro drafts only, encoder + policy from scratch |
 
-**Masked completion** (10 picks per game, one hidden at a time, top-5):
-`pro-patch-s0` 0.700 (mean rank 4.0), `finetune-patch-s0` 0.700 (mean rank
-3.25), `pro-finetune` 0.650, `soloQ-pretrain` 0.450 (mean rank 9.2).
+No value model: the frontend has no slot for one and the value path measured at
+chance in every earlier arm. That is a gap, not an untested result.
 
-**Pro-only vs redesigned pipeline, on this series.** Both the pro-only and the
-redesigned-pipeline models were trained with `split_within_patch` + a patch
-embedding, so on patch 16.20 they are a like-for-like pair (see the confound
-note). The redesigned pipeline is now *fairer* than the old pipeline: on
-next-move it beats `policy-ablF` (0.500 vs 0.450) and on masked it ties the
-pro-only model and beats the old `pro-finetune` (0.700 / 0.650). It still
-trails the pro-only model on next-move (0.500 vs 0.675) on this 40-state
-sample. **Caveat:** this is one series (40 next-move states, 20 masked slots)
-on a single, heavily-represented patch, so the 0.175 next-move gap is
-high-variance; the pooled §8.1 numbers (95,260 states) are the reliable signal
-and there, the soloQ-initialised arm and the pro-only arm are a dead heat
-(~0.48 top-5). The redesigned pipeline's own pooled test (this run) is 0.237
-top-5, which does **not** match §8.1's earlier `p-pt-patch` 0.4841 - that
-gap is a protocol/eval-method difference between the pro-only branch and the
-pipeline branch (different baselines and selection rules), not a model
-difference, and is the one open reconciliation item from this re-train.
+**Next move** — 140 states (20 per game); baseline = patch 16.20's per-move
+frequency table with legality applied:
 
-**Two things the pooled numbers hid.**
+| model | training | top-1 | top-5 | mean rank | ban1 | pick1 | ban2 | pick2 |
+|---|---|---|---|---|---|---|---|---|
+| `nextpick-policy` | soloQ encoder + policy | 0.214 | 0.479 | 11.2 | 0.36 | 0.67 | 0.14 | 0.71 |
+| `nextpick-proonly` | pro-only, from scratch | **0.229** | **0.564** | **9.1** | 0.38 | **0.74** | **0.36** | **0.79** |
+| patch table | 16.20 frequency | 0.114 | 0.400 | 12.1 | **0.45** | 0.55 | 0.11 | 0.39 |
 
-1. **`policy-ablF` is sharper but wilder than a frequency table.** It beats the
-   table on top-5 (0.450 vs 0.350) yet loses on mean rank (17.1 vs 13.6),
-   because 4 of 40 states land outside the top 50 and one at rank 148 of 173.
-   No pro-only arm shows this: their worst rank is 139 and they have at most
-   two such states. "Better top-5" and "better average position" are not the
-   same claim.
-2. **The masked models cannot express fearless.** `ProMaskedDraftDataset`
-   never receives `unavailable`, so on game 2 - where ten champions were
-   already picked in game 1 - 56 of 80 model-slot pairs put a game-1 pick in
-   their top-5. The next-move models, which do get `unavailable_mask`, break
-   fearless zero times. That is a scope limit of the masked task as trained,
-   not a harness bug.
+**Masked completion** — 70 slots (each pick hidden in turn):
 
-**Value: none of the four is usable on a real draft.** `prefix-V` and
-`finetune-win` sit within 0.44-0.58 for all 20 moves; `pretrain-win` collapses
-to 0.05 at move 7 (one team has a single pick, PMA on a near-empty set);
-`policy-value` swings 0.55 -> 0.01 -> 0.99 inside game 2. It ends at 0.91/0.99
-and blue did win both, but the path is noise, matching §3's test-time finding
-rather than contradicting it.
+| model | training | top-1 | top-5 | mean rank |
+|---|---|---|---|---|
+| `masking-soloqueue` | soloQ pretrain only | 0.329 | 0.529 | 8.7 |
+| `masking-finetune` | soloQ → pro finetune | **0.357** | **0.743** | **3.10** |
+| `masking-proonly` | pro-only, from scratch | **0.357** | 0.714 | 3.39 |
 
-**Harness validation.** `test_harness_reproduces_the_recorded_patch_number`
-scores `policy-ablF` on the first 40 patch-16.20 test rows with this code path
-and requires top-1 0.0875 / top-5 0.25625; on the full 196 rows it returns
-0.0793 / 0.2390, which is exactly the §3 figure for patch 16.20. So the
-ranking, the legality mask and the patch plumbing agree with the training-time
-evaluator, not merely with themselves.
+**What this actually supports.** Three claims survive the sample size; one does
+not.
 
-Files: `eval_series.py` (scoring), `render_report.py` (formatting only),
-`reports/blg_vs_hle.json` (all 40 next-move states, 20 masked slots and 4
-value trajectories with every top-5), `REPORT_blg_vs_hle.html` / `.md`
-(readable report), `test_holdout.py` (10 tests).
+1. **Training on pro drafts is what buys accuracy, on both tasks.** The
+   soloQ-only encoder is the only model here that is clearly behind its own
+   family: 0.529 masked top-5 against 0.714-0.743 for the two pro-trained
+   encoders, and the intervals barely touch. The same ordering holds on next
+   move, where the pro-only policy beats the soloQ-encoder policy on every
+   aggregate.
+2. **The patch-frequency table still owns ban1.** 0.452 against 0.381 and
+   0.357. With an empty board the best predictor of the first ban is 258 games
+   of this patch's ban priority, and neither model has beaten it — consistent
+   with §8's finding that ban1 is where the patch prior does all the work.
+3. **The two pro recipes are tied, and this split cannot separate them.**
+   `masking-finetune` 0.743 [0.63, 0.83] vs `masking-proonly` 0.714
+   [0.60, 0.81]; `nextpick-proonly` 0.564 [0.48, 0.64] vs `nextpick-policy`
+   0.479 [0.40, 0.56]. The intervals overlap in both pairs. Saying which
+   pro-only path is better needs the 4,768-row validation split, not this.
+4. **The masked models still cannot express fearless** — 85 of 120 masked slots
+   on the four fearless games put an already-picked champion in their top-5.
+   The next-move models get `unavailable_mask` and break it zero times. Scope
+   limit of the masked task as trained, not a harness bug.
+
+**Statistics discipline.** Seven games. One game is 14% of the sample and a 95%
+Wilson interval on a rate over seven games is ~35 points wide, so every rate in
+the report carries its interval. The aggregate tables are a smoke test on
+unseen games — they catch a broken model and refuse to rank working ones. The
+per-state tables are the part that carries information, because every model is
+scored on the identical board.
+
+**Every checkpoint loads in the frontend.** Verified against a live
+`frontend/server.py` on the seven test games, not by reading the loader:
+
+- `GET /api/checkpoints` lists exactly the five kept files plus the two
+  secondary heads (`masking-finetune/best_win.pt`, `masking-soloqueue/best_value.pt`),
+  each tagged with one role family. `_ckpt_roles` reads the directory prefix, so
+  a `nextpick-*` file can never be offered as a role model; `POST /api/load`
+  with a policy checkpoint in the `masked` slot returns
+  `400 "best_policy.pt is a policy checkpoint, not a masked one"`.
+- Each of the five was loaded in turn and answered its own endpoint
+  (`/api/suggest` for the three masking models, `/api/next-move` for the two
+  policies), then the defaults were restored.
+- `POST /api/next-move` on all seven games at prefixes 6/10/13/19/20 returns the
+  real move's kind *and* side in 35/35 cases, and reports `complete` with no
+  suggestions at 20 moves.
+- `POST /api/suggest` on the real G2 board assigns every filled slot and matches
+  the game: red Syndra/Caitlyn/Karma → MIDDLE/BOTTOM/UTILITY, blue
+  Yunara/Lulu/Locke → BOTTOM/UTILITY/MIDDLE, with the two empty roles showing
+  targets. The 00748e7 regression still holds end to end: a freshly picked red
+  Vi is pinned to JUNGLE and Pantheon moves aside to TOP.
+- `/api/explain` and `/api/breakdown` both answer on patch 16.20; the breakdown
+  scores one game under a masked and a policy checkpoint side by side
+  (`masking-proonly` 0.50/0.80, `nextpick-proonly` 0.30/0.70 on G2). Both pages
+  render in Chromium with no console errors, and the role-board cards sit at the
+  same 76 px width and x positions as the pick cards.
+
+Full report: `model/test_split/REPORT_test_split_evaluation.{md,html}`;
+evidence: `model/test_split/reports/test_split.json`.
+
+---
 
 ## 10. Reproduce
 
 ```bash
-docker compose run --rm dev python model/pretraining/train.py        # pretrain
-docker compose run --rm dev python model/finetune/train.py           # stage-1
-docker compose run --rm dev python model/finetune/value.py           # prefix V
-docker compose run --rm dev python model/policy/train.py             # policy
-docker compose run --rm dev python model/finetune/evaluate.py \
-    --ckpt model/finetune/ckpt/run_20261017_185016_stage1-full/best_mask.pt
-docker compose run --rm dev python model/policy/evaluate.py \
-    --ckpt model/policy/ckpt/run_20261025_000606_ablF-stage1/best_policy.pt
-# pro-only branch (see model/proonly/README.md)
-docker compose run --rm dev python model/proonly/train_masked.py --run-name m-patch-s0
-docker compose run --rm dev python model/proonly/train_policy.py --init-ckpt <masked best.pt>
-docker compose run --rm dev python model/proonly/compare.py --task masked --a A --b B
-# pretrained-init arms (see model/proonly/README.md)
-docker compose run --rm dev python model/proonly/train_masked.py --run-name m-pt-patch \
-    --init-ckpt model/pretraining/ckpt/run_20261029_153912_v2-D512-p8/best.pt --patch-emb
-docker compose run --rm dev python model/proonly/train_policy.py --run-name p-pt-patch \
-    --init-ckpt <masked best.pt> --patch-emb --epochs 32
-# held-out series walkthrough (see model/holdout/README.md)
-docker compose run --rm dev python model/holdout/eval_series.py
-docker compose run --rm dev python model/holdout/render_report.py
+# the five kept artefacts, one command per class
+docker compose run --rm dev python model/proonly/train_masked.py \
+    --out-dir model/checkpoints/masking-proonly
+docker compose run --rm dev python model/proonly/train_policy.py \
+    --init-ckpt model/checkpoints/masking-proonly/best.pt \
+    --out-dir model/checkpoints/nextpick-proonly
+docker compose run --rm dev python model/finetune/train.py \
+    --out-dir model/checkpoints/masking-finetune
+docker compose run --rm dev python model/policy/train.py \
+    --out-dir model/checkpoints/nextpick-policy
+# the pretrain is kept, not retrained: model/checkpoints/masking-soloqueue/
+
+# the comparison
+docker compose run --rm dev python model/test_split/eval_test_split.py
+docker compose run --rm dev python model/test_split/render_test_split.py
 ```
 
 Tests: run per directory (the suite does **not** combine cleanly into one
-`pytest model/` invocation). Two bare-import collisions survive in the test
-tree: the old `model.py`-shadow between `model/finetune/model.py` and
-`model/policy/model.py` was fixed by making `model` a real package, but
-`finetune/train.py` and `policy/train.py` both do `import train` and whichever
-loads first wins in `sys.modules`, so the finetune and policy suites must be
-run in separate pytest invocations. Safe splits that are green today:
-`pytest model/policy model/proonly model/pretraining model/tests model/holdout`
-(147 passed, 1 skipped) and `pytest model/finetune` (25 passed). `soloq data
-analysis/explorer/test_explorer.py` is excluded: it opens an HTTP connection to
-a live explorer server at import time and errors during collection when none is
-running.
+`pytest model/` invocation). `finetune/train.py` and `policy/train.py` both do
+`import train` and whichever loads first wins in `sys.modules`, so the finetune
+and policy suites must be run in separate pytest invocations. Safe splits that
+are green today: `pytest model/policy model/proonly model/pretraining
+model/tests model/test_split` (147 passed, 1 skipped) and `pytest
+model/finetune` (25 passed). `soloq data analysis/explorer/test_explorer.py` is
+excluded: it opens an HTTP connection to a live explorer server at import time
+and errors during collection when none is running.
 
-**The corpus is pinned** at `pipeline.CORPUS_MAX_DATE = "2026-10-24 23:19:46"`,
+**The corpus is pinned** at `pipeline.CORPUS_MAX_DATE = "2026-11-01 23:59:59"`,
 the date every number in this file was measured on. The 2026 OE export keeps
 growing; without the pin, the next rebuild folds the new games in, which moves
-every test number *and* trains on the series `model/holdout/` reports as a
-holdout. Rebuilding today returns the same 46,813 drafts. Raising the pin means
-re-measuring everything.
+every test number *and* would let games that arrived after the test split leak
+into training. Rebuilding today returns the same 46,875 drafts. Raising the pin
+means re-measuring everything — which is exactly what happened on 2026-11-03.

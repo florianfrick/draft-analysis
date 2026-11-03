@@ -25,6 +25,9 @@ secrets*.json
 *.onnx
 *.ckpt
 *.safetensors
+# The kept artefacts: model/checkpoints/<name>/ - one directory per
+# inference class, the name states what it can do (masking-* / nextpick-*).
+model/checkpoints/
 model/**/ckpt/
 model/**/uploaded/
 model/finetune/ckpt/

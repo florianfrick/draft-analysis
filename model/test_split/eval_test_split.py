@@ -1,47 +1,51 @@
-"""Replay one held-out series through every kept checkpoint, move by move.
+"""Score every kept checkpoint on the test split, state by state.
 
 Why this file exists
 --------------------
-Every number in STATUS.md is pooled over thousands of games. That answers
-"how good is it on average" and never "what would it have said here". This
-script takes a single series that arrived *after* the corpus caches were
-built and replays it, so each model's actual recommendation at each real
-state is visible next to what actually happened.
+Every pooled number answers "how good is it on average" and never "what would
+it have said here". This script scores the same seven held-out games with every
+model class, so each model's actual recommendation at each real state is
+visible next to what actually happened - and so the classes can be compared on
+data none of them trained on.
 
-The series: the 2026 Worlds final, Bilibili Gaming vs Hanwha Life Esports
-(`LOLTMNT02_486564`, `LOLTMNT02_486571`, patch 16.20, 2026-10-31).
+The test split
+--------------
+Three series, seven games, patch 16.20, all played on the last day of Worlds
+2026: Bilibili Gaming vs Hanwha Life Esports (2 games), Karmine Corp vs
+Movistar KOI (2), LYON vs LØS (3). They are `pipeline.TEST_SERIES`, pinned by
+`series_id`, and `split_within_patch` holds them out of train and val by id.
+The gameids are resolved from the CSV by series id, so this file has no list of
+its own to drift.
 
-Why it is a clean holdout
--------------------------
-`pro_drafts.pt` and `pro_drafts_all.pt` both stop at 2026-10-24 23:19:46 and
-contain neither gameid. The 2026 CSV was appended to at 12:59 on 2026-11-01,
-after both caches were written. Nothing here rebuilds a cache: `build_rows`
-would see the changed CSV signature and rescan, silently growing the corpus
-the models were trained on, so the rows are scanned straight from the CSV and
-kept in memory.
+They *are* in `pro_drafts.pt` now - that is the point. `CORPUS_MAX_DATE` was
+raised to 2026-11-01 so the corpus contains them, and the split, not the corpus
+pin, is what keeps them out of training. A series the corpus has never seen
+cannot be a test split; it can only be a holdout nothing can be trained
+against.
 
-Patch 16.20 *is* in the corpus (196 rows, the Oct 23-24 play-in games), so a
-patch-conditioned model has a real row to read for it - which is the whole
-point of testing a patch embedding here.
+Nothing here rebuilds a cache: `build_rows` would see a changed CSV signature
+and rescan, so the rows are scanned straight from the CSV and kept in memory.
 
-Three readouts, because the models answer three different questions:
+Two readouts, because the models answer two different questions:
 
 * **next move** (policy models) - 20 states per game. What did it recommend,
   where did the actual move rank, what probability did it put on it.
 * **masked completion** (encoder models) - 10 picks per game, each hidden in
   turn. Does it recover the champion that was actually picked into that slot.
   Ordered by the move index of the pick, so it reads as a per-step table too.
-* **value** (value heads) - P(blue wins) after each of the 20 moves.
 
-Statistics discipline: this is 2 games and 40 states. No p-values, no
-confidence intervals - a Wilson interval on 20 samples spans 30 points. The
-aggregate table is a scoreboard, not evidence; the per-step tables are the
-point. What *is* meaningful is the comparison at each state, because every
-model is scored on the identical board.
+No value readout: no value checkpoint is kept, and the frontend has no slot for
+one. That is a gap in the comparison, not an untested result.
+
+Statistics discipline: this is 7 games, 140 next-move states and 70 masked
+slots. No p-values. Every rate is printed with a Wilson interval, because at
+this n the intervals overlap for almost any pair of models - that is the
+honest reading, and the per-state tables are the part that carries information,
+since every model is scored on the identical board.
 
 Usage:
-    python model/holdout/eval_series.py            # writes JSON + markdown
-    python model/holdout/eval_series.py --no-md
+    python model/test_split/eval_test_split.py
+    python model/test_split/eval_test_split.py --out /tmp/x.json
 """
 from __future__ import annotations
 
@@ -54,7 +58,7 @@ from pathlib import Path
 
 import torch
 
-HERE = Path(__file__).resolve().parent            # .../model/holdout
+HERE = Path(__file__).resolve().parent            # .../model/test_split
 MODEL_DIR = HERE.parent                           # .../model
 ROOT = MODEL_DIR.parent                           # .../lol draft analysis
 PRO_DIR = ROOT / "data" / "pro play"
@@ -73,7 +77,10 @@ PHASE_NAMES = {0: "ban1", 1: "pick1", 2: "ban2", 3: "pick2"}
 PHASE_OF = [0] * 6 + [1] * 6 + [2] * 4 + [3] * 4
 ROLE_NAMES = {0: "TOP", 1: "JNG", 2: "MID", 3: "BOT", 4: "SUP"}
 
-SERIES_GAMES = ["LOLTMNT02_486564", "LOLTMNT02_486571"]
+# The test split is `pipeline.TEST_SERIES`, not a list kept here: three
+# series, seven games, all patch 16.20, all played on the last day of Worlds
+# 2026. The gameids are resolved from the CSV by series_id, so the report and
+# the split cannot drift apart - if the pin changes, this follows.
 CSV_2026 = PRO_DIR / "2026_LoL_esports_match_data_from_OraclesElixir.csv"
 
 
@@ -93,46 +100,40 @@ PolicyValueModel = POLICY_MODEL.PolicyValueModel
 PrefixValueModel = FIN_MODEL.PrefixValueModel
 ProDraftModel = FIN_MODEL.ProDraftModel
 
+TEST_SERIES = list(P.TEST_SERIES)
+
 
 # --------------------------------------------------------------------- models
-# Every distinct trained artefact kept in the repo. `latest.pt` duplicates of a
-# `best.pt` are skipped (same step, worse metric), and the two `best_win.pt` /
-# `best_value.pt` heads are listed under value rather than next-move because
-# that is the only question they can answer.
+# One checkpoint per model class, all under model/checkpoints/<name>/. The
+# name is the contract (see frontend/server._ckpt_roles): `masking-*` answers
+# masked completion and the role board, `nextpick-*` answers next move.
 #
-# The pro-only grid is pruned to the three checkpoints that carry a claim:
-# the shipped policy (`pro-patch-s0`), the masked model it initialises from
-# (same name, masked list), and the no-patch control that the ablation is
-# measured against. The losing arms - seed 1, the wider-corpus pair, and the
-# scratch control - were deleted with their weights; their numbers survive in
-# `model/proonly/reports/` and in `FINDINGS.md` §4, but their paired
-# comparisons can no longer be re-run.
+# `masking-soloqueue` is not a class of its own - it is the soloQ-pretrained
+# encoder that `masking-finetune` starts from, kept as the reference point
+# that says whether fine-tuning on pro drafts bought anything. `latest.pt`
+# files are skipped: same run, later step, worse on the metric the run
+# selected on.
 POLICY_MODELS = [
-    ("policy-ablF", "soloQ->pro (kept)",
-     "model/policy/ckpt/run_20261025_000606_ablF-stage1/best_policy.pt"),
-    ("pro-patch-s0", "pro-only +patch", "model/proonly/ckpt/run_20261101_183519_p-patch-s0/best.pt"),
-    ("pro-nopatch-s0", "pro-only -patch", "model/proonly/ckpt/run_20261101_183522_p-nopatch-s0/best.pt"),
-    # Redesigned pipeline (within-patch split + patch embedding), re-trained
-    # 2026-11-02 to match the pro-only protocol for a fair head-to-head.
-    ("policy-patch-s0", "soloQ->pro +patch",
-     "model/policy/ckpt/run_20261102_221226_p-patch-s0/best_policy.pt"),
+    ("nextpick-policy", "soloQ encoder + policy head",
+     "model/checkpoints/nextpick-policy/best_policy.pt"),
+    ("nextpick-proonly", "pro-only, from scratch",
+     "model/checkpoints/nextpick-proonly/best.pt"),
 ]
 
 MASKED_MODELS = [
-    ("soloQ-pretrain", "soloQ only", "model/pretraining/ckpt/run_20261029_153912_v2-D512-p8/best.pt"),
-    ("pro-finetune", "soloQ->pro (kept)", "model/finetune/ckpt/run_20261017_185016_stage1-full/best_mask.pt"),
-    ("pro-patch-s0", "pro-only +patch", "model/proonly/ckpt/run_20261101_182415_m-patch-s0/best.pt"),
-    # Redesigned pipeline (within-patch split + patch embedding).
-    ("finetune-patch-s0", "soloQ->pro +patch",
-     "model/finetune/ckpt/run_20261102_220121_f-patch-s0/best_mask.pt"),
+    ("masking-soloqueue", "soloQ pretrain only",
+     "model/checkpoints/masking-soloqueue/best.pt"),
+    ("masking-finetune", "soloQ -> pro finetune",
+     "model/checkpoints/masking-finetune/best_mask.pt"),
+    ("masking-proonly", "pro-only, from scratch",
+     "model/checkpoints/masking-proonly/best.pt"),
 ]
 
-VALUE_MODELS = [
-    ("prefix-V", "PMA + ban pool (kept)", "model/finetune/ckpt/value_20261030_180102/best.pt", "prefix"),
-    ("pretrain-win", "PMA win head", "model/pretraining/ckpt/run_20261029_153912_v2-D512-p8/best_value.pt", "soloq"),
-    ("finetune-win", "PoolOutcomeHeads", "model/finetune/ckpt/run_20261017_185016_stage1-full/best_win.pt", "draft"),
-    ("policy-value", "policy value head", "model/policy/ckpt/run_20261025_000606_ablF-stage1/best_value.pt", "policy"),
-]
+# No value checkpoint is kept. The frontend has no slot for one
+# (`_ckpt_roles` returns [] for `value-*`), and the value path measured at
+# chance in every earlier arm, so it is outside this comparison rather than
+# an untested gap in it.
+VALUE_MODELS = []
 
 
 def _enc_state(blob):
@@ -223,13 +224,20 @@ def load_value(path, kind):
 
 
 # ----------------------------------------------------------------------- data
-def load_series_rows():
-    """Scan the 2026 CSV for the two games. Never touches a cache file."""
+def load_test_rows():
+    """Scan the 2026 CSV for the pinned test series. Never touches a cache.
+
+    Resolved by `series_id` rather than by gameid so there is one source of
+    truth: `pipeline.TEST_SERIES` is what the split holds out, so it is also
+    what the report scores. Raises if a pinned series is not in the CSV, and
+    if the row count is not the 7 the split promises.
+    """
     name_to_idx = P.load_name_to_idx()[0]
     games = P.assign_series(P.group_games([str(CSV_2026)]))
+    pinned = set(TEST_SERIES)
     rows = []
     for g in games:
-        if g["gameid"] not in SERIES_GAMES:
+        if g.get("series_id") not in pinned:
             continue
         out, reason = P.game_to_draft(g, name_to_idx)
         if out is None:
@@ -237,11 +245,13 @@ def load_series_rows():
                                % (g["gameid"], reason))
         out.setdefault("fearless", False)
         rows.append(out)
-    if len(rows) != len(SERIES_GAMES):
-        raise RuntimeError("found %d of %d games" % (len(rows),
-                                                     len(SERIES_GAMES)))
+    got = {r["series_id"] for r in rows}
+    if got != pinned:
+        raise RuntimeError("CSV has %d of %d pinned series; missing: %s"
+                           % (len(got), len(pinned),
+                              ", ".join(sorted(pinned - got))))
     P.attach_fearless(rows)
-    rows.sort(key=lambda r: r["game_number"])
+    rows.sort(key=lambda r: (r["series_id"], r["game_number"]))
     id_to_name = {v: k for k, v in name_to_idx.items()}
     return rows, id_to_name
 
@@ -444,21 +454,38 @@ def missing_checkpoints():
     return [p for p in wanted if not (ROOT / p).exists()]
 
 
+def series_summary(rows):
+    """One entry per pinned series, in the order the split lists them."""
+    out = []
+    for sid in TEST_SERIES:
+        games = [r for r in rows if r["series_id"] == sid]
+        if not games:
+            continue
+        out.append({
+            "series_id": sid,
+            "teams": [sid.split("|")[1], sid.split("|")[2]],
+            "date": (games[0]["date"] or "")[:10],
+            "n_games": len(games),
+            "blue_wins": sum(1 for r in games if r["blue_win"]),
+            "gameids": [r["gameid"] for r in games],
+        })
+    return out
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=str(HERE / "reports" / "blg_vs_hle.json"))
+    ap.add_argument("--out", default=str(HERE / "reports" / "test_split.json"))
     args = ap.parse_args(argv)
 
     missing = missing_checkpoints()
     if missing:
         raise SystemExit(
             "missing checkpoints - weights are git-ignored, so train them "
-            "first (FINDINGS.md §5.2):\n  " + "\n  ".join(missing))
+            "first:\n  " + "\n  ".join(missing))
 
-    rows, id_to_name = load_series_rows()
-    print("series: %s (%s) patch %s, fearless=%s"
-          % (rows[0]["series_id"], rows[0]["league"], rows[0]["patch"],
-             rows[0]["fearless"]))
+    rows, id_to_name = load_test_rows()
+    print("test split: %d games, %d series, patch %s"
+          % (len(rows), len(TEST_SERIES), rows[0]["patch"]))
     for r in rows:
         print("  %s game %d: %s (blue) vs %s, blue_win=%d, first_pick=%d"
               % (r["gameid"], r["game_number"], r["blue_team"],
@@ -474,13 +501,20 @@ def main(argv=None):
           % (base_n, rows[0]["patch"]))
 
     report = {
-        "series": {
-            "series_id": rows[0]["series_id"],
-            "league": rows[0]["league"],
+        "test_split": {
+            "pinned": list(TEST_SERIES),
+            "corpus_max_date": P.CORPUS_MAX_DATE,
             "patch": rows[0]["patch"],
+            "league": rows[0]["league"],
+            "n_games": len(rows),
             "fearless": bool(rows[0]["fearless"]),
+            "series": series_summary(rows),
+        },
+        "series": {
+            "patch": rows[0]["patch"],
             "games": [{
                 "gameid": r["gameid"], "game_number": r["game_number"],
+                "series_id": r["series_id"],
                 "date": r["date"], "blue_team": r["blue_team"],
                 "red_team": r["red_team"], "blue_win": r["blue_win"],
                 "first_pick": r["first_pick"],

@@ -5,8 +5,8 @@
 # these to CRLF on checkout, and every regeneration would then show up as a
 # modification with no content change - which makes `git status` useless for
 # spotting a real diff in exactly the files that matter.
-model/holdout/reports/*.json  text eol=lf
-model/holdout/REPORT_*.html   text eol=lf
-model/holdout/REPORT_*.md     text eol=lf
+model/test_split/reports/*.json  text eol=lf
+model/test_split/REPORT_*.html   text eol=lf
+model/test_split/REPORT_*.md     text eol=lf
 model/proonly/reports/*.json  text eol=lf
 model/proonly/reports/*.txt   text eol=lf

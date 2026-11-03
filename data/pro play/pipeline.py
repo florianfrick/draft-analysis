@@ -95,13 +95,36 @@ CACHE_PATH_ALL = BASE_DIR / "pro_drafts_all.pt"
 CACHE_VERSION = 3  # v3: prior_picks + data-driven fearless flag
 
 # Corpus freeze. Every number in STATUS.md and FINDINGS.md is measured on the
-# drafts that existed on 2026-10-24 23:19:46, which is also the last date in
-# both caches. The OE exports keep growing, and a rebuild would otherwise fold
-# the 2026 Worlds knockout stage - including the BLG vs HLE final that
-# model/holdout/ uses as a holdout - into the training corpus. That invalidates
-# every recorded number and destroys the holdout at the same time, silently.
-# Moving this date is a deliberate act: raise it, then re-measure everything.
-CORPUS_MAX_DATE = "2026-10-24 23:19:46"
+# drafts that existed up to this date, which is also the last date in both
+# caches. The OE exports keep growing, and a rebuild would otherwise fold the
+# 2026 Worlds knockout stage - including the three series that
+# `TEST_SERIES` pins as the test split - into the training corpus. That
+# invalidates every recorded number and destroys the test split at the same
+# time, silently. Moving this date is a deliberate act: raise it, then
+# re-measure everything.
+#
+# 2026-10-24 23:19:46 -> 2026-11-01 23:59:59 (the end of the 2026 export).
+# Raised so the three Worlds final-day series are *in* the corpus: a series
+# that the corpus has never seen cannot be a test split, only a holdout that
+# nothing can be trained against. The pin now sits after them, and
+# `split_within_patch` keeps them out of train/val by id instead of by date.
+CORPUS_MAX_DATE = "2026-11-01 23:59:59"
+
+# The test split: three series, 7 games, all patch 16.20, all played on the
+# last day of Worlds 2026 (2026-10-31). Pinned by `series_id` rather than by
+# fraction because a fractional tail inside a 73-game patch is a different set
+# on every rebuild, and the point of a test split is that it does not move.
+#
+# `series_id` is built by `assign_series` as
+# "<league>|<team_a>|<team_b>|<YYYY-MM-DD>|s<k>" with the team names sorted,
+# so these strings are reproducible from the CSV columns and nothing else.
+# `split_within_patch` raises if one of them is missing from the corpus,
+# which is what makes a typo loud instead of an empty test set.
+TEST_SERIES = (
+    "WLDs|Bilibili Gaming|Hanwha Life Esports|2026-10-31|s1",   # 2 games
+    "WLDs|Karmine Corp|Movistar KOI|2026-10-31|s1",             # 2 games
+    "WLDs|LYON|LØS|2026-10-31|s1",                              # 3 games
+)
 
 # Fearless Draft era (re-picks forbidden across a series): 2025 season on.
 # Real data: later-series-game re-pick rate ~95% (2022), ~97% (2023),
@@ -629,7 +652,8 @@ def split_series_by_date(rows, val_frac=0.05, test_frac=0.05):
 
 
 def split_within_patch(rows, val_frac=0.10, test_frac=0.10,
-                       min_patch_rows=40, verbose=False):
+                       min_patch_rows=40, pinned_test=TEST_SERIES,
+                       strict_pin=True, verbose=False):
     """Train/val/test by SERIES *inside* each patch: head -> train, tail -> val/test.
 
     Why this split exists, next to `split_series_by_date`. The global date
@@ -659,6 +683,16 @@ def split_within_patch(rows, val_frac=0.10, test_frac=0.10,
     tail would be 1-2 games, which is noise rather than a measurement; on
     this corpus that is 7 patches / 194 rows (0.4%) at the default.
 
+    `pinned_test`: series ids that are *always* test and never train or val,
+    defaulting to `TEST_SERIES` (the three Worlds 2026 final-day series).
+    While it is non-empty the fractional tail is off - `test_frac` is ignored,
+    because the test split is the pinned series and nothing else - but `val`
+    is still carved from each patch's tail. Pass `()` for the old behaviour:
+    a fractional test tail per patch, no pinning. A pinned id that is not in
+    `rows` raises rather than silently shrinking the test split, unless
+    `strict_pin=False` (smoke runs subsample the corpus and cannot expect to
+    keep all three series), in which case it warns and pins what is present.
+
     Returns {"train": [...], "val": [...], "test": [...]} index lists. A
     patch below `min_patch_rows` contributes all of its rows to train and
     nothing to val/test.
@@ -668,6 +702,26 @@ def split_within_patch(rows, val_frac=0.10, test_frac=0.10,
         key = row["series_id"] if row["series_id"] is not None \
             else "__null_%d" % i
         series[key].append(i)
+
+    pinned = list(pinned_test or ())
+    if pinned:
+        missing = [s for s in pinned if s not in series]
+        if missing:
+            msg = ("pinned test series not found in the corpus: %s\n"
+                   "The corpus is frozen at CORPUS_MAX_DATE=%s; if these "
+                   "series are newer than that, raise the pin and rebuild."
+                   % (", ".join(repr(m) for m in missing), CORPUS_MAX_DATE))
+            if strict_pin:
+                raise ValueError(msg)
+            print("WARNING: %s\n  strict_pin=False: pinning only the %d "
+                  "series that are present" % (msg, len(pinned) - len(missing)))
+            pinned = [s for s in pinned if s in series]
+    if pinned:
+        test_idx = [i for s in pinned for i in series[s]]
+        series = {k: v for k, v in series.items() if k not in set(pinned)}
+        test_frac = 0.0            # the pin *is* the test split
+    else:
+        test_idx = []
 
     by_patch = defaultdict(list)     # patch -> [series (list of row indices)]
     moved = 0
@@ -680,7 +734,7 @@ def split_within_patch(rows, val_frac=0.10, test_frac=0.10,
         moved += sum(1 for i in idxs
                      if patch_key(rows[i].get("patch")) != first_patch)
 
-    out = {"train": [], "val": [], "test": []}
+    out = {"train": [], "val": [], "test": list(test_idx)}
     report = []
     for patch in sorted(by_patch, key=patch_sort_key):
         ordered = sorted(by_patch[patch],
@@ -688,12 +742,12 @@ def split_within_patch(rows, val_frac=0.10, test_frac=0.10,
                                         rows[s[0]]["gameid"]))
         idxs = [i for s in ordered for i in s]
         n = len(idxs)
-        if n < min_patch_rows or test_frac <= 0:
+        if n < min_patch_rows:
             out["train"].extend(idxs)
             report.append((patch, n, n, 0, 0))
             continue
-        n_test = max(1, int(round(n * test_frac)))
-        n_val = max(1, int(round(n * val_frac)))
+        n_test = max(1, int(round(n * test_frac))) if test_frac > 0 else 0
+        n_val = max(1, int(round(n * val_frac))) if val_frac > 0 else 0
         test_series, val_series, acc = [], [], 0
         cut = len(ordered)
         for j in range(len(ordered) - 1, -1, -1):
@@ -724,6 +778,11 @@ def split_within_patch(rows, val_frac=0.10, test_frac=0.10,
         print("within-patch split: %d patches, %d train / %d val / %d test"
               % (len(report), len(out["train"]), len(out["val"]),
                  len(out["test"])))
+        if pinned:
+            print("  test is %d pinned series (%d rows), not a fractional "
+                  "tail: %s" % (len(pinned), len(out["test"]),
+                                ", ".join(p.split("|")[1] + " vs "
+                                          + p.split("|")[2] for p in pinned)))
         if moved:
             print("  %d rows follow their series into an earlier patch "
                   "(series spanning a patch boundary)" % moved)
