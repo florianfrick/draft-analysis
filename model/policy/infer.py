@@ -237,12 +237,23 @@ def load_policy_model(path, device="cpu", payload=None):
         num_champs=cfg["num_champs"], embed_dim=cfg["embed_dim"],
         num_heads=cfg["num_heads"], num_intra_layers=cfg["num_intra"],
         num_cross_layers=cfg["num_cross"], dropout=cfg.get("dropout", 0.0),
+        # Patch-conditioned checkpoints (the pro-only `*-patch-*` runs) carry
+        # `encoder.embed.patch_lookup.*`; the encoder must be built with the
+        # same `n_patches` or load_state_dict reports it as unexpected.
+        n_patches=cfg.get("n_patches", 0),
         attr_matrix=attr_matrix_for_config(cfg))
+    # `with_value` is not recorded by every training entry point (the
+    # policy pipeline omits it for a value-free run). When it is absent,
+    # infer it from the state dict instead of assuming a value head: a
+    # missing `value_head.*` would otherwise fail the strict load.
+    with_value = cfg.get("with_value")
+    if with_value is None:
+        with_value = any(k.startswith("value_head.") for k in blob["model"])
     model = PolicyValueModel(
         enc, embed_dim=cfg["embed_dim"], state_dim=cfg["state_dim"],
         n_econ=cfg.get("n_econ", 0), dropout=cfg.get("head_dropout", 0.0),
         n_patches=cfg.get("n_patches", 0),
-        with_value=cfg.get("with_value", True))
+        with_value=with_value)
     missing, unexpected = model.load_state_dict(blob["model"], strict=False)
     if missing or unexpected:
         raise RuntimeError("policy ckpt mismatch: %s / %s"

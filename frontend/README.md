@@ -1,15 +1,17 @@
 # Draft Assistant (local prototype)
 
 Local-only web UI with **two modes**, selected by whichever checkpoint you
-load:
+load, plus a **breakdown page** (`/breakdown.html`) that scores one real pro
+game under several checkpoints and shows the real move next to each model's
+prediction.
 
 | loaded checkpoint | mode | what you get |
 |---|---|---|
 | pretraining / finetune (`pma.*`, `heads.*`) | **masked completion** | top-5 suggestions for every empty role slot on both teams |
 | policy (`policy_head.*`) | **next move** | one ranked list for the side on the clock, plus denial-ranked ban candidates |
 
-The family is read from the state-dict keys, not the filename, so any of the
-four kept checkpoints just works.
+The family is read from the state-dict keys, not the filename, so any kept
+checkpoint just works.
 
 ## Run
 
@@ -19,10 +21,11 @@ python frontend\server.py --port 8777     # http://127.0.0.1:8777
 ```
 
 Binds `127.0.0.1` only. `--ckpt <path>` pins a checkpoint (default: the
-`best.pt` with highest val champ-top5 across `model/pretraining/ckpt/run_*/`),
-`--value <path>` pins the value model used by ban ranking (default: the newest
-`model/finetune/ckpt/value_*/best.pt`), `--device cuda` for GPU inference (CPU
-default keeps the GPU free).
+shipped pro-only policy `model/proonly/ckpt/run_20261101_183519_p-patch-s0/
+best.pt`; if it is absent, the `best.pt` with highest val champ-top5 under
+`model/pretraining/ckpt/run_*/`), `--value <path>` pins the value model used by
+ban ranking (default: the newest `model/finetune/ckpt/value_*/best.pt`),
+`--device cuda` for GPU inference (CPU default keeps the GPU free).
 
 Through Docker, pass `--host 0.0.0.0` (a published port arrives on the
 container's `eth0`, not its loopback) — see `DOCKER.md` §"The frontend".
@@ -38,9 +41,10 @@ to switch:
    python frontend\server.py --ckpt "model\finetune\ckpt\run_20261017_185016_stage1-full\best_mask.pt"
    ```
 2. **Header dropdown** — every `best_*` file under `model/pretraining/ckpt/run_*/`,
-   `model/finetune/ckpt/run_*/`, `model/policy/ckpt/run_*/` and
-   `model/uploaded/`; refreshed when the select gains focus (so freshly trained
-   runs appear without a restart), then press **Load**.
+   `model/finetune/ckpt/run_*/`, `model/policy/ckpt/run_*/`,
+   `model/proonly/ckpt/run_*/` and `model/uploaded/`; refreshed when the select
+   gains focus (so freshly trained runs appear without a restart), then press
+   **Load**.
 3. **From file…** — opens the OS file picker; the file is POSTed to
    `/api/upload`, saved as `model/uploaded/<name>.pt` and loaded (a file that
    fails to load is deleted).
@@ -68,6 +72,32 @@ slot — and per-candidate `flex`), and `POST /api/next-move`:
 suggestions[{idx, prob, name}], roles, bans{side, opponent, ranked_by,
 win_prob_available, opponent_picks, candidates[{rank, idx, name, denial,
 win_prob}]}}`. `bans` is `null` on pick moves and on a complete board.
+
+### Breakdown page (`/breakdown.html`)
+
+A separate page that answers "what would each model have picked here?" for one
+real pro game. Pick a game (same 46.6k-draft list as the walkthrough), tick the
+models (the checkpoint list plus an upload), and it scores the whole draft
+under each one:
+
+- **Policy** models score all 20 moves with the holdout methodology
+  (`model/holdout/eval_series.py`): the real patch id, exact role-keyed slots,
+  and the real move's rank over the model's full next-move distribution. They
+  cover bans and picks.
+- **Masked** models hide one pick slot at a time and rank the real pick. The
+  displayed top-5 is filtered to legal champions (not already taken / banned);
+  the reported rank is over the full distribution. They show "—" on bans.
+- The scoreboard reports top-1 / top-5 / mean rank per model. In the per-move
+  table each cell is green when the real move was that model's #1, amber when
+  it was in the top-5, red otherwise; click a row for every model's top-5 with
+  champion icons.
+
+`POST /api/breakdown {"game_i": <row>, "models": ["<repo-relative .pt>", …]}`
+→ `{game, models:[{path, label, kind, val_top5, score{top1, top5, mean_rank,
+n}, rows{<move>: {real_*, top1_*, top5[], target_rank, target_prob,
+hit_top1, hit_top5}}}]}`. It does **not** touch the live header model —
+predictors are cached per path, so the header model and the page stay
+independent.
 
 ## Behavior
 
@@ -242,5 +272,5 @@ Three states matter:
 - Walkthrough data comes from the cached `data/pro play/pro_drafts.pt` (46.6k
   games, loaded lazily on first use).
 
-Tests: `python -m pytest frontend/test_server.py -q` (19) and
+Tests: `python -m pytest frontend/test_server.py -q` (22) and
 `python -m pytest model/policy/test_infer.py -q` (20).

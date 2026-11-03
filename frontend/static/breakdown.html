@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pro Draft Breakdown</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+  #controls {
+    display: flex; flex-direction: column; gap: 10px;
+    padding: 12px 18px; background: #191f16;
+    border-bottom: 1px solid var(--line);
+  }
+  .ctl-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .ctl-title {
+    color: var(--muted); font-size: 12px; letter-spacing: .4px;
+    text-transform: uppercase;
+  }
+  #controls input, #controls select {
+    background: #12151b; color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 7px; font: inherit;
+  }
+  #game-select { max-width: 560px; }
+  #game-search { width: 220px; }
+  .model-list {
+    display: flex; gap: 6px; flex-wrap: wrap;
+    max-height: 132px; overflow-y: auto;
+  }
+  .model-chk {
+    display: flex; align-items: center; gap: 6px; background: #232a36;
+    border: 1px solid var(--line); border-radius: 8px; padding: 3px 8px;
+    font-size: 12px; cursor: pointer;
+  }
+  .model-chk:hover { border-color: var(--acc); }
+  .model-chk .mpath {
+    max-width: 340px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; color: var(--muted);
+  }
+  .kind {
+    font-size: 10px; font-weight: 700; border-radius: 8px; padding: 0 5px;
+    border: 1px solid var(--line);
+  }
+  .kind.k-policy { border-color: #c9a94b; color: #ecd98f; }
+  .kind.k-masked { border-color: #5b7fb0; color: #a8c4ea; }
+  button.primary {
+    background: #2c4a2f; border-color: var(--acc); color: #d6f0d6;
+  }
+  #status { font-size: 12px; }
+  section#scoreboard, section#table-wrap {
+    max-width: 1400px; margin: 16px auto 0; padding: 0 18px;
+  }
+  section h2 { font-size: 15px; margin: 0 0 8px; }
+  table.sb, table.bd {
+    width: 100%; border-collapse: collapse; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 10px;
+    overflow: hidden;
+  }
+  table.sb th, table.bd th {
+    text-align: left; font-size: 11px; color: var(--muted);
+    letter-spacing: .4px; text-transform: uppercase; padding: 7px 9px;
+    border-bottom: 1px solid var(--line);
+  }
+  table.sb td, table.bd td {
+    padding: 6px 9px; border-bottom: 1px solid var(--line);
+    font-size: 13px; vertical-align: middle;
+  }
+  table.sb tr:last-child td, table.bd tr:last-child td {
+    border-bottom: none;
+  }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; }
+  td.num.good { color: var(--acc); font-weight: 600; }
+  .side { font-size: 10px; font-weight: 700; }
+  .side.s-0 { color: var(--blue); }
+  .side.s-1 { color: var(--red); }
+  .kind.ban { color: #d99a6a; }
+  .kind.pick { color: #8fd08f; }
+  .role { font-size: 10px; color: var(--muted); margin-left: 4px; }
+  td.real .real-in { display: flex; align-items: center; gap: 7px; }
+  td.real .nm { font-weight: 600; }
+  td.mcol, th.mcol { text-align: center; }
+  th.mcol {
+    max-width: 150px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  td.pred { cursor: pointer; }
+  td.pred .rk {
+    display: block; font-size: 10px; color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  td.pred.hit1 { background: rgba(89,178,90,.14); }
+  td.pred.hit5 { background: rgba(201,169,75,.14); }
+  td.pred.miss { background: rgba(212,74,47,.12); }
+  td.na { color: var(--muted); }
+  tr.mv { cursor: pointer; }
+  tr.mv:hover td, tr.mv.open td { background: #20262f; }
+  tr.detail td { background: #171c24; padding: 8px 10px; }
+  .detail-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 10px;
+  }
+  .dcol .dhead { font-size: 12px; font-weight: 600; margin-bottom: 5px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip {
+    display: flex; align-items: center; gap: 5px; background: #232a36;
+    border: 1px solid var(--line); border-radius: 8px;
+    padding: 2px 7px 2px 3px; font-size: 12px;
+  }
+  .chip .ic { width: 28px; height: 28px; }
+  .chip.isreal { border-color: var(--acc); }
+  .chip .cp {
+    color: var(--muted); font-variant-numeric: tabular-nums; font-size: 11px;
+  }
+  .legend {
+    font-size: 12px; color: var(--muted); margin-bottom: 8px;
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  }
+  .legend .lg {
+    border-radius: 8px; padding: 0 6px; font-weight: 700; font-size: 10px;
+  }
+  .legend .lg.hit1 { background: rgba(89,178,90,.2); color: #bfe8bf; }
+  .legend .lg.hit5 { background: rgba(201,169,75,.2); color: #ecd98f; }
+  .legend .lg.miss { background: rgba(212,74,47,.18); color: #f0a898; }
+  .err {
+    margin-top: 10px; padding: 8px 10px; background: #3a2a12;
+    border: 1px solid #6b4a1d; border-radius: 6px; color: #f0c785;
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Pro Draft Breakdown</h1>
+  <span class="muted">real move vs each model's prediction</span>
+  <span class="spacer"></span>
+  <a href="/" style="color:var(--acc)">&larr; back to draft board</a>
+</header>
+
+<section id="controls">
+  <div class="ctl-row">
+    <span class="ctl-title">Game</span>
+    <input id="game-search" placeholder="filter team / league / patch">
+    <select id="game-select"></select>
+    <button id="btn-refresh" title="refresh game list">&#8635;</button>
+    <span id="game-meta" class="muted"></span>
+  </div>
+  <div class="ctl-row">
+    <span class="ctl-title">Models</span>
+    <span id="model-list" class="model-list"></span>
+    <button id="btn-upload">Upload .pt</button>
+    <input id="file-input" type="file" accept=".pt" class="hidden">
+  </div>
+  <div class="ctl-row">
+    <button id="btn-generate" class="primary" disabled>Generate breakdown</button>
+    <span id="status" class="muted"></span>
+  </div>
+</section>
+
+<section id="scoreboard" class="hidden"></section>
+<section id="table-wrap" class="hidden"></section>
+
+<footer class="muted">
+  Scored with the holdout methodology: the real patch id, exact role-keyed
+  slots, and the real move's rank over the model's full next-move
+  distribution. Masked models hide one pick slot at a time and do not
+  predict bans.
+</footer>
+
+<script src="/breakdown.js"></script>
+</body>
+</html>

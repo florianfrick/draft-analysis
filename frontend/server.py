@@ -14,9 +14,10 @@ manifest, cached, deterministic name fallback offline), and a walkthrough
 of real pro games (GET /api/drafts + GET /api/draft) showing what the
 model suggested vs what the pros actually moved.
 
-Checkpoints - BOTH families load:
-  * pretraining  model/pretraining/ckpt/run_*/*.pt (default: the best.pt
-    with highest val champ_top5)
+Checkpoints - BOTH families load (default: the shipped pro-only policy
+model/proonly/ckpt/run_20261101_183519_p-patch-s0/best.pt, else the best
+pretraining best.pt by val champ_top5):
+  * pretraining  model/pretraining/ckpt/run_*/*.pt
   * pro finetune model/finetune/ckpt/run_*/*.pt (best_mask/best_win/
     latest). Those payloads wrap the shared encoder under `encoder.` plus
     win/econ outcome heads under `heads.`; we strip the prefix, drop the
@@ -61,9 +62,15 @@ CKPT_PATTERNS = (                 # what the dropdown offers (no torch.load)
     ("finetune", str(ROOT / "model" / "finetune" / "ckpt" / "run_*" / "*.pt")),
     ("policy", str(ROOT / "model" / "policy" / "ckpt"
                    / "run_*" / "best_policy.pt")),
+    ("proonly", str(ROOT / "model" / "proonly" / "ckpt" / "run_*" / "best.pt")),
     ("value", str(ROOT / "model" / "finetune" / "ckpt" / "value_*" / "best.pt")),
     ("uploaded", str(ROOT / "model" / "uploaded" / "*.pt")),
 )
+# Shipped default: the strongest next-move policy (pro-only, patch-embedded).
+# The frontend previously defaulted to the best pretraining checkpoint; the
+# pro-only model is the one the project actually ships, so serve it first.
+PROONLY_DEFAULT = (ROOT / "model" / "proonly" / "ckpt"
+                   / "run_20261101_183519_p-patch-s0" / "best.pt")
 VALUE_GLOB = str(ROOT / "model" / "finetune" / "ckpt" / "value_*" / "best.pt")
 UPLOAD_DIR = ROOT / "model" / "uploaded"
 MAX_UPLOAD_BYTES = 512 * 1024 * 1024      # generous; ckpts are 20-150 MB
@@ -74,17 +81,286 @@ DDRAGON_CDN = "https://ddragon.leagueoflegends.com/cdn/"
 DDRAGON_CACHE = FRONTEND_DIR / ".cache" / ("champion_%s.json" % DDRAGON_VERSION)
 # real pro games for the walkthrough (cached pro_drafts.pt)
 PRO_DRAFTS_PT = ROOT / "data" / "pro play" / "pro_drafts.pt"
-sys.path.insert(0, str(MODEL_DIR))
-sys.path.insert(0, str(MODEL_DIR / "policy"))     # so `import infer` works
+# The repo ROOT (parent of `model/`) goes on the path so `import model`
+# resolves to the package; `soloq_model.py` lives in `model/pretraining/`
+# now, so the package path is the only stable way to import it.
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(FRONTEND_DIR))             # so `import llm` works
 
-from soloq_model import (SoloQPretrainedModel, ROLE_FLEX_ID,  # noqa: E402
-                         NUM_ROLES, load_encoder_state,
-                         attr_matrix_for_config)
-import infer  # noqa: E402  (model/policy/infer.py: next-move + ban ranking)
-import llm    # noqa: E402  (frontend/llm.py: retrieval + grounded explanation)
+from model.pretraining.soloq_model import (SoloQPretrainedModel,  # noqa: E402
+                                           ROLE_FLEX_ID, NUM_ROLES,
+                                           load_encoder_state,
+                                           attr_matrix_for_config)
+from model.policy import infer  # noqa: E402  (next-move + ban ranking)
+import llm  # noqa: E402  (frontend/llm.py: retrieval + grounded explanation)
 
 ROLE_ROWS = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"]
 N_SLOTS = 10
+
+# --- breakdown scoring -------------------------------------------------------
+# Mirrors model/holdout/eval_series.py so the breakdown page reproduces the
+# holdout report's per-move methodology (real patch id, exact role-keyed
+# slots, target rank/prob) instead of the UI's inferred-role / UNK-patch
+# next-move path. Kept self-contained: importing the pro pipeline here would
+# pull heavy data-processing modules into the (already import-light) server.
+_PHASE_OF = [0] * 6 + [1] * 6 + [2] * 4 + [3] * 4
+PHASE_NAMES = {0: "Ban Phase 1", 1: "Pick Phase 1",
+               2: "Ban Phase 2", 3: "Pick Phase 2"}
+_MOVE_BAN, _MOVE_PICK = 0, 1
+_ROLE_FLEX_ID = 5
+_IGNORE_INDEX = -100
+
+
+def _patch_key(patch):
+    """Mirror data/pro play/pipeline.py:patch_key ('16.3' -> '16.03')."""
+    s = str(patch or "").strip()
+    if not s:
+        return ""
+    maj, _, mnr = s.partition(".")
+    if not mnr:
+        mnr = "0"
+    try:
+        return "%d.%02d" % (int(maj), int(mnr))
+    except ValueError:
+        return s
+
+
+def _patch_index_of(pred):
+    """This model's {patch_key: id} vocab, or None (-> UNK id 0)."""
+    vocab = getattr(pred, "patch_vocab", None)
+    if not vocab:
+        cfg = getattr(pred, "config", None) or getattr(pred, "cfg", None) or {}
+        vocab = cfg.get("patch_vocab")
+    if not vocab:
+        return None
+    return {k: i + 1 for i, k in enumerate(vocab)}
+
+
+def _patch_id_for(pred, row):
+    pidx = _patch_index_of(pred)
+    if not pidx:
+        return 0
+    return pidx.get(_patch_key(row.get("patch")), 0)
+
+
+def _build_prefix(row, m, num_champs, patch_id):
+    """One policy prefix example in the pro-data convention: slots are
+    team*5 + role (role-keyed), unpicked = PAD, the real patch is fed."""
+    pad = num_champs + 1
+    champ_ids = torch.full((10,), pad, dtype=torch.long)
+    role_ids = torch.full((10,), _ROLE_FLEX_ID, dtype=torch.long)
+    pad_mask = torch.ones(10, dtype=torch.bool)
+    ban_ids = torch.full((10,), pad, dtype=torch.long)
+    n_bans = 0
+    for kind, team, champ, role in row["moves"][:m]:
+        if kind == _MOVE_BAN:
+            ban_ids[n_bans] = champ
+            n_bans += 1
+        else:
+            slot = team * 5 + int(role)
+            champ_ids[slot] = champ
+            role_ids[slot] = int(role)
+            pad_mask[slot] = False
+    kind, team, t_champ, t_role = row["moves"][m]
+    taken = set(ban_ids[:n_bans].tolist())
+    taken.update(champ_ids[~pad_mask].tolist())
+    taken_mask = torch.zeros(num_champs, dtype=torch.bool)
+    taken_mask[sorted(taken)] = True
+    unavailable_mask = torch.zeros(num_champs, dtype=torch.bool)
+    if row.get("unavailable"):
+        unavailable_mask[sorted(row["unavailable"])] = True
+    return {
+        "champ_ids": champ_ids, "role_ids": role_ids, "pad_mask": pad_mask,
+        "ban_ids": ban_ids, "n_bans": torch.tensor(n_bans, dtype=torch.long),
+        "taken_mask": taken_mask, "unavailable_mask": unavailable_mask,
+        "move_idx": torch.tensor(m, dtype=torch.long),
+        "phase": torch.tensor(_PHASE_OF[m], dtype=torch.long),
+        "to_move": torch.tensor(team, dtype=torch.long),
+        "first_pick": torch.tensor(int(row["first_pick"]), dtype=torch.long),
+        "is_ban": torch.tensor(1 if kind == _MOVE_BAN else 0, dtype=torch.long),
+        "target_champ": torch.tensor(int(t_champ), dtype=torch.long),
+        "target_role": torch.tensor(
+            int(t_role) if kind == _MOVE_PICK else _IGNORE_INDEX,
+            dtype=torch.long),
+        "win_label": torch.tensor(int(row["blue_win"]), dtype=torch.long),
+        "weight": torch.tensor(1.0, dtype=torch.float32),
+        "patch_id": torch.tensor(int(patch_id), dtype=torch.long),
+        "econ_target": torch.zeros(6, dtype=torch.float32),
+        "has_econ": torch.tensor(0.0, dtype=torch.float32),
+    }
+
+
+def _collate(samples):
+    return {k: torch.stack([s[k] for s in samples]) for k in samples[0]}
+
+
+def _row_ban_indices(row):
+    return [int(c) for kind, _t, c, _r in row["moves"] if kind == _MOVE_BAN]
+
+
+def score_policy_model(pred, row, idx_to_img, names):
+    """20 states/game -> top-1/top-5/rank/prob for the real next move."""
+    nc = pred.num_champs
+    pid = _patch_id_for(pred, row)
+    samples = [_build_prefix(row, m, nc, pid) for m in range(len(row["moves"]))]
+    batch = {k: v.to(pred.device) for k, v in _collate(samples).items()}
+    with torch.no_grad():
+        logits = pred.model(batch)["policy_logits"].float()
+    probs = torch.softmax(logits, dim=-1)
+    rows_out, ranks = {}, []
+    top1 = top5 = 0
+    for m in range(len(row["moves"])):
+        lg = logits[m]
+        target = int(batch["target_champ"][m])
+        top5_idx = torch.topk(lg, 5).indices.tolist()
+        top1_idx = int(lg.argmax())
+        rank = int((lg > lg[target]).sum())          # 0-based
+        prob = float(probs[m, target])
+        hit1 = (top1_idx == target)
+        hit5 = (target in top5_idx)
+        top1 += int(hit1)
+        top5 += int(hit5)
+        ranks.append(rank + 1)
+        rows_out[str(m)] = {
+            "kind": "ban" if int(batch["is_ban"][m]) else "pick",
+            "side": int(batch["to_move"][m]),
+            "real_idx": target, "real_name": names[target],
+            "real_img": idx_to_img.get(target),
+            "top1_idx": top1_idx, "top1_name": names[top1_idx],
+            "top1_img": idx_to_img.get(top1_idx),
+            "top5": [{"idx": int(i), "name": names[int(i)],
+                      "img": idx_to_img.get(int(i)),
+                      "prob": float(probs[m, int(i)])} for i in top5_idx],
+            "target_rank": rank + 1, "target_prob": prob,
+            "hit_top1": bool(hit1), "hit_top5": bool(hit5),
+        }
+    n = len(row["moves"])
+    return {"kind": "policy",
+            "score": {"top1": top1 / n, "top5": top5 / n,
+                      "mean_rank": sum(ranks) / n, "n": n},
+            "rows": rows_out}
+
+
+def score_masked_model(pred, row, idx_to_img, names):
+    """Hide each picked slot in turn; did the model return the real champ?
+
+    Mirrors eval_series.score_masked: the board carries the exact roles and
+    the real patch id, and the rank is taken over the FULL distribution so
+    the scoreboard matches the holdout report. The displayed top-5 is
+    filtered to legal champions (not already taken / banned) for UX.
+    """
+    nc = pred.num_champs
+    pad = nc + 1
+    champ = torch.full((10,), pad, dtype=torch.long)
+    role = torch.full((10,), _ROLE_FLEX_ID, dtype=torch.long)
+    slot_move = {}
+    for m, (kind, team, c, r) in enumerate(row["moves"]):
+        if kind == _MOVE_PICK:
+            slot = team * 5 + int(r)
+            champ[slot] = c
+            role[slot] = int(r)
+            slot_move[slot] = m
+    pid = _patch_id_for(pred, row)
+    bans = _row_ban_indices(row)
+    rows_out, ranks = {}, []
+    top1 = top5 = 0
+    for slot in range(10):
+        cids = champ.clone()
+        cids[slot] = nc                                  # MASK id
+        is_m = torch.zeros(1, 10, dtype=torch.bool)
+        is_m[0, slot] = True
+        batch = {
+            "champ_ids": cids.unsqueeze(0).to(pred.device),
+            "role_ids": role.unsqueeze(0).to(pred.device),
+            "pad_mask": torch.zeros(1, 10, dtype=torch.bool,
+                                   device=pred.device),
+            "is_masked": is_m.to(pred.device),
+            "patch_id": torch.tensor([pid], dtype=torch.long,
+                                    device=pred.device),
+        }
+        with torch.no_grad():
+            lg = pred.model(batch)["champ_logits"][0, slot].float()
+        target = int(champ[slot])
+        rank = int((lg > lg[target]).sum())              # 0-based
+        full_probs = torch.softmax(lg, dim=-1)
+        prob = float(full_probs[target])
+        illegal = torch.zeros(nc, dtype=torch.bool)
+        for j in range(10):
+            if j != slot and int(champ[j]) < nc:
+                illegal[int(champ[j])] = True
+        for c in bans:
+            illegal[c] = True
+        lg_d = lg.clone()
+        lg_d[illegal] = float("-inf")
+        top5_idx = torch.topk(lg_d, 5).indices.tolist()
+        top1_idx = int(lg_d.argmax())
+        hit1 = (top1_idx == target and not bool(illegal[target]))
+        hit5 = (target in top5_idx)
+        top1 += int(hit1)
+        top5 += int(hit5)
+        ranks.append(rank + 1)
+        m = slot_move.get(slot)
+        rows_out[str(m)] = {
+            "kind": "pick", "side": slot // 5,
+            "real_idx": target, "real_name": names[target],
+            "real_img": idx_to_img.get(target),
+            "top1_idx": top1_idx, "top1_name": names[top1_idx],
+            "top1_img": idx_to_img.get(top1_idx),
+            "top5": [{"idx": int(i), "name": names[int(i)],
+                      "img": idx_to_img.get(int(i)),
+                      "prob": float(full_probs[int(i)])}
+                     for i in top5_idx if int(i) < nc],
+            "target_rank": rank + 1, "target_prob": prob,
+            "hit_top1": bool(hit1), "hit_top5": bool(hit5),
+        }
+    n = 10
+    return {"kind": "masked",
+            "score": {"top1": top1 / n, "top5": top5 / n,
+                      "mean_rank": sum(ranks) / n, "n": n},
+            "rows": rows_out}
+
+
+def build_breakdown(game_i, model_paths, max_models=8):
+    """Score one pro game under each selected model (policy + masked)."""
+    rows = load_drafts()
+    if not 0 <= game_i < len(rows):
+        raise FileNotFoundError("no draft #%s" % game_i)
+    row = rows[game_i]
+    names = APP["names_by_idx"]
+    idx_to_img = {c["idx"]: c["img"] for c in APP["champions"]}
+    moves = []
+    for m, (kind, team, champ, role) in enumerate(row["moves"]):
+        idx = int(champ)
+        moves.append({"i": m, "kind": "ban" if kind == _MOVE_BAN else "pick",
+                      "side": int(team), "idx": idx, "name": names[idx],
+                      "img": idx_to_img.get(idx),
+                      "role": int(role) if int(role) >= 0 else None,
+                      "phase": PHASE_NAMES[_PHASE_OF[m]]})
+    models_out = []
+    for spec in model_paths[:max_models]:
+        path = resolve_ckpt_path(spec)                  # confines to project
+        try:
+            pred = make_predictor(path)
+        except Exception as exc:                        # broken/foreign ckpt
+            models_out.append({"path": _rel(path), "error": str(exc)})
+            continue
+        if pred.kind == "policy":
+            res = score_policy_model(pred, row, idx_to_img, names)
+        else:
+            res = score_masked_model(pred, row, idx_to_img, names)
+        res["path"] = _rel(path)
+        res["label"] = "[%s] %s/%s" % (
+            res["kind"], Path(path).parent.name, Path(path).name)
+        res["val_top5"] = getattr(pred, "val_top5", None)
+        models_out.append(res)
+    game = {
+        "i": game_i, "date": row["date"], "league": row["league"],
+        "blue": row["blue_team"], "red": row["red_team"],
+        "patch": row["patch"], "first_pick": int(row["first_pick"]),
+        "winner": "blue" if row["blue_win"] else "red",
+        "gameid": row["gameid"], "moves": moves,
+    }
+    return {"game": game, "models": models_out}
 
 
 # Names dDragon stores under a different file id (heuristic fallback only;
@@ -225,6 +501,7 @@ class Predictor:
         payload = payload if payload is not None else torch.load(
             str(ckpt_path), map_location="cpu")
         cfg = payload["config"]
+        self.config = cfg            # patch_vocab lives here for patch models
         self.num_champs = int(cfg["num_champs"])
         state = payload["model"]
         # Finetune checkpoints store ProDraftModel.state_dict(): the shared
@@ -243,6 +520,9 @@ class Predictor:
             num_intra_layers=cfg["num_intra"],
             num_cross_layers=cfg["num_cross"],
             dropout=cfg.get("dropout", 0.0),
+            # patch-conditioned checkpoints carry `embed.patch_lookup.*`;
+            # without the matching `n_patches` load_encoder_state raises.
+            n_patches=cfg.get("n_patches", 0),
             attr_matrix=attr_matrix_for_config(cfg))
         # load_encoder_state tolerates the opt-in value path (`pma.*`,
         # `win_head.*`) that pretraining checkpoints carry, and still raises
@@ -277,6 +557,25 @@ class Predictor:
         return [{"idx": int(i), "prob": float(p)}
                 for i, p in zip(top.indices, top.values)
                 if float(p) > 0 and int(i) < self.num_champs]
+
+    @torch.no_grad()
+    def complete_slot(self, champ_idx, role_idx, slot):
+        """Masked completion of one pick slot (the breakdown page).
+
+        Hide `slot` (set to the [MASK] id) and return its full champion
+        logits + softmax. Like `_forward`, the patch input is omitted so the
+        model runs with its UNK patch - the same convention the rest of the
+        frontend uses for masked models.
+        """
+        cids = torch.tensor(
+            [[self.num_champs if c is None else int(c) for c in champ_idx]],
+            dtype=torch.long)
+        rids = torch.tensor([[int(r) for r in role_idx]], dtype=torch.long)
+        cids[0, slot] = self.num_champs
+        out = self._forward(cids, rids)
+        lg = out["champ_logits"][0, slot].float()
+        p = torch.softmax(lg, dim=-1)
+        return lg, p
 
     @torch.no_grad()
     def suggest(self, picks, bans_idx, mapping):
@@ -446,25 +745,47 @@ def list_checkpoints():
     return out
 
 
-def load_predictor(path, device=None):
-    """Build a new model first, then swap it in (the old one stays on
-    failure) - concurrent requests keep a valid model.
+_MODEL_CACHE = {}                      # (path, device, value_path) -> predictor
+
+
+def make_predictor(path, device=None, value_path=None):
+    """Build (or fetch a cached) predictor for a checkpoint path.
 
     One file can hold three different model families, so the payload is
     read once here and dispatched: a policy checkpoint becomes a
     `PolicyPredictor` (next-move + ban ranking), everything else stays a
-    masked `Predictor`.
+    masked `Predictor`. The result is cached per (path, device,
+    value_path) so the breakdown endpoint can score several models without
+    reloading the same multi-hundred-MB weights repeatedly.
     """
     device = device or APP.get("device", "cpu")
+    vp = value_path if value_path is not None else APP.get("value_path")
+    key = (str(path), str(device), str(vp))
+    cached = _MODEL_CACHE.get(key)
+    if cached is not None:
+        return cached
+    payload = torch.load(str(path), map_location="cpu")
+    kind = peek_kind(payload)
+    if kind == "policy":
+        pred = infer.PolicyPredictor(
+            path, device=device, payload=payload, value_path=vp)
+    else:
+        pred = Predictor(path, device=device, payload=payload)
+    # The patch vocabulary is stored at the checkpoint top level (both
+    # families); keep it on the predictor so breakdown scoring can map a
+    # game's patch string to the embedding row the model was trained with.
+    pred.patch_vocab = (payload.get("patch_vocab")
+                        or (payload.get("config") or {}).get("patch_vocab"))
+    _MODEL_CACHE[key] = pred
+    return pred
+
+
+def load_predictor(path, device=None):
+    """Build a new model first, then swap it in (the old one stays on
+    failure) - concurrent requests keep a valid model.
+    """
     with LOAD_LOCK:
-        payload = torch.load(str(path), map_location="cpu")
-        kind = peek_kind(payload)
-        if kind == "policy":
-            pred = infer.PolicyPredictor(
-                path, device=device, payload=payload,
-                value_path=APP.get("value_path"))
-        else:
-            pred = Predictor(path, device=device, payload=payload)
+        pred = make_predictor(path, device=device)
         APP["predictor"] = pred
     return pred
 
@@ -625,6 +946,8 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_load()
         elif route == "/api/upload":
             self._handle_upload()
+        elif route == "/api/breakdown":
+            self._handle_breakdown()
         else:
             self._send(404, {"error": "unknown endpoint"})
 
@@ -834,6 +1157,32 @@ class Handler(BaseHTTPRequestHandler):
         print("checkpoint <- %s (uploaded)" % pred.ckpt_path)
         self._send(200, {"model": model_info(pred)})
 
+    def _handle_breakdown(self):
+        """POST {game_i, models:[repo-relative .pt]} -> per-move breakdown.
+
+        Scores one pro game under every selected checkpoint and returns the
+        real move next to each model's prediction. Does NOT touch the live
+        model: `make_predictor` caches by path, so the header model and the
+        breakdown selections stay independent.
+        """
+        try:
+            payload = self._read_json()
+            game_i = int(payload.get("game_i", -1))
+            model_paths = payload.get("models") or []
+            if not isinstance(model_paths, list):
+                raise ValueError("models must be a list of .pt paths")
+            if not model_paths:
+                raise ValueError("select at least one model")
+            result = build_breakdown(game_i, model_paths)
+        except (ValueError, KeyError, TypeError, IndexError,
+                FileNotFoundError, json.JSONDecodeError) as exc:
+            self._send(400, {"error": str(exc)})
+            return
+        except Exception as exc:  # noqa: BLE001 - one page, not the server
+            self._send(500, {"error": "breakdown failed: %s" % exc})
+            return
+        self._send(200, result)
+
 
 def main():
     global APP
@@ -849,10 +1198,11 @@ def main():
     ap.add_argument("--device", default="cpu",
                     help="cpu keeps GPU free; cuda also fine")
     ap.add_argument("--ckpt", default="",
-                    help="checkpoint .pt path - pretraining best.pt, a "
-                         "finetune best_mask/best_win.pt, or a policy "
-                         "best_policy.pt (default: best pretraining by val "
-                         "champ_top5)")
+                    help="checkpoint .pt path - pretraining/finetune "
+                         "best*.pt, a proonly best.pt, or a policy "
+                         "best_policy.pt (default: the shipped pro-only "
+                         "policy model/proonly/ckpt/run_20261101_183519_"
+                         "p-patch-s0/best.pt, else best pretraining)")
     ap.add_argument("--value", default="",
                     help="prefix value checkpoint used to score simulated "
                          "drafts in the ban panel (default: newest under "
@@ -865,8 +1215,12 @@ def main():
     if args.ckpt:
         ckpt = resolve_ckpt_path(args.ckpt, confine=False)
     else:
-        ckpt, val = find_best_ckpt()
-        print("best pretraining ckpt: %s (val top-5 %s)" % (ckpt, val))
+        if PROONLY_DEFAULT.is_file():
+            ckpt = PROONLY_DEFAULT
+            print("default: pro-only policy %s" % ckpt)
+        else:
+            ckpt, val = find_best_ckpt()
+            print("best pretraining ckpt: %s (val top-5 %s)" % (ckpt, val))
     predictor = load_predictor(ckpt, device=args.device)
     print("checkpoint: %s (%s)" % (ckpt, predictor.kind))
     if getattr(predictor, "value_path", None):
