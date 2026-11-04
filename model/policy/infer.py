@@ -23,6 +23,12 @@ reconstructed. Roles are not part of the UI board, so they are *inferred*
 once per state from the encoder's role head (the same FLEX-role query the
 masked frontend uses) and then fed back in.
 
+`unavailable` is the fearless pool: champions picked in earlier games of
+the same series. It reaches the model as `unavailable_mask` and is masked
+on PICK moves only - a fearless champion is still legal to ban, which is
+what the pro corpus does (`data/pro play/pipeline.py:attach_fearless`).
+This is a policy-only input; the masked models have no equivalent.
+
 Why this can differ from the offline proposer
 ---------------------------------------------
 The offline proposer (deleted with the ban thread) simulated future picks
@@ -123,6 +129,8 @@ def empty_board(num_champs, first_pick=0, device="cpu"):
         "ban_ids": torch.full((1, BAN_SLOTS), pad, dtype=torch.long,
                               device=device),
         "taken": torch.zeros(1, num_champs, dtype=torch.bool, device=device),
+        "unavailable": torch.zeros(1, num_champs, dtype=torch.bool,
+                                   device=device),
         "n_bans": torch.zeros(1, dtype=torch.long, device=device),
         "n_picks": torch.zeros(1, 2, dtype=torch.long, device=device),
         "first_pick": int(first_pick),
@@ -130,11 +138,20 @@ def empty_board(num_champs, first_pick=0, device="cpu"):
     }
 
 
-def build_board(picks, bans, num_champs, first_pick=0, device="cpu"):
+def build_board(picks, bans, num_champs, first_pick=0, device="cpu",
+                unavailable=None):
     """UI board -> batch-1 tensors. Raises ValueError on an illegal board.
 
     picks: 10 entries, champion index or None (blue 0-4 / red 5-9, pick
-    order). bans: champion indices banned so far, any order.
+    order). bans: champion indices banned so far, any order. `unavailable`:
+    champions picked in *earlier games of a fearless series*.
+
+    `unavailable` is deliberately not folded into `taken`: it is illegal to
+    PICK one of those champions but legal to BAN one (teams routinely ban
+    what the opponent picked last game), and `PolicyValueModel` masks it on
+    pick moves only. A champion that is both banned and unavailable this
+    game is therefore a legal board, while one that is both *picked* and
+    unavailable is not.
     """
     if len(picks) != N_SLOTS:
         raise ValueError("picks must have 10 entries")
@@ -166,13 +183,23 @@ def build_board(picks, bans, num_champs, first_pick=0, device="cpu"):
         board["ban_ids"][0, int(board["n_bans"][0])] = champ
         board["n_bans"][0] += 1
         board["taken"][0, champ] = True
+    for champ in (unavailable or ()):
+        champ = int(champ)
+        if not 0 <= champ < num_champs:
+            raise ValueError("fearless index %d out of range" % champ)
+        if champ in seen:
+            raise ValueError(
+                "champion %d was picked earlier in the series and cannot be "
+                "picked again" % champ)
+        board["unavailable"][0, champ] = True
     return board
 
 
 def repeat_board(board, n):
     """Batch n copies (same board) - used to score candidate arms together."""
     out = dict(board)
-    for key in ("champ_ids", "role_ids", "pad_mask", "ban_ids", "taken"):
+    for key in ("champ_ids", "role_ids", "pad_mask", "ban_ids", "taken",
+                "unavailable"):
         out[key] = board[key].repeat(n, *([1] * (board[key].dim() - 1)))
     out["n_bans"] = board["n_bans"].repeat(n)
     out["n_picks"] = board["n_picks"].repeat(n, 1)
@@ -193,7 +220,7 @@ def _policy_batch(board, move_idx, kind, team):
         "pad_mask": board["pad_mask"],
         "ban_ids": board["ban_ids"],
         "taken_mask": board["taken"],
-        "unavailable_mask": torch.zeros_like(board["taken"]),
+        "unavailable_mask": board["unavailable"],
         "move_idx": full(move_idx),
         "phase": full(PHASE_OF[int(move_idx)]),
         "to_move": full(team),
@@ -412,10 +439,17 @@ class PolicyPredictor:
 
     # -- public -------------------------------------------------------
     @torch.no_grad()
-    def next_move(self, picks, bans, first_pick=0, k=8):
-        """Top-k champions for the move that is next, plus the state."""
+    def next_move(self, picks, bans, first_pick=0, k=8, unavailable=None):
+        """Top-k champions for the move that is next, plus the state.
+
+        `unavailable` is the fearless pool (champions picked in earlier
+        games of the series). It is fed as `unavailable_mask`, which the
+        model masks on pick moves only - so on a ban the returned top-k may
+        still contain them, exactly as the real draft allows.
+        """
         board = build_board(picks, bans, self.num_champs, first_pick,
-                            self.device)
+                            self.device, unavailable=unavailable)
+        n_unavail = int(board["unavailable"][0].sum())
         n_picks = int((~board["pad_mask"][0]).sum())
         move_idx, left_b, left_p = resolve_position(
             int(board["n_bans"][0]), n_picks, first_pick)
@@ -428,7 +462,8 @@ class PolicyPredictor:
             return {"complete": True, "warning": "; ".join(warnings) or None,
                     "first_pick": int(first_pick), "roles": None,
                     "suggestions": [], "move_idx": N_MOVES,
-                    "kind": None, "side": None, "phase": None}
+                    "kind": None, "side": None, "phase": None,
+                    "n_unavailable": n_unavail}
         probs = self._fill_roles(board)
         kind, team = move_plan(first_pick)[move_idx]
         logits = self.model(_policy_batch(board, move_idx, kind, team))[
@@ -448,10 +483,12 @@ class PolicyPredictor:
             "warning": "; ".join(warnings) or None,
             "suggestions": suggestions,
             "roles": self._roles_json(probs, board),
+            "n_unavailable": n_unavail,
         }
 
     @torch.no_grad()
-    def ban_candidates(self, picks, bans, first_pick=0, k=4, top_picks=3):
+    def ban_candidates(self, picks, bans, first_pick=0, k=4, top_picks=3,
+                       unavailable=None):
         """Rank ban candidates by how likely the opponent was to take them.
 
         The reference rollout lets the policy play the current ban itself,
@@ -461,10 +498,14 @@ class PolicyPredictor:
         regime the value function was trained on) rather than different
         bans on one unchanged board, where it is structurally flat.
 
+        The rollout carries the fearless pool through every simulated pick,
+        so a candidate ban cannot be "answered" with a champion that is
+        unavailable this game.
+
         Returns None when the next move is not a ban.
         """
         board = build_board(picks, bans, self.num_champs, first_pick,
-                            self.device)
+                            self.device, unavailable=unavailable)
         n_picks = int((~board["pad_mask"][0]).sum())
         move_idx, _lb, _lp = resolve_position(
             int(board["n_bans"][0]), n_picks, first_pick)

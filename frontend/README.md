@@ -82,19 +82,26 @@ cap), `GET /api/drafts?q=&limit=&offset=&random=` and `GET /api/draft?i=<row>`
 for the walkthrough, `/api/champions` (champions carry dDragon `img` URLs;
 `model` and `policy_model` describe the two slots), `POST /api/suggest`
 (always the role model; response adds `roles` — the role distribution per
-filled slot —, `assignment` — one role per pick, distinct within a team — and
-per-candidate `flex`), and `POST /api/next-move` (always the next-move
+filled slot —, `assignment` — one role per pick, distinct within a team —,
+per-candidate `flex`, and `fearless_filtered` — how many pool champions were
+removed from the answer —), and `POST /api/next-move` (always the next-move
 model):
 
 ```json
 {"picks": ["Ezreal", null, "…"], "bans": ["Ashe", "…"],
- "first_pick": 0, "k": 8, "ban_k": 4, "rollout": true}
+ "first_pick": 0, "fearless": ["Vi", "…"],
+ "k": 8, "ban_k": 4, "rollout": true}
 ```
 
-→ `{model, state{move_idx, kind, side, phase, first_pick, warning, complete},
-suggestions[{idx, prob, name}], roles, bans{side, opponent, ranked_by,
-win_prob_available, opponent_picks, candidates[{rank, idx, name, denial,
-win_prob}]}}`. `bans` is `null` on pick moves and on a complete board.
+`fearless` is the series pool in the same id space as `picks`/`bans`; it is
+optional and defaults to empty.
+
+→ `{model, state{move_idx, kind, side, phase, first_pick, warning, complete,
+n_unavailable}, suggestions[{idx, prob, name}], roles, bans{side, opponent,
+ranked_by, win_prob_available, opponent_picks, candidates[{rank, idx, name,
+denial, win_prob}]}}`. `bans` is `null` on pick moves and on a complete board.
+`GET /api/draft?i=` also returns `unavailable` (the real fearless pool, in the
+same id space) and `fearless` (whether the series used it).
 
 ### Breakdown page (`/breakdown.html`)
 
@@ -125,15 +132,58 @@ are cached per path, so the header models and the page stay independent.
 
 - Blue/Red panels: 5 ban + 5 pick slots **in a horizontal strip, no roles
   attached** — click an empty slot for the searchable picker (champion art
-  from dDragon), ✕ removes. `Reset draft` clears everything.
+  from dDragon), ✕ removes. `Reset draft` clears the board of the **game on
+  screen**; the series and its fearless pool are left alone.
 - **First pick** (header, `blue`/`red`): which side opens the draft. Mirrors
-  the whole 20-move order; the next-move panel follows it. Only meaningful
-  when no bans are placed yet (it is disabled during a walkthrough).
+  the whole 20-move order; the next-move panel follows it. Stored **per
+  game** — switching games restores that game's value. Only meaningful when
+  no bans are placed yet (disabled during a walkthrough).
 - **Next-move highlight**: the slot that would move next in a standard pro
   draft (bans B,R,B,R,B,R → picks B,R,R,B,B,R → bans R,B,R,B → picks
   R,B,B,R; mirrored wholesale for a red first-pick) is outlined and the team
   header shows "▶ to ban"/"▶ to pick". Highlight only — nothing is enforced,
   any slot can be filled any time.
+
+### Series and fearless
+
+A **series** is a list of games that share a fearless pool. Two bars sit under
+the header:
+
+- **Series** — one chip per game (`G1 ✓ B 6/10`): game number, the side with
+  first pick (`B`/`R`), and picks placed. Click a chip to switch games; each
+  game keeps its own board and its own first pick. `＋ game` appends an empty
+  game, `clear` forgets the series.
+- **next game in series ▶** — closes the current game and opens the next one,
+  whose pool is *this game's pool + everything picked in it*. The first-pick
+  side is kept, not flipped: the teams swap sides between games but the side
+  holding first pick stays the same in 94% of pro games (18,614 vs 1,139 in
+  the corpus). The button is disabled on an already-closed game, since its
+  successor is already in the series.
+- **Fearless** — the pool itself: champions that cannot be picked again.
+  `＋ fearless ban` adds one by hand, ✕ removes it.
+
+**The pool is per game, not one running list.** Game *i*'s pool is the picks of
+games `0..i-1`, which is exactly how the corpus defines it
+(`pipeline.attach_fearless`; verified on all 10,021 fearless rows in
+`pro_drafts.pt`, zero mismatches). A running list would make a *closed* game
+illegal against itself — its own picks would be in its pool — so switching
+back to G1 after starting G2 would show a board the server rejects.
+
+**Which models can use it.** The two `nextpick-*` models take the pool as
+`unavailable_mask` and mask it on **pick moves only**, so a champion picked in
+an earlier game is still legal to *ban* — the rule the pro corpus follows.
+The three `masking-*` models have no such input: the server drops those
+champions from their answers (`fearless_filtered` in `/api/suggest`) but the
+remaining ranking was computed as if they were available, so the bar says
+"role board filters them out only" whenever a pool is active.
+
+**Real games seed it.** Loading a walkthrough game sets the pool from that
+game's own `unavailable`, so a G3 walkthrough starts with the 20 champions
+that are actually gone; the info line shows `first pick red · fearless (20
+gone)`. Leaving the walkthrough clears it.
+
+State lives in `localStorage` (`draftSeries.v1`), so a refresh keeps the
+series. `clear` is the way out.
 
 ### Next-move panel (policy slot)
 

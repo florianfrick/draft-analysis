@@ -137,16 +137,96 @@ def test_build_board_tracks_counts_and_taken():
     for c in (1, 2, 3, 4, 5, 6, 7):
         assert board["taken"][0, c].item() is True
     assert board["taken"][0, 8].item() is False
+    # no pool passed -> nothing unavailable
+    assert not board["unavailable"].any().item()
 
 
 def test_repeat_board_shapes():
     board = infer.build_board([1, None, None, None, None, None, None, None,
                                None, None], [2], 40)
     rep = infer.repeat_board(board, 3)
-    for key in ("champ_ids", "role_ids", "pad_mask", "ban_ids", "taken"):
+    for key in ("champ_ids", "role_ids", "pad_mask", "ban_ids", "taken",
+                "unavailable"):
         assert rep[key].shape[0] == 3
     assert rep["n_picks"].shape == (3, 2)
     assert torch.equal(rep["champ_ids"][0], rep["champ_ids"][2])
+
+
+# ------------------------------------------------------------- fearless
+# A fearless pool is the champions picked in earlier games of the series.
+# The contract that matters: illegal to PICK, legal to BAN. The model
+# enforces that split itself (`_apply_legality`), so the board must keep the
+# two masks apart rather than folding the pool into `taken`.
+def test_build_board_keeps_the_fearless_pool_out_of_taken():
+    board = infer.build_board([None] * 10, [20], 40, unavailable=[20, 21])
+    assert board["taken"][0, 20].item() is True       # banned this game
+    assert board["unavailable"][0, 20].item() is True  # and fearless
+    assert board["unavailable"][0, 21].item() is True
+    # 21 is fearless only: banning it is still legal, so it is not "taken"
+    assert board["taken"][0, 21].item() is False
+    assert board["unavailable"][0, 22].item() is False
+
+
+def test_build_board_rejects_a_fearless_pick():
+    with pytest.raises(ValueError):
+        infer.build_board([20] + [None] * 9, [], 40, unavailable=[20])
+    with pytest.raises(ValueError):
+        infer.build_board([None] * 10, [], 40, unavailable=[99])
+
+
+def test_repeat_board_carries_the_fearless_pool():
+    board = infer.build_board([None] * 10, [2], 40, unavailable=[20, 21])
+    rep = infer.repeat_board(board, 4)
+    assert rep["unavailable"].shape == (4, 40)
+    assert rep["unavailable"][:, 20].all().item()
+    assert rep["unavailable"][:, 21].all().item()
+
+
+def test_next_move_masks_fearless_on_picks_only():
+    """The whole point of the split, at the inference boundary.
+
+    k = num_champs asks for every champion, so a masked one is simply
+    absent from the answer (softmax of -inf is 0) and the test reads the
+    legality rule directly instead of sampling a top-8.
+    """
+    pred = stub()
+    pool = [20, 21, 22]
+
+    # move 0 is a ban: a champion picked last game can still be banned
+    out = pred.next_move([None] * 10, [], first_pick=0, k=173,
+                         unavailable=pool)
+    assert out["kind"] == "ban"
+    assert out["n_unavailable"] == 3
+    assert set(pool) <= {c["idx"] for c in out["suggestions"]}, \
+        "fearless champions must stay bannable"
+
+    # six bans -> move 6, the first pick: now they cannot be taken
+    bans = [10, 11, 12, 13, 14, 15]
+    out = pred.next_move([None] * 10, bans, first_pick=0, k=173,
+                         unavailable=pool)
+    assert out["kind"] == "pick"
+    got = {c["idx"] for c in out["suggestions"]}
+    assert not (got & set(pool)), "fearless champions must not be pickable"
+    assert not (got & set(bans))
+
+
+def test_ban_candidates_carry_the_fearless_pool_through_the_rollout():
+    """A simulated pick must not land on a champion that is unavailable.
+
+    The rollout plays the rest of the draft with the policy; if the pool did
+    not survive `repeat_board`/`_place`, an arm would be free to "answer" a
+    ban with a champion that is already gone - which is what made the
+    pre-fearless UI propose illegal continuations.
+    """
+    pred = stub()
+    pool = [20, 21, 22]
+    res = pred.ban_candidates([None] * 10, [], first_pick=0, k=3,
+                              unavailable=pool)
+    assert res is not None
+    taken = {c["idx"] for c in res["candidates"]}
+    assert not (taken & set(pool)), "cannot ban-propose a champion twice"
+    for c in res["opponent_picks"]:
+        assert c["idx"] not in pool
 
 
 # ------------------------------------------------------------- next move

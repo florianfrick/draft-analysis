@@ -577,6 +577,97 @@ def test_next_move_honours_first_pick(app, httpd, policy_ckpt):
     assert d["state"]["side"] == 1 and d["state"]["first_pick"] == 1
 
 
+# ------------------------------------------------------------ fearless
+# `fearless` is a list of *riot ids* (the same space as `picks`/`bans`), so
+# the client can send its pool without knowing the champion-index mapping.
+def _riot_of(app, idx):
+    return {v: k for k, v in app["mapping"].items()}[idx]
+
+
+def test_next_move_excludes_the_fearless_pool_on_a_pick(app, httpd,
+                                                        policy_ckpt):
+    """A champion picked in an earlier game must drop out of a pick answer.
+
+    The assertion is differential on purpose: it takes whatever the model
+    actually ranked first, adds *that* to the pool, and checks it is gone.
+    A fixed champion would pass or fail depending on the weights.
+    """
+    S.load_predictor(Path(policy_ckpt))
+    body = {"picks": [None] * 10, "bans": [11, 12, 13, 14, 15, 16],
+            "first_pick": 0}
+    status, d = _post(httpd, "/api/next-move", json.dumps(body))
+    assert status == 200, d
+    assert d["state"]["kind"] == "pick"
+    assert d["state"]["n_unavailable"] == 0
+    top = d["suggestions"][0]["idx"]
+
+    body["fearless"] = [_riot_of(app, top)]
+    status, d2 = _post(httpd, "/api/next-move", json.dumps(body))
+    assert status == 200, d2
+    assert d2["state"]["n_unavailable"] == 1
+    assert top not in [c["idx"] for c in d2["suggestions"]]
+
+
+def test_next_move_keeps_fearless_champions_bannable(app, httpd,
+                                                     policy_ckpt):
+    """The other half of the rule: the pool is masked on picks only."""
+    S.load_predictor(Path(policy_ckpt))
+    status, d = _post(httpd, "/api/next-move", _empty_board())
+    assert status == 200, d
+    pool = [_riot_of(app, c["idx"]) for c in d["suggestions"][:3]]
+    body = json.dumps({"picks": [None] * 10, "bans": [], "first_pick": 0,
+                       "fearless": pool})
+    status, d2 = _post(httpd, "/api/next-move", body)
+    assert status == 200, d2
+    # still a ban decision, and the pool is reported as three champions -
+    # not a 400, which is what folding them into `taken` would have caused
+    # for a board that bans one of them
+    assert d2["state"]["kind"] == "ban"
+    assert d2["state"]["n_unavailable"] == 3
+
+
+def test_suggest_filters_the_fearless_pool(app, httpd):
+    """The role model cannot consume the pool, so the server filters it.
+
+    `fearless_filtered` is what the UI turns into its caveat, so it has to
+    be non-zero here or the warning would never appear.
+    """
+    body = {"picks": [None] * 10, "bans": []}
+    status, d = _post(httpd, "/api/suggest", json.dumps(body))
+    assert status == 200, d
+    assert d["fearless_filtered"] == 0
+    cand = d["blue"]["TOP"][0]
+
+    body["fearless"] = [_riot_of(app, cand["idx"])]
+    status, d2 = _post(httpd, "/api/suggest", json.dumps(body))
+    assert status == 200, d2
+    assert d2["fearless_filtered"] == 1
+    for team in ("blue", "red"):
+        for _role, lst in d2[team].items():
+            assert cand["idx"] not in [c["idx"] for c in lst]
+
+
+def test_draft_endpoint_exposes_the_real_fearless_pool(app, httpd):
+    """A real G2+ fearless game carries its own pool; the walkthrough seeds
+    from it, so the endpoint has to publish it in the client's id space."""
+    status, d = _get(httpd, "/api/drafts?limit=500")
+    assert status == 200, d
+    fear = [x for x in d["drafts"] if x.get("n_unavailable")]
+    if not fear:
+        pytest.skip("no fearless game on the first page of drafts")
+    game = fear[0]
+    status, g = _get(httpd, "/api/draft?i=%d" % game["i"])
+    assert status == 200, g
+    assert g["fearless"] is True
+    assert len(g["unavailable"]) == game["n_unavailable"]
+    assert g["unavailable"], "fearless game with an empty pool"
+    for riot in g["unavailable"]:
+        assert riot in app["mapping"], "pool must be in the client's id space"
+    # nothing in the pool may also be picked in this game
+    picked = [m["riot"] for m in g["moves"] if m["kind"] == "pick"]
+    assert not (set(picked) & set(g["unavailable"]))
+
+
 def test_next_move_without_a_policy_model_is_an_error(app, httpd):
     """The two slots are independent: loading only a role model must not
     silently make the next-move panel answer with it."""

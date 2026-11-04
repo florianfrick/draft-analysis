@@ -11,6 +11,8 @@ let pickerCtx = null;                      // {type, slot? , team?}
 let debounceT = null, wtFilterT = null;
 let ROLE_MODEL = null, POLICY_MODEL = null;   // server-side model slots
 let WT = null;                             // walkthrough: {draft, step, ...}
+let SERIES = null;                         // {games:[slot], cur, fearless}
+                                           // slot = {firstPick, picks, bans, done}
 
 async function init() {
   const d = await (await fetch('/api/champions')).json();
@@ -21,9 +23,8 @@ async function init() {
   refreshDraftList();
   buildStrips('blue');
   buildStrips('red');
-  renderAll();
+  initSeries();          // restores the last series, renders and asks
   renderWalkthrough();
-  requestSuggest();
 }
 
 function imgTag(c, cls) {
@@ -356,9 +357,11 @@ function renderRoles() {
 function addPick(team, idx) {
   // Clicking a target card. Refuse anything already on the board: the card
   // may come from an answer that is a moment old, and a duplicate makes the
-  // server reject the whole board (which used to freeze it).
+  // server reject the whole board (which used to freeze it). A fearless
+  // champion is refused too - the answer may predate the pool.
   const c = BY_IDX[idx];
   if (!c || picks.includes(c.riot) || allBansFlat().includes(c.riot)) return;
+  if (isFearless(c.riot)) return;
   const base = team === 'blue' ? 0 : 5;
   for (let s = base; s < base + 5; s++) {
     if (picks[s] == null) { picks[s] = c.riot; lastSlot = s; break; }
@@ -369,6 +372,7 @@ function addPick(team, idx) {
 function renderAll() {
   renderSlots(); renderBans(); renderRoles();
   renderTurn(); renderNextMove();
+  renderSeries(); renderFearless();
 }
 
 function changed() {
@@ -379,11 +383,247 @@ function changed() {
 
 function allBansFlat() { return bans.blue.concat(bans.red); }
 
+// ---- series + fearless -------------------------------------------------
+// A series is a list of game slots. Each game carries its own fearless pool:
+// the champions picked in the games *before* it. That is how the pro corpus
+// defines it - `pipeline.attach_fearless` fills `row["unavailable"]` with the
+// union of the earlier games' picks, and it matches on all 10,021 fearless
+// rows in `pro_drafts.pt` with zero mismatches.
+//
+// The pool is stored per game rather than as one running list, for a reason
+// that is easy to get wrong: a running list makes a *closed* game illegal
+// against itself (its own picks are in the pool), so switching back to G1
+// after starting G2 would show a board the server rejects. Per-game pools
+// keep every game self-consistent, and still let the user add and remove
+// champions by hand.
+//
+// Bans are never in the pool: a champion picked in an earlier game is still
+// legal to ban.
+const SERIES_KEY = 'draftSeries.v1';
+
+function newGameSlot(firstPick, fearless) {
+  return { firstPick: firstPick ? 1 : 0, picks: Array(10).fill(null),
+           bans: { blue: [], red: [] }, fearless: (fearless || []).slice(),
+           done: false };
+}
+
+function fearlessPool() {
+  return SERIES.games[SERIES.cur].fearless;
+}
+
+function initSeries() {
+  SERIES = { games: [newGameSlot(0)], cur: 0 };
+  try {
+    const s = JSON.parse(localStorage.getItem(SERIES_KEY) || 'null');
+    // Only restore a payload with the shape the renderers assume; a stale or
+    // hand-edited one must not take the page down on load.
+    if (s && Array.isArray(s.games) && s.games.length
+        && s.cur >= 0 && s.cur < s.games.length) {
+      s.games.forEach(g => {
+        if (!Array.isArray(g.picks) || g.picks.length !== 10)
+          g.picks = Array(10).fill(null);
+        g.bans = g.bans || {};
+        if (!Array.isArray(g.bans.blue)) g.bans.blue = [];
+        if (!Array.isArray(g.bans.red)) g.bans.red = [];
+        // v1 stored one running pool for the whole series; drop it rather
+        // than reinterpreting it as game 1's, which would be wrong for
+        // every later game.
+        if (!Array.isArray(g.fearless)) g.fearless = [];
+        g.firstPick = g.firstPick ? 1 : 0;
+      });
+      delete s.fearless;
+      SERIES = s;
+    }
+  } catch (e) { /* corrupt or storage disabled: keep the fresh series */ }
+  loadGame(SERIES.cur);
+}
+
+function saveSeries() {
+  try { localStorage.setItem(SERIES_KEY, JSON.stringify(SERIES)); }
+  catch (e) { /* private mode / quota: the session still works */ }
+}
+
+// The live `picks`/`bans` are the board of SERIES.games[SERIES.cur]; these two
+// move state between the live board and the slot.
+function syncGame() {
+  if (!SERIES) return;
+  const g = SERIES.games[SERIES.cur];
+  if (!g) return;
+  g.picks = picks.slice();
+  g.bans = { blue: bans.blue.slice(), red: bans.red.slice() };
+  g.firstPick = currentFirstPick();
+  saveSeries();
+}
+
+function loadGame(i) {
+  if (!SERIES || i < 0 || i >= SERIES.games.length) return;
+  SERIES.cur = i;
+  const g = SERIES.games[i];
+  picks = g.picks.slice();
+  bans = { blue: g.bans.blue.slice(), red: g.bans.red.slice() };
+  lastSlot = null;
+  document.getElementById('first-pick').value = g.firstPick ? '1' : '0';
+  renderAll();
+  requestSuggest();
+}
+
+function addGameSlot() {
+  syncGame();
+  const cur = SERIES.games[SERIES.cur];
+  // A fresh game inherits the pool the current one had - it is the same
+  // point in the series, so the same champions are gone - plus nothing,
+  // because the current game has not been closed.
+  SERIES.games.push(newGameSlot(cur ? cur.firstPick : 0,
+                                cur ? cur.fearless : []));
+  saveSeries();
+  if (WT) clearWT();
+  loadGame(SERIES.games.length - 1);
+}
+
+function nextGameInSeries() {
+  syncGame();
+  const g = SERIES.games[SERIES.cur];
+  // This game's pool + everything picked in it = the next game's pool.
+  const pool = g.fearless.slice();
+  g.picks.filter(Boolean).forEach(r => {
+    if (!pool.includes(r)) pool.push(r);
+  });
+  g.done = true;
+  // First-pick side is *kept*, not flipped. The teams swap sides between
+  // games but the side holding first pick stays the same in 94% of pro
+  // games (18,614 vs 1,139 in the corpus), so keeping it is the better
+  // default - and the select above still overrides it.
+  SERIES.games.splice(SERIES.cur + 1, 0, newGameSlot(g.firstPick, pool));
+  if (WT) clearWT();
+  saveSeries();
+  loadGame(SERIES.cur + 1);
+}
+
+function clearSeries() {
+  SERIES = { games: [newGameSlot(0)], cur: 0 };
+  if (WT) clearWT();
+  saveSeries();
+  loadGame(0);
+}
+
+function addFearless(riot) {
+  if (!SERIES || !riot) return false;
+  const pool = fearlessPool();
+  if (pool.includes(riot)) return false;
+  pool.push(riot);
+  saveSeries();
+  return true;
+}
+
+function removeFearless(riot) {
+  if (!SERIES) return false;
+  const g = SERIES.games[SERIES.cur];
+  const n = g.fearless.length;
+  g.fearless = g.fearless.filter(r => r !== riot);
+  if (g.fearless.length === n) return false;
+  saveSeries();
+  return true;
+}
+
+function isFearless(riot) {
+  return !!(SERIES && riot != null && fearlessPool().includes(riot));
+}
+
+function renderSeries() {
+  const box = document.getElementById('series-games');
+  if (!box || !SERIES) return;
+  box.innerHTML = '';
+  SERIES.games.forEach((g, i) => {
+    const n = g.picks.filter(Boolean).length;
+    const fp = g.firstPick ? 'red' : 'blue';
+    const b = document.createElement('button');
+    b.className = 'sg' + (i === SERIES.cur ? ' cur' : '')
+      + (g.done ? ' done' : '');
+    b.innerHTML = `<span class="g">G${i + 1}</span>`
+      + `<span class="fp" title="first pick: ${fp}">${g.firstPick ? 'R' : 'B'}</span>`
+      + `<span class="n">${n}/10</span>`;
+    b.title = `game ${i + 1} · first pick ${fp} · ${n}/10 picks`
+      + ` · ${g.fearless.length} fearless`
+      + (g.done ? ' · closed' : '');
+    b.addEventListener('click', () => {
+      if (i === SERIES.cur) return;
+      syncGame();
+      if (WT) clearWT();
+      loadGame(i);
+    });
+    box.appendChild(b);
+  });
+  const cur = SERIES.games[SERIES.cur];
+  document.getElementById('series-info').textContent =
+    `game ${SERIES.cur + 1}/${SERIES.games.length}`
+    + ` · first pick ${cur.firstPick ? 'red' : 'blue'}`
+    + ` · ${cur.fearless.length} fearless`;
+  // A closed game already has its successor; offering "next game" there
+  // would splice a duplicate in between. Use "+ game" to insert one.
+  const nextBtn = document.getElementById('series-next');
+  const blocked = cur.done && SERIES.cur < SERIES.games.length - 1;
+  nextBtn.disabled = blocked;
+  nextBtn.title = blocked
+    ? 'this game is already closed - its successor is in the series. Use'
+      + ' "＋ game" to insert one, or open the last game to extend the series'
+    : 'close this game and open the next one: every champion picked here'
+      + ' becomes unavailable there. The pool is defined exactly that way in'
+      + ' the pro corpus (verified on all 10,021 fearless rows), and the'
+      + ' first-pick side is kept because it stays the same across a series'
+      + ' in 94% of pro games.';
+}
+
+function renderFearless() {
+  const strip = document.getElementById('fearless-strip');
+  if (!strip || !SERIES) return;
+  const pool = fearlessPool();
+  strip.innerHTML = '';
+  pool.forEach(riot => {
+    const c = BY_RIOT[riot];
+    if (!c) return;
+    const el = document.createElement('div');
+    el.className = 'fb-slot';
+    el.title = `${c.name} — picked earlier in this series: cannot be picked`
+      + ' again, can still be banned';
+    el.innerHTML = '<button class="clear" title="remove">✕</button>'
+      + `<div class="pic">${imgTag(c, 'ic')}</div>`;
+    el.querySelector('.clear').addEventListener('click', ev => {
+      ev.stopPropagation();
+      if (removeFearless(riot)) changed();
+    });
+    strip.appendChild(el);
+  });
+  document.getElementById('fearless-bar')
+    .classList.toggle('empty-pool', !pool.length);
+  const note = document.getElementById('fearless-note');
+  let txt = pool.length ? `${pool.length} unavailable`
+    : 'this game — the pool is empty';
+  // The masked models have no unavailable input at all, so the server can
+  // only drop those champions from the answer - the ranking is not
+  // fearless-aware. Say so instead of implying it was handled.
+  const filtered = !!(resp && resp.fearless_filtered);
+  if (pool.length && filtered) txt += ' · role board filters them out only';
+  note.textContent = txt;
+  note.title = pool.length && filtered
+    ? 'The role model was trained without a fearless mask: its top-5 was'
+      + ' computed as if these champions were available, then they were'
+      + ' removed. The next-move model takes the pool as an input and is'
+      + ' not affected by this caveat.'
+    : '';
+  note.classList.toggle('warn', pool.length > 0 && filtered);
+}
+
 function excludedSet() {
   const ex = new Set(picks.filter(Boolean));
   allBansFlat().forEach(b => ex.add(b));
-  if (pickerCtx && pickerCtx.type === 'pick' && picks[pickerCtx.slot])
-    ex.delete(picks[pickerCtx.slot]);   // current pick stays selectable
+  const ctx = pickerCtx || {};
+  // Fearless-unavailable champions cannot be picked, and cannot be added to
+  // the pool twice. They *stay* selectable for a ban, because banning what
+  // the opponent picked last game is legal and common.
+  if (ctx.type === 'pick' || ctx.type === 'fearless')
+    fearlessPool().forEach(f => ex.add(f));
+  if (ctx.type === 'pick' && picks[ctx.slot])
+    ex.delete(picks[ctx.slot]);   // current pick stays selectable
   return ex;
 }
 
@@ -401,8 +641,10 @@ function renderPickerGrid(q) {
     b.className = 'champ';
     b.innerHTML = imgTag(c, 'ic') + `<span>${c.name}</span>`;
     b.addEventListener('click', () => {
-      if (pickerCtx.type === 'ban') bans[pickerCtx.team].push(c.riot);
-      else { picks[pickerCtx.slot] = c.riot; lastSlot = pickerCtx.slot; }
+      const ctx = pickerCtx;
+      if (ctx.type === 'ban') bans[ctx.team].push(c.riot);
+      else if (ctx.type === 'fearless') addFearless(c.riot);
+      else { picks[ctx.slot] = c.riot; lastSlot = ctx.slot; }
       closePicker();
       changed();
     });
@@ -415,7 +657,9 @@ function openPicker(ctx) {
   pickerCtx = ctx;
   document.getElementById('picker-title').textContent =
     ctx.type === 'ban' ? ('Ban champion — ' + ctx.team)
-      : ('Pick champion — ' + (ctx.slot < 5 ? 'blue' : 'red'));
+      : ctx.type === 'fearless'
+        ? 'Fearless — already picked in this series'
+        : ('Pick champion — ' + (ctx.slot < 5 ? 'blue' : 'red'));
   const search = document.getElementById('picker-search');
   search.value = '';
   renderPickerGrid('');
@@ -453,11 +697,13 @@ async function runSuggest(sig) {
   // pick look like it was ignored.
   const maskedP = ROLE_MODEL
     ? postJSON('/api/suggest',
-      { picks: picks, bans: allBansFlat(), last_slot: lastSlot })
+      { picks: picks, bans: allBansFlat(), last_slot: lastSlot,
+        fearless: fearlessPool() })
     : null;
   const policyP = isPolicyModel()
     ? postJSON('/api/next-move', {
       picks: picks, bans: allBansFlat(), first_pick: currentFirstPick(),
+      fearless: fearlessPool(),
       k: 8, ban_k: 4,
       rollout: document.getElementById('nm-rollout').checked
     })
@@ -474,6 +720,9 @@ async function runSuggest(sig) {
       boardError('');
     }
     renderSlots(); renderRoles(); renderTurn();
+    // the fearless note reads `resp.fearless_filtered`, which only exists
+    // once this answer has landed
+    renderFearless();
   }
   if (policyP) {
     const p = await policyP;
@@ -511,7 +760,8 @@ function renderNextMove() {
     ? '<b>Draft complete</b>'
     : `<b>${sideName} to ${st.kind}</b>`;
   document.getElementById('nm-meta').textContent = st.complete
-    ? '' : `move ${st.move_idx + 1}/20 · ${st.phase}`;
+    ? '' : `move ${st.move_idx + 1}/20 · ${st.phase}`
+      + (st.n_unavailable ? ` · ${st.n_unavailable} fearless` : '');
   const warn = document.getElementById('nm-warning');
   if (st.warning) {
     warn.textContent = 'board warning: ' + st.warning;
@@ -588,7 +838,8 @@ let EXPLAIN_BUSY = false;
 let EXPLAIN_SIG = null;    // board the explanation was fetched for
 
 function boardSig() {
-  return JSON.stringify([picks, bans.blue, bans.red, currentFirstPick()]);
+  return JSON.stringify([picks, bans.blue, bans.red, currentFirstPick(),
+                         SERIES ? fearlessPool() : []]);
 }
 
 function hideExplain() {
@@ -772,8 +1023,12 @@ function applyMove(kind, side, idx) {
   if (kind === 'ban') {
     const team = side === 0 ? 'blue' : 'red';
     if (bans[team].length >= 5) return;
+    if (bans[team].includes(c.riot)) return;
     bans[team].push(c.riot);
   } else {
+    // The suggestion may predate a pool edit, so re-check legality here
+    // rather than trusting the answer.
+    if (picks.includes(c.riot) || isFearless(c.riot)) return;
     const base = side === 0 ? 0 : 5;
     for (let s = base; s < base + 5; s++) {
       if (picks[s] == null) { picks[s] = c.riot; lastSlot = s; break; }
@@ -786,7 +1041,7 @@ function applyMove(kind, side, idx) {
 
 function optLabel(d) {
   return `${(d.date || '').slice(0, 10)} · ${d.league} · ${d.blue} vs `
-    + `${d.red} (G${d.game_number})`;
+    + `${d.red} (G${d.game_number})` + (d.fearless ? ' · fearless' : '');
 }
 
 function renderCompare() {
@@ -879,6 +1134,7 @@ function wtApply() {
       }
     }
   }
+  syncGame();          // the game slot mirrors the walkthrough position
   changed();
 }
 
@@ -899,15 +1155,32 @@ async function wtLoad(i) {
   const fp = document.getElementById('first-pick');
   fp.value = d.first_pick ? '1' : '0';
   fp.disabled = true;              // the game dictates the order
+  // Seed the pool from the game itself: `unavailable` is the real fearless
+  // set for this game (champions picked in earlier games of the same
+  // series), so a walkthrough of G3 starts with the 20 that are actually
+  // gone instead of an empty pool.
+  SERIES.games[SERIES.cur].fearless = (d.unavailable || []).slice();
+  saveSeries();
   renderWalkthrough();
   wtApply();   // changed() -> suggest -> renderCompare on response
   renderCompare();
 }
 
-function wtExit() {
+// Drop the walkthrough without touching the board - used when the board is
+// about to be replaced by another game slot.
+function clearWT() {
   WT = null;
   document.getElementById('wt-select').value = '';
   document.getElementById('first-pick').disabled = false;
+  renderWalkthrough();
+}
+
+function wtExit() {
+  clearWT();
+  // The pool was seeded from the real game, so leaving drops it rather than
+  // leaving a hand-built board behind a wall of bans it never asked for.
+  SERIES.games[SERIES.cur].fearless = [];
+  saveSeries();
   resetDraft();
 }
 
@@ -915,6 +1188,7 @@ function resetDraft() {
   picks = Array(10).fill(null);
   bans = { blue: [], red: [] };
   lastSlot = null;
+  syncGame();          // empties the slot on the board, keeps the pool
   changed();
   renderWalkthrough();
   renderCompare();
@@ -934,8 +1208,11 @@ function renderWalkthrough() {
     return;
   }
   const d = WT.draft;
+  const nUn = (d.unavailable || []).length;
   info.innerHTML = `<b>${d.date.slice(0, 10)}</b> ${d.league} · `
     + `${d.blue} vs ${d.red} · G${d.game_number} · patch ${d.patch} · `
+    + `first pick ${d.first_pick ? 'red' : 'blue'}`
+    + (d.fearless ? ` · fearless (${nUn} gone)` : ' · not fearless') + ' · '
     + `<span class="muted">${d.winner} side won</span>`;
   info.title = d.date + ' · ' + d.gameid;
   stepEl.textContent = `${WT.step}/${d.moves.length}`;
@@ -968,7 +1245,17 @@ document.getElementById('btn-reset').addEventListener('click', () => {
   if (WT) { wtExit(); return; }
   resetDraft();
 });
+document.getElementById('series-add').addEventListener('click', addGameSlot);
+document.getElementById('series-next').addEventListener('click',
+  nextGameInSeries);
+document.getElementById('series-clear').addEventListener('click', () => {
+  if (confirm('Clear every game in the series and its fearless pool?'))
+    clearSeries();
+});
+document.getElementById('fearless-add').addEventListener('click', () =>
+  openPicker({ type: 'fearless' }));
 document.getElementById('first-pick').addEventListener('change', () => {
+  syncGame();                  // the value belongs to the game on the board
   if (!WT) changed();          // the whole order mirrors
 });
 document.getElementById('nm-rollout').addEventListener('change', () => {

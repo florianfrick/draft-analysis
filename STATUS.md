@@ -455,6 +455,18 @@ refused at load rather than failing later.
   checkpoint, real move next to each model's top-5. Mirrors the test-split
   methodology (real patch id, exact role-keyed slots) rather than the UI's
   inferred-role path.
+- **Series and fearless** — a series is a list of games; each carries its own
+  board, its own first-pick side and its own fearless pool (the picks of the
+  games before it — the corpus's own definition, exact on all 10,021 fearless
+  rows). "next game in series" closes a game and opens the next with that
+  pool; the first-pick side is kept because it stays the same across 94% of
+  pro games while the teams swap sides. **The pool is per game, not one
+  running list**: a running list makes a closed game illegal against itself
+  (its own picks are in the pool), so switching back to G1 would show a board
+  the server rejects. Only the two `nextpick-*` models consume it
+  (`unavailable_mask`, masked on pick moves only, so a fearless champion is
+  still bannable); the `masking-*` models have no such input, and their
+  answers are filtered rather than conditioned — the bar says so.
 
 Verified against a live server on the seven test games, not by reading the
 loader: all five checkpoints load through `/api/load` and answer their own
@@ -463,7 +475,11 @@ prefixes across all seven games and reports `complete` at 20 moves; `/api/sugges
 reproduces the G2 board exactly (red Syndra/Caitlyn/Karma → MIDDLE/BOTTOM/UTILITY,
 blue Yunara/Lulu/Locke → BOTTOM/UTILITY/MIDDLE) and the pin holds end to end;
 `/api/explain` and `/api/breakdown` answer on 16.20; both pages render with no
-console errors.
+console errors. The fearless path was verified in a browser on the same build:
+manual add, advance to G2 (pool 1 → 6, none of G1's picks offered), per-game
+first pick, switching back to a closed game with no board error, and a real
+G4 walkthrough seeding its 30 real fearless champions with no illegal pick
+across 12 replayed moves.
 
 ---
 

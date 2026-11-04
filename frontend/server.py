@@ -649,10 +649,13 @@ class Predictor:
         return lg, p
 
     @torch.no_grad()
-    def suggest(self, picks, bans_idx, mapping, last_slot=None):
+    def suggest(self, picks, bans_idx, mapping, last_slot=None,
+                unavailable_idx=None):
         """picks: len-10 riot ids or None - blue 0-4 / red 5-9 in PICK
         ORDER (slots carry no role meaning); bans_idx: banned champ idx;
-        last_slot: the slot just filled (wins a contested role).
+        last_slot: the slot just filled (wins a contested role);
+        unavailable_idx: fearless pool (champions picked in earlier games
+        of the series).
         -> {"roles": [10 x [{role, prob}...]] (filled slots, desc),
             "assignment": [10 x role id | None] (one per team, distinct),
             "blue"/"red": {role_name: [{idx, prob, flex?}] <=5}}
@@ -664,6 +667,13 @@ class Predictor:
         MASKed slots, so both teams get a role-conditioned top-5 per role
         (the 10% role-visible training condition). Bans/picks are
         post-filtered.
+
+        Fearless is a *post-filter* here, not an input: the masked task was
+        never trained with an unavailable mask, so the model cannot know a
+        champion is gone. Filtering keeps an illegal champion out of the
+        answer but does not make the remaining ranking fearless-aware -
+        the probability mass was computed as if the champion were
+        available. The UI says so when a pool is active.
 
         Special tokens are input-only (model/README.md Sec.2): every
         returned idx is a real champion (< num_champs, never [MASK]/
@@ -684,7 +694,7 @@ class Predictor:
         if len(set(picked_idx)) != len(picked_idx):
             raise ValueError("duplicate champion picked")
         illegal = torch.zeros(self.num_champs, dtype=torch.bool)
-        for i in list(bans_idx) + picked_idx:
+        for i in list(bans_idx) + picked_idx + list(unavailable_idx or ()):
             if 0 <= i < self.num_champs:
                 illegal[i] = True
         filled = [c is not None for c in champ0]
@@ -940,6 +950,9 @@ def draft_summary(r, i):
             "blue": r["blue_team"], "red": r["red_team"],
             "game_number": r["game_number"], "patch": r["patch"],
             "first_pick": r["first_pick"],
+            # fearless is data-driven per series (2025+ mostly, 2026 always)
+            "fearless": bool(r.get("fearless")),
+            "n_unavailable": len(r.get("unavailable") or ()),
             "winner": "blue" if r["blue_win"] else "red"}
 
 
@@ -982,6 +995,13 @@ def get_draft(i):
     out = draft_summary(r, i)
     out["gameid"] = r["gameid"]
     out["moves"] = moves
+    # The real fearless pool for this game - champions picked in earlier
+    # games of the same series (pipeline.attach_fearless). Empty for a
+    # non-fearless series and for game 1. The UI seeds its pool from this
+    # when a real game is loaded, so a walkthrough of G3 starts with the
+    # 20 champions that are actually gone.
+    out["unavailable"] = [inv[int(c)] for c in (r.get("unavailable") or ())
+                          if int(c) in inv]
     return out
 
 
@@ -1099,6 +1119,7 @@ class Handler(BaseHTTPRequestHandler):
                     "role model")
             picks = payload["picks"]              # len 10, riot id or None
             bans = payload.get("bans", [])        # riot ids
+            fearless = payload.get("fearless") or []   # riot ids
             last_slot = payload.get("last_slot")
             if last_slot is not None:
                 last_slot = int(last_slot)
@@ -1106,12 +1127,17 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("last_slot must be a slot index 0-9")
             mapping, names = APP["mapping"], APP["names_by_idx"]
             bans_idx = [mapping[b] for b in bans if b in mapping]
-            res = pred.suggest(picks, bans_idx, mapping, last_slot=last_slot)
+            unavail_idx = [mapping[f] for f in fearless if f in mapping]
+            res = pred.suggest(picks, bans_idx, mapping, last_slot=last_slot,
+                               unavailable_idx=unavail_idx)
         except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             self._send(400, {"error": str(exc)})
             return
         out = {"blue": {}, "red": {}, "roles": res["roles"],
                "assignment": res["assignment"],
+               # the masked model cannot consume the pool, so this is a
+               # filter, not a condition - the UI warns when it is non-zero
+               "fearless_filtered": len(unavail_idx),
                "model": model_info(pred)}
         for team in ("blue", "red"):
             for role, cands in res[team].items():
@@ -1126,12 +1152,14 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, out)
 
     def _handle_next_move(self):
-        """POST {picks, bans, first_pick, rollout} -> next move + bans.
+        """POST {picks, bans, first_pick, fearless, rollout} -> next move + bans.
 
-        `picks` is the UI's 10-slot pick-order board (riot ids or null) and
-        `bans` the flat ban list. The board is mapped to indices here and
-        handed to infer.PolicyPredictor; every champion index it returns is
-        translated back to a name so the client never needs the mapping.
+        `picks` is the UI's 10-slot pick-order board (riot ids or null),
+        `bans` the flat ban list, and `fearless` the champions picked in
+        earlier games of the same series. The board is mapped to indices
+        here and handed to infer.PolicyPredictor; every champion index it
+        returns is translated back to a name so the client never needs the
+        mapping.
         """
         try:
             payload = self._read_json()
@@ -1143,11 +1171,14 @@ class Handler(BaseHTTPRequestHandler):
             mapping, names = APP["mapping"], APP["names_by_idx"]
             picks = payload.get("picks") or [None] * 10
             bans = payload.get("bans") or []
+            fearless = payload.get("fearless") or []
             first_pick = 1 if int(payload.get("first_pick", 0)) else 0
             picks_idx = [None if p is None else mapping[p] for p in picks]
             bans_idx = [mapping[b] for b in bans]
+            unavail_idx = [mapping[f] for f in fearless]
             res = pred.next_move(picks_idx, bans_idx, first_pick=first_pick,
-                                 k=int(payload.get("k", 8)))
+                                 k=int(payload.get("k", 8)),
+                                 unavailable=unavail_idx)
         except (ValueError, KeyError, TypeError, IndexError,
                 json.JSONDecodeError) as exc:
             self._send(400, {"error": str(exc)})
@@ -1156,7 +1187,8 @@ class Handler(BaseHTTPRequestHandler):
         out = {
             "model": model_info(pred),
             "state": {k: res[k] for k in ("move_idx", "kind", "side", "phase",
-                                          "first_pick", "warning", "complete")},
+                                          "first_pick", "warning", "complete",
+                                          "n_unavailable")},
             "suggestions": [{"idx": c["idx"], "prob": c["prob"],
                              "name": names[c["idx"]]}
                             for c in res["suggestions"]],
@@ -1167,7 +1199,8 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 bans_res = pred.ban_candidates(
                     picks_idx, bans_idx, first_pick=first_pick,
-                    k=int(payload.get("ban_k", 4)))
+                    k=int(payload.get("ban_k", 4)),
+                    unavailable=unavail_idx)
             except Exception as exc:  # noqa: BLE001 - panel is optional
                 bans_res = None
                 out["bans_error"] = "ban ranking failed: %s" % exc

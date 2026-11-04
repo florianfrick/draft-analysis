@@ -185,8 +185,10 @@ def build_prefix(row, move_idx, num_champs=NUM_REAL_CHAMPS, patch_index=None):
     Slot tensors follow the soloQ partial-draft convention: unpicked
     slots are CHAMP_PAD with role FLEX and pad_mask=True; picked slots
     hold (champ, exact role). Bans so far go in `ban_ids` (PAD-padded),
-    fearless champs in `unavailable_mask`, and `taken_mask` unions
-    bans+picks+unavailable for -inf legality suppression at the head.
+    fearless champs in `unavailable_mask`, and `taken_mask` holds
+    bans+picks only - *not* the fearless pool, because a champion picked
+    in an earlier game is still legal to ban. `PolicyValueModel` combines
+    the two itself and masks `unavailable_mask` on pick moves only.
 
     `patch_index` (from build_patch_vocab) turns the row's patch string
     into `patch_id`; None -> PATCH_UNK_ID.

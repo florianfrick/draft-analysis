@@ -50,6 +50,60 @@ button:disabled:hover { background: #2a3140; }
 #wt-compare .ic { width: 28px; height: 28px; vertical-align: middle; }
 #wt-compare.hidden { display: none; }
 
+/* --- series + fearless ------------------------------------------------ */
+#series-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 18px; background: #1a1f2a;
+  border-bottom: 1px solid var(--line);
+}
+#series-bar .sb-title { color: #8fb8e8; font-weight: 600; }
+.series-games { display: flex; gap: 6px; flex-wrap: wrap; }
+.series-games .sg {
+  display: flex; align-items: center; gap: 5px; padding: 4px 8px;
+  border-radius: 6px; font-size: 12px;
+}
+.series-games .sg .g { font-weight: 600; }
+.series-games .sg .fp {
+  font-size: 10px; font-weight: 700; padding: 0 4px; border-radius: 7px;
+  background: #2f3a4d; border: 1px solid var(--line);
+}
+.series-games .sg .n {
+  color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.series-games .sg.cur { border-color: #8fb8e8; background: #26324a; }
+.series-games .sg.done { opacity: .72; }
+.series-games .sg.done .g::after { content: " ✓"; color: var(--acc); }
+#series-bar .sb-next { border-color: var(--acc); color: #cfe8cf; }
+#series-bar .sb-next:hover { background: #2d4030; }
+
+#fearless-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 6px 18px; background: #241d1d;
+  border-bottom: 1px solid var(--line); font-size: 13px;
+}
+#fearless-bar .fb-title { color: #d99a6c; font-weight: 600; }
+#fearless-bar.empty-pool { opacity: .72; }
+.fb-strip { display: flex; gap: 5px; flex-wrap: wrap; }
+.fb-slot {
+  position: relative; width: 34px; height: 34px;
+  background: #2a2020; border: 1px solid #5a4030; border-radius: 6px;
+}
+.fb-slot .pic { height: 100%; }
+.fb-slot .ic {
+  width: 32px; height: 32px;
+  /* the pool is a "these are gone" list, not a set of live picks: desaturate
+     so it reads as inactive, but keep it bright enough to identify - the
+     point of the bar is knowing *who* is unavailable */
+  filter: grayscale(.5);
+}
+.fb-slot .clear {
+  position: absolute; top: -7px; right: -7px; padding: 0 5px;
+  font-size: 11px; border-radius: 8px; display: none; z-index: 1;
+}
+.fb-slot:hover .clear { display: block; }
+#fearless-note { font-size: 12px; }
+#fearless-note.warn { color: #d9b26c; }
+
 main {
   display: grid; grid-template-columns: 1fr 1fr; gap: 18px;
   padding: 18px; max-width: 1400px; margin: 0 auto;

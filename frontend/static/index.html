@@ -24,8 +24,10 @@
       by its kind)">From file…</button>
   </div>
   <div class="spacer"></div>
-  <label class="muted fp-label" title="who has first pick (mirrors the whole
-    draft order; ignored while a real game is loaded)">first pick
+  <label class="muted fp-label" title="who has first pick in the game on the
+    board (mirrors the whole draft order; ignored while a real game is
+    loaded). Per game: the side holding it stays the same across a series
+    in 94% of pro games, even though the teams swap sides.">first pick
     <select id="first-pick">
       <option value="0">blue</option>
       <option value="1">red</option>
@@ -36,6 +38,31 @@
 </header>
 
 <div id="board-error" class="hidden"></div>
+
+<div id="series-bar">
+  <span class="sb-title" title="A series is a list of games that share one
+    fearless pool. Game 1 starts empty; each later game cannot pick any
+    champion picked in an earlier one.">Series</span>
+  <div id="series-games" class="series-games"></div>
+  <button id="series-add" title="add an empty game to the series">＋ game</button>
+  <button id="series-next" class="sb-next" title="close this game and open
+    the next one: every champion picked here becomes unavailable there. The
+    pool is defined exactly that way in the pro corpus (verified on all
+    10,021 fearless rows), and the first-pick side is kept because it stays
+    the same across a series in 94% of pro games.">next game in series ▶</button>
+  <span class="spacer"></span>
+  <span id="series-info" class="muted"></span>
+  <button id="series-clear" title="forget every game and the fearless pool">clear</button>
+</div>
+
+<div id="fearless-bar">
+  <span class="fb-title" title="Champions picked in an earlier game of this
+    series. They cannot be picked again, but they can still be banned - the
+    next-move model masks them on pick moves only.">Fearless</span>
+  <div class="strip fb-strip" id="fearless-strip"></div>
+  <button id="fearless-add" title="add a champion that is already gone">＋ fearless ban</button>
+  <span id="fearless-note" class="muted"></span>
+</div>
 
 <section id="nextmove" class="hidden">
   <div class="nm-head">
@@ -126,11 +153,14 @@
   best for it &mdash; and the model's target for every empty role (top-3
   from the role-conditioned masked queries). <b>Next move</b> (policy
   checkpoint): one ranked list for the side on the clock, plus ban
-  candidates ranked by how likely the opponent was to take them. Banned
-  &amp; picked champions are always excluded &middot; highlighted slot =
-  next move in a standard pro draft (highlight only, nothing enforced)
-  &middot; champion art from Riot's dDragon CDN (needs internet once)
-  &middot; local only
+  candidates ranked by how likely the opponent was to take them.
+  <b>Fearless</b> is an input to the next-move model and is masked on picks
+  only, so a champion picked in an earlier game can still be banned; the
+  role model has no such input, so there its answers are <i>filtered</i>,
+  not conditioned. Banned &amp; picked champions are always excluded
+  &middot; highlighted slot = next move in a standard pro draft (highlight
+  only, nothing enforced) &middot; champion art from Riot's dDragon CDN
+  (needs internet once) &middot; local only
 </footer>
 
 <div id="picker" class="hidden">
