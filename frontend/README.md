@@ -26,12 +26,17 @@ python frontend\server.py --port 8777     # http://127.0.0.1:8777
 ```
 
 Binds `127.0.0.1` only. `--ckpt <path>` pins the **role model** (default:
-`model/checkpoints/masking-proonly/best.pt`; if it is absent, the `best.pt`
-with the highest val champ-top5 under `model/checkpoints/*/`),
-`--policy-ckpt <path>` pins the **next-move model** (default:
-`model/checkpoints/nextpick-proonly/best.pt`), `--no-policy` skips it
-entirely, and `--device cuda` for GPU inference (CPU default keeps the GPU
-free).
+`model/checkpoints/masking-proonly-through-wlds-ig-tes/best.pt`; if it is
+absent, the `best.pt` with the highest val champ-top5 under
+`model/checkpoints/*/`), `--policy-ckpt <path>` pins the **next-move model**
+(default: `model/checkpoints/nextpick-proonly-through-wlds-ig-tes/best.pt`),
+`--no-policy` skips it entirely, and `--device cuda` for GPU inference (CPU
+default keeps the GPU free).
+
+Both defaults are the 2026-11-04 refresh (`-through-wlds-ig-tes`: all 46,879
+drafts, no test split). The `masking-proonly` / `nextpick-proonly` originals are
+still listed in the dropdown and are the only pair with a pinned-test score
+(`STATUS.md` §7); the refresh has none by construction.
 
 Through Docker, pass `--host 0.0.0.0` (a published port arrives on the
 container's `eth0`, not its loopback) — see `DOCKER.md` §"The frontend".

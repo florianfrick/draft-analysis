@@ -52,7 +52,7 @@ docker compose run --rm dev python model/finetune/train.py --no-wandb
 
 # evaluate a checkpoint under the eval protocol
 docker compose run --rm dev python model/policy/evaluate.py \
-    --ckpt model/checkpoints/nextpick-proonly/best.pt
+    --ckpt model/checkpoints/nextpick-proonly-through-wlds-ig-tes/best.pt
 ```
 
 `--rm` matters: without it every invocation leaves a stopped container behind.
