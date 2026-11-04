@@ -106,8 +106,10 @@ not.
 | file | what it is |
 |---|---|
 | `eval_test_split.py` | scans the CSV for the pinned series, loads every checkpoint, scores every state |
+| `eval_fearless_mask.py` | raw vs bans+picks-masked vs pool-masked top-5 on the four fearless games — what an output-only fearless mask buys |
 | `render_test_split.py` | formats the JSON into HTML + markdown; recomputes nothing but counts and Wilson intervals |
 | `reports/test_split.json` | every state, every model, every top-5 |
+| `reports/fearless_mask.json` | the three mask readings per slot, per masked model |
 | `REPORT_test_split_evaluation.html` | the report, colour-coded per step |
 | `REPORT_test_split_evaluation.md` | the same scoreboards in markdown |
 | `test_test_split.py` | the harness tests, including the split invariant and the registry/disk agreement |
@@ -116,6 +118,7 @@ not.
 
 ```bash
 docker compose run --rm -T dev python model/test_split/eval_test_split.py
+docker compose run --rm -T dev python model/test_split/eval_fearless_mask.py
 docker compose run --rm -T dev python model/test_split/render_test_split.py
 docker compose run --rm -T dev python -m pytest model/test_split/test_test_split.py -q
 ```

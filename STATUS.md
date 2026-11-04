@@ -402,10 +402,20 @@ frequency table with legality applied:
    `nextpick-proonly` 0.564 [0.48, 0.64] vs `nextpick-policy` 0.479 [0.40, 0.56].
    The intervals overlap in both pairs. Ranking them needs the 4,768-row
    validation split, not this.
-4. **The masked models still cannot express fearless** — 85 of 120 masked slots
-   on the four fearless games put an already-picked champion in their top-5. The
-   next-move models get `unavailable_mask` and break it zero times. Scope limit
-   of the masked task as trained, not a harness bug.
+4. **The masked models cannot *condition* on fearless — but an output mask is
+   enough for the role board.** Their raw top-5 puts a fearless-unavailable
+   champion in it on 85 of 120 slots (three models × four fearless games); the
+   next-move models get `unavailable_mask` as an input and break it zero times.
+   Set the pool to `-inf` and renormalise — which `frontend/server._top5` already
+   does — and the answer is legal by construction while the real pick stays in
+   the top-5 **0.95 / 0.875 / 0.625** of the time (`masking-proonly` /
+   `masking-finetune` / `masking-soloqueue`), against 0.475 for a role-frequency
+   prior. It cannot be worse than the unmasked answer: the real pick is never in
+   the pool and `-inf` does not reorder what remains, so the mask only removes
+   competitors. What it cannot do is recover information the model never had —
+   the pool still holds 11–19% of the probability mass before masking, and when
+   the model's first choice is in the pool its fallback is right 6/8, 2/6 and
+   0/8 (n too small to rank). `eval_fearless_mask.py` reproduces all of it.
 
 **Statistics discipline.** Seven games. One game is 14% of the sample and a 95%
 Wilson interval on a rate over seven games is ~35 points wide, so every rate in

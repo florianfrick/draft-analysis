@@ -172,10 +172,17 @@ back to G1 after starting G2 would show a board the server rejects.
 **Which models can use it.** The two `nextpick-*` models take the pool as
 `unavailable_mask` and mask it on **pick moves only**, so a champion picked in
 an earlier game is still legal to *ban* — the rule the pro corpus follows.
-The three `masking-*` models have no such input: the server drops those
-champions from their answers (`fearless_filtered` in `/api/suggest`) but the
-remaining ranking was computed as if they were available, so the bar says
-"role board filters them out only" whenever a pool is active.
+The three `masking-*` models have no such input, so the server masks their
+*output* instead: the pool is set to `-inf` and the softmax renormalised
+(`_top5`), which makes the answer legal by construction. That turns out to be
+enough for the role board — on the four fearless games of the test split the
+real pick is still in the masked top-5 0.95 / 0.875 / 0.625 of the time
+(`masking-proonly` / `masking-finetune` / `masking-soloqueue`), against 0.475
+for a role-frequency prior. It is not fearless *understanding*: the order of
+the legal champions is unchanged and the pool still holds 11–19% of the
+probability mass before masking, so the bar says "role board filters them out
+only" whenever a pool is active.
+`model/test_split/eval_fearless_mask.py` reproduces the numbers.
 
 **Real games seed it.** Loading a walkthrough game sets the pool from that
 game's own `unavailable`, so a G3 walkthrough starts with the 20 champions
