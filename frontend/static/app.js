@@ -13,11 +13,13 @@ let ROLE_MODEL = null, POLICY_MODEL = null;   // server-side model slots
 let WT = null;                             // walkthrough: {draft, step, ...}
 let SERIES = null;                         // {games:[slot], cur, fearless}
                                            // slot = {firstPick, picks, bans, done}
+let DRAFT_PLANS = null;                    // {0: [20 moves], 1: [...]} from /api/champions
 
 async function init() {
   const d = await (await fetch('/api/champions')).json();
   CHAMPIONS = d.champions;
   CHAMPIONS.forEach(c => { BY_IDX[c.idx] = c; BY_RIOT[c.riot] = c; });
+  DRAFT_PLANS = d.move_plan || null;
   setModels(d.model, d.policy_model);
   refreshCheckpoints();
   refreshDraftList();
@@ -144,23 +146,18 @@ function isPolicyModel() {
 }
 
 function nextTurn(firstPick) {
-  // Standard pro draft order (root README): bans1 B,R,B,R,B,R -
-  // picks1 B,R,R,B,B,R - bans2 R,B,R,B - picks2 R,B,B,R.
-  // Mirrored wholesale when red has first pick. Highlight only, never
-  // enforced - clicks on any slot always work.
-  const nb = [bans.blue.length, bans.red.length];
-  const np = [0, 1].map(t => picks.slice(t * 5, t * 5 + 5)
-    .filter(Boolean).length);
-  const M = s => (firstPick === 1 ? 1 - s : s);
-  if (nb[0] < 3 || nb[1] < 3)
-    return { kind: 'ban', side: M((nb[0] + nb[1]) % 2) };
-  if (np[0] < 3 || np[1] < 3)
-    return { kind: 'pick', side: M([0, 1, 1, 0, 0, 1][np[0] + np[1]]) };
-  if (nb[0] < 5 || nb[1] < 5)
-    return { kind: 'ban', side: M([1, 0, 1, 0][(nb[0] - 3) + (nb[1] - 3)]) };
-  if (np[0] < 5 || np[1] < 5)
-    return { kind: 'pick', side: M([1, 0, 0, 1][(np[0] - 3) + (np[1] - 3)]) };
-  return null;
+  // Whose move is it is a property of the BOARD, not of a model answer.
+  // /api/champions publishes the canonical 20-move order (built from
+  // infer.move_plan, which is checked against the pro-data pipeline);
+  // DraftOrder.nextTurn walks it from the front with the bans and picks the
+  // board has consumed - exactly what the server's resolve_position does.
+  // Keeping this synchronous is the point: /api/next-move is async, so its
+  // `state` describes an older board. Trusting it here made the highlight
+  // lag one move (blue banning twice at the start, a 4th ban slot showing
+  // up in ban phase 1). Highlight only, never enforced - any click works.
+  const nBans = bans.blue.length + bans.red.length;
+  const nPicks = picks.filter(Boolean).length;
+  return DraftOrder.nextTurn(DRAFT_PLANS, firstPick, nBans, nPicks);
 }
 
 function buildStrips(team) {
@@ -205,20 +202,22 @@ function buildStrips(team) {
 }
 
 function renderTurn() {
-  // The policy model answers "whose move is it" itself (and flags boards
-  // that do not fit the order), so trust its state when one is active.
-  const t = (isPolicyModel() && presp && presp.state && !presp.state.complete)
-    ? { kind: presp.state.kind, side: presp.state.side }
-    : nextTurn(currentFirstPick());
+  // Always derive the turn from the board. The next-move panel's `presp`
+  // arrives asynchronously and is deliberately NOT read here: while a step
+  // is being rendered it still describes the previous board.
+  const t = nextTurn(currentFirstPick());
   ['blue', 'red'].forEach(name => {
-    document.getElementById('turn-' + name).textContent = '';
+    const el = document.getElementById('turn-' + name);
+    el.textContent = '';
+    el.title = '';
   });
   document.querySelectorAll('.turn-target')
     .forEach(el => el.classList.remove('turn-target'));
   if (!t) return;
   const side = t.side === 0 ? 'blue' : 'red';
-  document.getElementById('turn-' + side).textContent =
-    t.kind === 'ban' ? '▶ to ban' : '▶ to pick';
+  const label = document.getElementById('turn-' + side);
+  label.textContent = t.kind === 'ban' ? '▶ to ban' : '▶ to pick';
+  label.title = t.warning || '';
   const strip = document.getElementById(
     (t.kind === 'ban' ? 'bans-' : 'slots-') + side);
   const empty = strip.querySelector('.empty');
@@ -732,12 +731,15 @@ async function runSuggest(sig) {
   if (policyP) {
     const p = await policyP;
     if (sig !== boardSig()) return;
-    if (p && !p.error) { presp = p; prespSig = sig; }
-    else {
+    if (p && !p.error) {
+      presp = p; prespSig = sig;
+      renderNextMove();
+    } else {
       presp = null; prespSig = null;
-      if (p) { boardError(p.error); renderNextMoveError(p.error); }
+      const msg = (p && p.error) || 'no suggestion returned';
+      boardError(msg);
+      renderNextMoveError(msg);   // do not overwrite with the busy state
     }
-    renderNextMove();
     renderExplain();       // hides itself if the board moved
   }
   renderCompare();
@@ -754,11 +756,21 @@ function boardError(msg) {
 
 function renderNextMove() {
   const box = document.getElementById('nextmove');
-  if (!isPolicyModel() || !presp || !presp.state) {
-    box.classList.add('hidden');
+  if (!isPolicyModel()) { box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  // Same freshness rule as the role board: an answer only describes the
+  // board it was computed for. Showing the previous board's "Blue to ban"
+  // beside a highlight that already moved on contradicts it, so blank the
+  // panel while the new answer is in flight.
+  const fresh = !!(presp && presp.state && prespSig === boardSig());
+  if (!fresh) {
+    document.getElementById('nm-turn').innerHTML = '<b>updating…</b>';
+    document.getElementById('nm-meta').textContent = '';
+    document.getElementById('nm-chips').innerHTML = '';
+    document.getElementById('nm-bans').classList.add('hidden');
+    document.getElementById('nm-warning').classList.add('hidden');
     return;
   }
-  box.classList.remove('hidden');
   const st = presp.state;
   const sideName = st.side === 0 ? 'Blue' : 'Red';
   document.getElementById('nm-turn').innerHTML = st.complete

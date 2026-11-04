@@ -250,6 +250,46 @@ def test_http_api(app):
         httpd.shutdown()
 
 
+# --- draft order + the next-move highlight ------------------------------
+
+def test_champions_endpoint_publishes_the_move_plan(app, httpd):
+    """The green highlight is computed on the client from /api/champions'
+    move_plan. It must be exactly infer.move_plan for both first-pick sides,
+    so the highlight can never disagree with the server's next-move state.
+    """
+    status, d = _get(httpd, "/api/champions")
+    assert status == 200
+    plan = d["move_plan"]
+    assert set(plan) == {"0", "1"}
+    for fp in (0, 1):
+        expected = [["ban" if kind == S.infer.MOVE_BAN else "pick", int(team)]
+                    for kind, team in S.infer.move_plan(fp)]
+        assert plan[str(fp)] == expected
+        kinds = [m[0] for m in plan[str(fp)]]
+        assert kinds == ["ban"] * 6 + ["pick"] * 6 \
+            + ["ban"] * 4 + ["pick"] * 4
+        # phase 1 starts with first pick, phase 2 with the other side
+        assert plan[str(fp)][0][1] == fp
+        assert plan[str(fp)][6][1] == fp
+        assert plan[str(fp)][12][1] == 1 - fp
+        assert plan[str(fp)][16][1] == 1 - fp
+
+
+def test_turn_highlight_is_board_derived():
+    """renderTurn must read the synchronous board-derived turn, never the
+    async policy answer: that answer belongs to the previous board, which
+    is what made the highlight lag one move.
+    """
+    src = (Path(__file__).resolve().parent / "static" / "app.js").read_text(
+        encoding="utf-8")
+    start = src.index("function renderTurn()")
+    end = src.find("\nfunction ", start + 1)
+    body = src[start:end if end > 0 else len(src)]
+    assert "presp.state" not in body, \
+        "renderTurn must not read the previous board's next-move state"
+    assert "nextTurn(currentFirstPick())" in body
+
+
 # --- finetune checkpoints + runtime model switching ---------------------
 
 FINETUNE_GLOB = str(S.ROOT / "model" / "checkpoints"

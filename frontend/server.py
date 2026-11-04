@@ -1028,9 +1028,22 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         if path == "/api/champions":
             masked, policy = APP.get("masked"), APP.get("policy")
+            # The green "next move" highlight is derived from this plan on the
+            # client, synchronously. It must not wait for /api/next-move: that
+            # answer describes the board it was requested for, so an answer in
+            # flight is always one board behind. infer.move_plan is the single
+            # source of truth (checked against pipeline.interleaved_moves in
+            # model/policy/test_infer.py), so publish it rather than copying
+            # the order into app.js.
+            move_plan = {
+                str(fp): [["ban" if kind == infer.MOVE_BAN else "pick", int(t)]
+                          for kind, t in infer.move_plan(fp)]
+                for fp in (0, 1)
+            }
             self._send(200, {
                 "champions": APP["champions"],
                 "roles": ROLE_ROWS,
+                "move_plan": move_plan,
                 "model": model_info(masked) if masked else None,
                 "policy_model": model_info(policy) if policy else None,
             })

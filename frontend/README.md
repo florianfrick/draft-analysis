@@ -142,7 +142,14 @@ are cached per path, so the header models and the page stay independent.
   draft (bans B,R,B,R,B,R → picks B,R,R,B,B,R → bans R,B,R,B → picks
   R,B,B,R; mirrored wholesale for a red first-pick) is outlined and the team
   header shows "▶ to ban"/"▶ to pick". Highlight only — nothing is enforced,
-  any slot can be filled any time.
+  any slot can be filled any time. The order comes from `GET /api/champions`'s
+  `move_plan` (built from `infer.move_plan`, checked against the pro-data
+  pipeline), and `draft-order.js` resolves the next turn **synchronously**
+  from the board's ban/pick counts. It never waits for `/api/next-move`: that
+  answer belongs to the board it was requested for, so reading it here used
+  to leave the highlight one move behind (blue banning twice at the start, a
+  fourth ban slot appearing in ban phase 1). The next-move panel blanks itself
+  while its answer is in flight for the same reason.
 
 ### Series and fearless
 
@@ -387,5 +394,7 @@ Three states matter:
 - Walkthrough data comes from the cached `data/pro play/pro_drafts.pt` (46.6k
   games, loaded lazily on first use).
 
-Tests: `python -m pytest frontend/test_server.py -q` (30) and
-`python -m pytest model/policy/test_infer.py -q` (20).
+Tests: `python -m pytest frontend/test_server.py -q` and
+`python -m pytest model/policy/test_infer.py -q`. The endpoint test pins the
+published `move_plan` to `infer.move_plan`, and a source-level guard keeps
+`renderTurn` board-derived rather than model-derived.

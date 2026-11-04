@@ -461,6 +461,18 @@ refused at load rather than failing later.
   `LLM_API_KEY` is not an error — the endpoint still returns the evidence.
   **Gap: prose quality is unvalidated.** Only the no-key path and a stub client
   have been exercised.
+- **Next-move highlight** — the green outline is a property of the board, not
+  of a model answer. `GET /api/champions` publishes `move_plan` (both first-pick
+  sides, from `infer.move_plan`, itself checked against
+  `pipeline.interleaved_moves`) and `draft-order.js` resolves the next turn
+  synchronously from the board's ban/pick counts, exactly as the server's
+  `resolve_position` does. It used to read `/api/next-move`'s `state`, which is
+  an async answer for the *previous* board: stepping a real draft showed the
+  same team banning twice at the start and a fourth ban slot in ban phase 1
+  after all six bans (the whole highlight was one move behind). The next-move
+  panel now blanks while its answer is in flight for the same reason.
+  `test_server.py` pins the published plan to `infer.move_plan` and guards
+  `renderTurn` against ever reading the async answer again.
 - **Breakdown** (`/breakdown.html`) — scores one pro game under every selected
   checkpoint, real move next to each model's top-5. Mirrors the test-split
   methodology (real patch id, exact role-keyed slots) rather than the UI's
@@ -600,7 +612,7 @@ those two must be separate invocations. `model/policy` must go in as a
 is first on `sys.path`, which is what `pytest model/policy/test_infer.py` does.
 Green today: `pytest model/policy model/proonly model/pretraining model/tests
 model/test_split` (127 passed, 1 skipped), `pytest model/finetune` (25),
-`pytest "data/pro play" frontend` (105). `soloq data
+`pytest "data/pro play" frontend` (111 passed). `soloq data
 analysis/explorer/test_explorer.py` is excluded: it opens an HTTP connection at
 import time and errors during collection when no server is running.
 
