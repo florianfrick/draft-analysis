@@ -80,7 +80,6 @@ CKPT_PATTERNS = (                 # what the dropdown offers (no torch.load)
 # the next pick.
 MASKED_DEFAULT = CKPT_DIR / "masking-proonly" / "best.pt"
 POLICY_DEFAULT = CKPT_DIR / "nextpick-proonly" / "best.pt"
-VALUE_GLOB = str(CKPT_DIR / "value-*" / "best.pt")
 UPLOAD_DIR = ROOT / "model" / "uploaded"
 MAX_UPLOAD_BYTES = 512 * 1024 * 1024      # generous; ckpts are 20-150 MB
 LOAD_LOCK = threading.Lock()              # serialize runtime model swaps
@@ -100,7 +99,7 @@ from model.pretraining.soloq_model import (SoloQPretrainedModel,  # noqa: E402
                                            ROLE_FLEX_ID, NUM_ROLES,
                                            load_encoder_state,
                                            attr_matrix_for_config)
-from model.policy import infer  # noqa: E402  (next-move + ban ranking)
+from model.policy import infer  # noqa: E402  (next-move policy)
 import llm  # noqa: E402  (frontend/llm.py: retrieval + grounded explanation)
 
 ROLE_ROWS = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"]
@@ -484,14 +483,6 @@ def find_best_ckpt():
     return Path(best_path), float(best_score[0])
 
 
-def find_value_ckpt():
-    """Newest value checkpoint, or None (the frontend works without one)."""
-    hits = sorted(glob.glob(VALUE_GLOB))
-    if not hits:
-        return None
-    return Path(max(hits, key=lambda p: Path(p).stat().st_mtime))
-
-
 def peek_kind(payload):
     """Which family a payload belongs to, from its state-dict key names."""
     state = payload.get("model") or {}
@@ -790,8 +781,6 @@ def model_info(pred):
             "metric": getattr(pred, "metric", "champ top5")}
     if getattr(pred, "stage", None) is not None:
         info["stage"] = pred.stage
-    if getattr(pred, "value_path", None):
-        info["value_ckpt"] = _rel(pred.value_path)
     return info
 
 
@@ -879,30 +868,28 @@ def list_checkpoints():
     return out
 
 
-_MODEL_CACHE = {}                      # (path, device, value_path) -> predictor
+_MODEL_CACHE = {}                      # (path, device) -> predictor
 
 
-def make_predictor(path, device=None, value_path=None):
+def make_predictor(path, device=None):
     """Build (or fetch a cached) predictor for a checkpoint path.
 
     One file can hold three different model families, so the payload is
     read once here and dispatched: a policy checkpoint becomes a
-    `PolicyPredictor` (next-move + ban ranking), everything else stays a
-    masked `Predictor`. The result is cached per (path, device,
-    value_path) so the breakdown endpoint can score several models without
-    reloading the same multi-hundred-MB weights repeatedly.
+    `PolicyPredictor`, everything else stays a masked `Predictor`. The
+    result is cached per (path, device) so the breakdown endpoint can
+    score several models without reloading the same multi-hundred-MB
+    weights repeatedly.
     """
     device = device or APP.get("device", "cpu")
-    vp = value_path if value_path is not None else APP.get("value_path")
-    key = (str(path), str(device), str(vp))
+    key = (str(path), str(device))
     cached = _MODEL_CACHE.get(key)
     if cached is not None:
         return cached
     payload = torch.load(str(path), map_location="cpu")
     kind = peek_kind(payload)
     if kind == "policy":
-        pred = infer.PolicyPredictor(
-            path, device=device, payload=payload, value_path=vp)
+        pred = infer.PolicyPredictor(path, device=device, payload=payload)
     else:
         pred = Predictor(path, device=device, payload=payload)
     # The patch vocabulary is stored at the checkpoint top level (both
@@ -1005,7 +992,7 @@ def get_draft(i):
     return out
 
 
-APP = {}  # main(): mapping, names_by_idx, champions, device, value_path,
+APP = {}  # main(): mapping, names_by_idx, champions, device,
           #        masked (role model), policy (next-move model)
 
 
@@ -1040,10 +1027,20 @@ class Handler(BaseHTTPRequestHandler):
                           for kind, t in infer.move_plan(fp)]
                 for fp in (0, 1)
             }
+            # Patch conditioning belongs to the loaded policy checkpoint, so
+            # its vocabulary ships with the same payload that says which
+            # models are live. A checkpoint with no patch table publishes an
+            # empty list and the UI disables the selector instead of
+            # pretending the choice does something.
+            patches = policy.patch_options() if policy else []
             self._send(200, {
                 "champions": APP["champions"],
                 "roles": ROLE_ROWS,
                 "move_plan": move_plan,
+                "patches": patches,
+                "default_patch": infer.DEFAULT_PATCH,
+                "default_patch_id": (policy.default_patch_id() if policy
+                                     else infer.PATCH_UNK_ID),
                 "model": model_info(masked) if masked else None,
                 "policy_model": model_info(policy) if policy else None,
             })
@@ -1165,14 +1162,20 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, out)
 
     def _handle_next_move(self):
-        """POST {picks, bans, first_pick, fearless, rollout} -> next move + bans.
+        """POST {picks, bans, first_pick, fearless, patch_id} -> next move.
 
         `picks` is the UI's 10-slot pick-order board (riot ids or null),
-        `bans` the flat ban list, and `fearless` the champions picked in
-        earlier games of the same series. The board is mapped to indices
-        here and handed to infer.PolicyPredictor; every champion index it
-        returns is translated back to a name so the client never needs the
-        mapping.
+        `bans` the flat ban list, `fearless` the champions picked in
+        earlier games of the same series, and `patch_id` a row of the
+        loaded checkpoint's patch vocabulary (omitted -> the default
+        patch, usually 16.20). The board is mapped to indices here and
+        handed to infer.PolicyPredictor; every champion index it returns is
+        translated back to a name so the client never needs the mapping.
+
+        One answer per board: the ranked list for the side on the clock.
+        There is no separate ban ranking - a pro-like ban is the denial
+        decision, and the rollout that used to approximate it was removed
+        (STATUS.md §5/§8).
         """
         try:
             payload = self._read_json()
@@ -1189,59 +1192,41 @@ class Handler(BaseHTTPRequestHandler):
             picks_idx = [None if p is None else mapping[p] for p in picks]
             bans_idx = [mapping[b] for b in bans]
             unavail_idx = [mapping[f] for f in fearless]
+            pid = payload.get("patch_id")
+            pid = pred.default_patch_id() if pid is None else pid
             res = pred.next_move(picks_idx, bans_idx, first_pick=first_pick,
                                  k=int(payload.get("k", 8)),
-                                 unavailable=unavail_idx)
+                                 unavailable=unavail_idx, patch_id=pid)
         except (ValueError, KeyError, TypeError, IndexError,
                 json.JSONDecodeError) as exc:
             self._send(400, {"error": str(exc)})
             return
 
-        out = {
+        self._send(200, {
             "model": model_info(pred),
             "state": {k: res[k] for k in ("move_idx", "kind", "side", "phase",
                                           "first_pick", "warning", "complete",
                                           "n_unavailable")},
+            # what the model actually conditioned on (an unknown or
+            # out-of-range request is reported as the UNK row it fell back to)
+            "patch_id": res["patch_id"],
+            "patch": pred.patch_key_for(res["patch_id"]),
             "suggestions": [{"idx": c["idx"], "prob": c["prob"],
                              "name": names[c["idx"]]}
                             for c in res["suggestions"]],
             "roles": res["roles"],
-            "bans": None,
-        }
-        if res["kind"] == "ban" and payload.get("rollout", True):
-            try:
-                bans_res = pred.ban_candidates(
-                    picks_idx, bans_idx, first_pick=first_pick,
-                    k=int(payload.get("ban_k", 4)),
-                    unavailable=unavail_idx)
-            except Exception as exc:  # noqa: BLE001 - panel is optional
-                bans_res = None
-                out["bans_error"] = "ban ranking failed: %s" % exc
-            if bans_res:
-                out["bans"] = {
-                    "side": bans_res["side"],
-                    "opponent": bans_res["opponent"],
-                    "ranked_by": bans_res["ranked_by"],
-                    "win_prob_available": bans_res["win_prob_available"],
-                    "opponent_picks": [
-                        {"idx": c["idx"], "name": names[c["idx"]],
-                         "prob": c["prob"]}
-                        for c in bans_res["opponent_picks"]],
-                    "candidates": [
-                        {"idx": c["idx"], "name": names[c["idx"]],
-                         "denial": c["denial"], "win_prob": c["win_prob"],
-                         "rank": c["rank"]}
-                        for c in bans_res["candidates"]],
-                }
-        self._send(200, out)
+        })
 
     def _handle_explain(self):
-        """POST {picks, bans, first_pick, k, k_games, patch, force} ->
-        top-k, retrieved evidence, and prose when an LLM key is configured.
+        """POST {picks, bans, first_pick, patch_id, k, k_games, patch, force}
+        -> top-k, retrieved evidence, and prose when an LLM key is configured.
 
-        Without a key this still returns the evidence. That ordering is
-        deliberate: the retrieval is the part that has to be right either
-        way, and it is the part a coach can use on its own.
+        `patch_id` conditions the model exactly as /api/next-move does;
+        `patch` overrides only which patch NOTES are quoted (default: the
+        selected patch, else the newest in the corpus). Without a key this
+        still returns the evidence. That ordering is deliberate: the
+        retrieval is the part that has to be right either way, and it is the
+        part a coach can use on its own.
         """
         try:
             payload = self._read_json()
@@ -1256,8 +1241,10 @@ class Handler(BaseHTTPRequestHandler):
             first_pick = 1 if int(payload.get("first_pick", 0)) else 0
             picks_idx = [None if p is None else mapping[p] for p in picks]
             bans_idx = [mapping[b] for b in bans]
+            pid = payload.get("patch_id")
+            pid = pred.default_patch_id() if pid is None else pid
             res = pred.next_move(picks_idx, bans_idx, first_pick=first_pick,
-                                 k=int(payload.get("k", 5)))
+                                 k=int(payload.get("k", 5)), patch_id=pid)
             index = pro_index()
         except (ValueError, KeyError, TypeError, IndexError,
                 json.JSONDecodeError) as exc:
@@ -1272,7 +1259,12 @@ class Handler(BaseHTTPRequestHandler):
             "side": "blue" if int(res["side"]) == 0 else "red",
             "first_pick": first_pick,
             "first_pick_side": "red" if first_pick else "blue",
-            "patch": payload.get("patch") or index.latest_patch,
+            # The patch selector is the default for the notes too, so the
+            # prose talks about the patch the model was actually
+            # conditioned on. An explicit `patch` in the body still wins.
+            "patch": (payload.get("patch")
+                      or pred.patch_key_for(res["patch_id"])
+                      or index.latest_patch),
             "bans": [names[i] for i in bans_idx],
             "blue": [names[i] for i in picks_idx[:5] if i is not None],
             "red": [names[i] for i in picks_idx[5:] if i is not None],
@@ -1418,15 +1410,10 @@ def main():
                          "(default: model/checkpoints/nextpick-proonly/best.pt)")
     ap.add_argument("--no-policy", action="store_true",
                     help="run the role board only, without a next-move model")
-    ap.add_argument("--value", default="",
-                    help="prefix value checkpoint used to score simulated "
-                         "drafts in the ban panel (default: newest under "
-                         "model/checkpoints/value-*/best.pt, usually absent)")
     args = ap.parse_args()
 
     mapping, names_by_idx, champions = load_champ_data()
-    value_path = args.value or str(find_value_ckpt() or "")
-    APP.update(device=args.device, value_path=value_path or None)
+    APP.update(device=args.device)
 
     # Slot 1 - the role model (masked): role board + per-role targets.
     if args.ckpt:
@@ -1450,8 +1437,6 @@ def main():
     if policy_ckpt is not None:
         policy = load_predictor(policy_ckpt, device=args.device, role="policy")
         print("next-move:    %s (%s)" % (policy_ckpt, policy.kind))
-        if getattr(policy, "value_path", None):
-            print("value:        %s" % policy.value_path)
     else:
         print("next-move:    (none - role board only)")
     APP.update(mapping=mapping, names_by_idx=names_by_idx, champions=champions)

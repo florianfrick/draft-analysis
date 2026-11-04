@@ -1,47 +1,51 @@
-"""Inference API for the next-move policy, plus optional value scoring.
+"""Inference API for the next-move policy.
 
 Board in, recommendation out. No CLI, no dataset import, no training code:
 `frontend/server.py` imports this, and it is the only path that serves the
-policy. The offline statistics (bootstrap CIs, paired tests, regret) lived in
-`ban_propose.py`, which was removed on 2026-11-03 along with the rest of the
-ban-analysis thread; STATUS.md §5 keeps its conclusions.
+policy. The offline ban-search statistics (bootstrap CIs, paired tests,
+regret) lived in `ban_propose.py`, removed on 2026-11-03 with the rest of the
+ban-analysis thread; `STATUS.md` §5 keeps its conclusions. The rollout-based
+`ban_candidates` was removed on 2026-11-04: a pro-like ban already encodes
+denial, so greedy self-play on top of a value head that measures nothing only
+compounds model error.
 
 Three pieces:
 
     move_plan(first_pick)     the canonical 20-move order
     resolve_position(...)     how far along a hand-built board is
-    PolicyPredictor           next-move distribution + ban ranking
+    PolicyPredictor           the next-move distribution
 
 Board convention (the UI's, not the dataset's)
 ----------------------------------------------
 `picks` is a 10-slot list - blue 0-4, red 5-9, in PICK ORDER, None = empty.
 `bans` is the list of champions banned so far, any order. The slot index
 within a team carries no meaning to the model: the encoder has no
-positional embedding and both the policy and the value pool each team with
-a permutation-invariant reduction, so only the (champion, role) pair is
+positional embedding and the policy pools each team with a
+permutation-invariant reduction, so only the (champion, role) pair is
 reconstructed. Roles are not part of the UI board, so they are *inferred*
 once per state from the encoder's role head (the same FLEX-role query the
 masked frontend uses) and then fed back in.
 
 `unavailable` is the fearless pool: champions picked in earlier games of
-the same series. It reaches the model as `unavailable_mask` and is masked
-on PICK moves only - a fearless champion is still legal to ban, which is
-what the pro corpus does (`data/pro play/pipeline.py:attach_fearless`).
+the same series. The BOARD keeps it separate from `taken` so a board that
+already bans one of them still loads: 8 of 100,210 ban moves in fearless
+corpus rows do exactly that (technically legal, never sensible). But
+serving folds the pool into `taken_mask`, so no suggestion - pick OR ban -
+can ever name a fearless champion. Training keeps the looser rule, because
+masking those 8 targets out of the cross-entropy would dominate the loss.
 This is a policy-only input; the masked models have no equivalent.
 
-Why this can differ from the offline proposer
----------------------------------------------
-The offline proposer (deleted with the ban thread) simulated future picks
-with the roles recorded in the pro row, i.e. it was told which role each
-future pick would fill. A UI board has no such label, so the rollout here
-infers the role of each simulated pick from the champion. That is a strictly
-harder task, and it is why the
-numbers this produces are a UI estimate, not a reproduction of the offline
-result.
+Patch conditioning
+------------------
+`patch_id` is a row in the checkpoint's OWN patch vocabulary, not a patch
+string. `GET /api/champions` publishes that vocabulary; the UI sends the
+selected id on `/api/next-move` and `/api/explain`. Unknown or out-of-range
+ids - and every id on a checkpoint with no patch table - fall back to
+`PATCH_UNK_ID`. Breakdown scoring is the exception: it uses each real pro
+game's own patch, not the UI's selection.
 """
 from __future__ import annotations
 
-import importlib.util
 import sys
 from pathlib import Path
 
@@ -67,6 +71,7 @@ MOVE_BAN, MOVE_PICK = 0, 1
 PHASE_OF = [0] * 6 + [1] * 6 + [2] * 4 + [3] * 4
 PHASE_NAMES = {0: "bans1", 1: "picks1", 2: "bans2", 3: "picks2"}
 PATCH_UNK_ID = 0            # index 0 of the patch vocab is reserved for UNK
+DEFAULT_PATCH = "16.20"     # the patch the frozen corpus ends on
 
 
 def move_plan(first_pick):
@@ -146,12 +151,13 @@ def build_board(picks, bans, num_champs, first_pick=0, device="cpu",
     order). bans: champion indices banned so far, any order. `unavailable`:
     champions picked in *earlier games of a fearless series*.
 
-    `unavailable` is deliberately not folded into `taken`: it is illegal to
-    PICK one of those champions but legal to BAN one (teams routinely ban
-    what the opponent picked last game), and `PolicyValueModel` masks it on
-    pick moves only. A champion that is both banned and unavailable this
-    game is therefore a legal board, while one that is both *picked* and
-    unavailable is not.
+    `unavailable` stays its own mask rather than being folded into `taken`
+    here, so that a board which already banned one of those champions still
+    loads - the corpus contains 8 such rows and the UI must not 400 on them.
+    It is folded into `taken_mask` at the inference boundary
+    (`_policy_batch`), where the pool becomes unconditionally illegal to
+    suggest. A champion both *picked* and unavailable THIS game is still
+    rejected.
     """
     if len(picks) != N_SLOTS:
         raise ValueError("picks must have 10 entries")
@@ -195,19 +201,16 @@ def build_board(picks, bans, num_champs, first_pick=0, device="cpu",
     return board
 
 
-def repeat_board(board, n):
-    """Batch n copies (same board) - used to score candidate arms together."""
-    out = dict(board)
-    for key in ("champ_ids", "role_ids", "pad_mask", "ban_ids", "taken",
-                "unavailable"):
-        out[key] = board[key].repeat(n, *([1] * (board[key].dim() - 1)))
-    out["n_bans"] = board["n_bans"].repeat(n)
-    out["n_picks"] = board["n_picks"].repeat(n, 1)
-    return out
+def _policy_batch(board, move_idx, kind, team, patch_id=PATCH_UNK_ID):
+    """Tensors PolicyValueModel.forward expects, for one move index.
 
-
-def _policy_batch(board, move_idx, kind, team):
-    """Tensors PolicyValueModel.forward expects, for one move index."""
+    `taken_mask` is `taken | unavailable` on purpose: the UI must never
+    offer a fearless champion, on a pick OR a ban. Keeping the two apart
+    in the board is what lets a technically-legal board load; folding them
+    HERE is what makes the suggestion safe. `PolicyValueModel`'s own
+    `_apply_legality` keeps the looser TRAINING rule - see the module
+    docstring for the 8 corpus rows that require it.
+    """
     B = board["champ_ids"].shape[0]
     dev = board["champ_ids"].device
 
@@ -219,56 +222,39 @@ def _policy_batch(board, move_idx, kind, team):
         "role_ids": board["role_ids"],
         "pad_mask": board["pad_mask"],
         "ban_ids": board["ban_ids"],
-        "taken_mask": board["taken"],
+        "taken_mask": board["taken"] | board["unavailable"],
         "unavailable_mask": board["unavailable"],
         "move_idx": full(move_idx),
         "phase": full(PHASE_OF[int(move_idx)]),
         "to_move": full(team),
         "first_pick": full(board["first_pick"]),
         "is_ban": full(1 if kind == MOVE_BAN else 0),
-        "patch_id": full(PATCH_UNK_ID),
+        "patch_id": full(int(patch_id)),
     }
 
 
 # ------------------------------------------------------------------- models
-def _load_by_path(name, path):
-    spec = importlib.util.spec_from_file_location(name, str(path))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-# `from model import X` resolves to policy/model.py here, so the finetune
-# models are loaded under a private module name. Imported lazily: the
-# frontend must work with no value checkpoint present.
-_FIN_MODEL = None
-
-
-def finetune_model_module():
-    global _FIN_MODEL
-    if _FIN_MODEL is None:
-        _FIN_MODEL = _load_by_path("finetune_model",
-                                   MODEL_DIR / "finetune" / "model.py")
-    return _FIN_MODEL
-
-
 def load_policy_model(path, device="cpu", payload=None):
     """Policy checkpoint -> (PolicyValueModel in eval mode, config).
 
     `payload` lets a caller that already loaded the file (the frontend has
     to peek at the state dict to tell the model families apart) avoid
-    reading a 400MB checkpoint twice.
+    reading a 400MB checkpoint twice. `patch_vocab` is copied into the
+    returned config when it only exists at the checkpoint top level, so
+    the predictor can resolve patch ids without a second torch.load.
     """
     blob = payload if payload is not None else torch.load(
         str(path), map_location="cpu", weights_only=False)
-    cfg = blob["config"]
+    cfg = dict(blob["config"])
+    if not cfg.get("patch_vocab"):
+        cfg["patch_vocab"] = blob.get("patch_vocab") or []
     enc = SoloQPretrainedModel(
         num_champs=cfg["num_champs"], embed_dim=cfg["embed_dim"],
         num_heads=cfg["num_heads"], num_intra_layers=cfg["num_intra"],
         num_cross_layers=cfg["num_cross"], dropout=cfg.get("dropout", 0.0),
-        # Patch-conditioned checkpoints (the pro-only `*-patch-*` runs) carry
-        # `encoder.embed.patch_lookup.*`; the encoder must be built with the
-        # same `n_patches` or load_state_dict reports it as unexpected.
+        # Patch-conditioned checkpoints carry `encoder.embed.patch_lookup.*`;
+        # the encoder must be built with the same `n_patches` or
+        # load_state_dict reports it as unexpected.
         n_patches=cfg.get("n_patches", 0),
         attr_matrix=attr_matrix_for_config(cfg))
     # `with_value` is not recorded by every training entry point (the
@@ -292,41 +278,17 @@ def load_policy_model(path, device="cpu", payload=None):
     return model, cfg
 
 
-def load_value_model(path, device="cpu"):
-    """PrefixValueModel checkpoint -> (model in eval mode, config)."""
-    blob = torch.load(str(path), map_location="cpu", weights_only=False)
-    cfg = blob["config"]
-    enc = SoloQPretrainedModel(
-        num_champs=cfg["num_champs"], embed_dim=cfg["embed_dim"],
-        num_heads=cfg["num_heads"], num_intra_layers=cfg["num_intra"],
-        num_cross_layers=cfg["num_cross"], dropout=cfg.get("dropout", 0.0),
-        with_value=True, value_seeds=cfg.get("value_seeds", 4),
-        attr_matrix=attr_matrix_for_config(cfg))
-    model = finetune_model_module().PrefixValueModel(
-        enc, ban_heads=cfg["ban_heads"], ban_seeds=cfg["ban_seeds"],
-        ban_dropout=cfg["ban_dropout"], use_bans=cfg["use_bans"])
-    missing, unexpected = model.load_state_dict(blob["model"], strict=False)
-    if missing or unexpected:
-        raise RuntimeError("value ckpt mismatch: %s / %s"
-                           % (list(missing)[:4], list(unexpected)[:4]))
-    model.eval()
-    model.to(device)
-    return model, cfg
-
-
 # ---------------------------------------------------------------- predictor
 class PolicyPredictor:
     """Next-move recommendations from a policy checkpoint.
 
-    Two entry points:
-      next_move(...)      what the side to move should take
-      ban_candidates(...) what to ban, by simulating the draft after each
-                          candidate and asking who the opponent would take
+    One entry point: `next_move(...)` returns the policy's distribution for
+    the move the board is actually on, ban or pick.
     """
 
     kind = "policy"
 
-    def __init__(self, ckpt_path, device="cpu", value_path=None, payload=None):
+    def __init__(self, ckpt_path, device="cpu", payload=None):
         self.device = torch.device(device)
         self.model, self.cfg = load_policy_model(ckpt_path, self.device,
                                                  payload=payload)
@@ -337,16 +299,45 @@ class PolicyPredictor:
         top5 = metrics.get("top5")
         self.val_top5 = float(top5) if top5 is not None else None
         self.epoch = metrics.get("epoch")
-        self.value = None
-        if value_path:
-            try:
-                self.value, _ = load_value_model(value_path, self.device)
-                self.value_path = str(value_path)
-            except Exception as exc:     # noqa: BLE001 - optional component
-                print("value model unavailable (%s): %s" % (value_path, exc))
-                self.value_path = None
-        else:
-            self.value_path = None
+        self.n_patches = int(self.cfg.get("n_patches", 0))
+        self.patch_vocab = list(self.cfg.get("patch_vocab") or [])
+
+    def patch_id_for(self, patch_id):
+        """Client-supplied patch id -> a row this checkpoint actually has.
+
+        Anything malformed, out of range, or on a checkpoint without a
+        patch table (`n_patches == 0`) becomes UNK rather than an embedding
+        lookup error.
+        """
+        try:
+            pid = int(patch_id)
+        except (TypeError, ValueError):
+            return PATCH_UNK_ID
+        if not 0 <= pid < self.n_patches:
+            return PATCH_UNK_ID
+        return pid
+
+    def patch_key_for(self, patch_id):
+        """The patch label for a resolved id, or None for UNK."""
+        pid = self.patch_id_for(patch_id)
+        if pid <= 0 or pid - 1 >= len(self.patch_vocab):
+            return None
+        return str(self.patch_vocab[pid - 1])
+
+    def patch_options(self):
+        """[{id, key}] for the UI selector, newest patch first."""
+        out = [{"id": i + 1, "key": str(k)}
+               for i, k in enumerate(self.patch_vocab)]
+        out.reverse()
+        return out
+
+    def default_patch_id(self):
+        """Id of `DEFAULT_PATCH`, else the newest known patch, else UNK."""
+        opts = self.patch_options()
+        for o in opts:
+            if o["key"] == DEFAULT_PATCH:
+                return o["id"]
+        return opts[0]["id"] if opts else PATCH_UNK_ID
 
     # -- internals ----------------------------------------------------
     @torch.no_grad()
@@ -371,55 +362,6 @@ class PolicyPredictor:
                                         torch.full_like(best, ROLE_FLEX_ID))
         return probs
 
-    def _place(self, board, team, kind, champs):
-        """Write the chosen champions into the board and update legality."""
-        idx = torch.arange(board["champ_ids"].shape[0], device=self.device)
-        if kind == MOVE_BAN:
-            pos = board["n_bans"].clamp(max=BAN_SLOTS - 1)
-            board["ban_ids"][idx, pos] = champs
-            board["n_bans"] = (board["n_bans"] + 1).clamp(max=BAN_SLOTS)
-        else:
-            slot = (team * TEAM_SIZE + board["n_picks"][:, team]).clamp(
-                max=team * TEAM_SIZE + TEAM_SIZE - 1)
-            board["champ_ids"][idx, slot] = champs
-            board["pad_mask"][idx, slot] = False
-            board["role_ids"][idx, slot] = ROLE_FLEX_ID
-            board["n_picks"][:, team] += 1
-        board["taken"][idx, champs] = True
-
-    @torch.no_grad()
-    def _rollout(self, board, move_idx, forced=None, watch=None):
-        """Play moves move_idx..19 with the policy on both sides.
-
-        `forced` overrides the champion at the first move (the ban under
-        evaluation). `watch=(kind, team)` captures that side's first
-        matching move distribution - used to read "what would they pick".
-        """
-        plan = move_plan(board["first_pick"])
-        seen = None
-        for t in range(int(move_idx), N_MOVES):
-            kind, team = plan[t]
-            logits = self.model(_policy_batch(board, t, kind, team))[
-                "policy_logits"]
-            champs = forced if (t == move_idx and forced is not None) \
-                else logits.argmax(dim=1)
-            if watch is not None and seen is None and (kind, team) == watch:
-                seen = torch.softmax(logits.float(), dim=1)
-            self._place(board, team, kind, champs)
-            if kind == MOVE_PICK:
-                self._fill_roles(board)
-        return board, seen
-
-    def _win_prob(self, board):
-        """P(blue wins) for a finished board, or None without a value model."""
-        if self.value is None:
-            return None
-        batch = {k: board[k] for k in ("champ_ids", "role_ids", "pad_mask",
-                                       "ban_ids")}
-        with torch.no_grad():
-            logit = self.value(batch, with_bans=False)["win_logit"]
-        return torch.sigmoid(logit.float().squeeze(-1))
-
     def _roles_json(self, probs, board):
         """Per-slot role distribution, same shape as the masked frontend.
 
@@ -439,14 +381,19 @@ class PolicyPredictor:
 
     # -- public -------------------------------------------------------
     @torch.no_grad()
-    def next_move(self, picks, bans, first_pick=0, k=8, unavailable=None):
+    def next_move(self, picks, bans, first_pick=0, k=8, unavailable=None,
+                  patch_id=PATCH_UNK_ID):
         """Top-k champions for the move that is next, plus the state.
 
         `unavailable` is the fearless pool (champions picked in earlier
-        games of the series). It is fed as `unavailable_mask`, which the
-        model masks on pick moves only - so on a ban the returned top-k may
-        still contain them, exactly as the real draft allows.
+        games of the series); it is folded into the legality mask on BOTH
+        move kinds, so it can never appear among the suggestions. The
+        board itself still accepts one as an already-placed ban.
+
+        `patch_id` selects a row of this checkpoint's patch embedding;
+        `patch_id_for` clamps anything it cannot resolve to UNK.
         """
+        pid = self.patch_id_for(patch_id)
         board = build_board(picks, bans, self.num_champs, first_pick,
                             self.device, unavailable=unavailable)
         n_unavail = int(board["unavailable"][0].sum())
@@ -463,11 +410,11 @@ class PolicyPredictor:
                     "first_pick": int(first_pick), "roles": None,
                     "suggestions": [], "move_idx": N_MOVES,
                     "kind": None, "side": None, "phase": None,
-                    "n_unavailable": n_unavail}
+                    "patch_id": pid, "n_unavailable": n_unavail}
         probs = self._fill_roles(board)
         kind, team = move_plan(first_pick)[move_idx]
-        logits = self.model(_policy_batch(board, move_idx, kind, team))[
-            "policy_logits"][0]
+        logits = self.model(_policy_batch(board, move_idx, kind, team,
+                                          patch_id=pid))["policy_logits"][0]
         p = torch.softmax(logits.float(), dim=-1)
         top = p.topk(min(k, self.num_champs))
         suggestions = [{"idx": int(i), "prob": float(v)}
@@ -483,90 +430,6 @@ class PolicyPredictor:
             "warning": "; ".join(warnings) or None,
             "suggestions": suggestions,
             "roles": self._roles_json(probs, board),
+            "patch_id": pid,
             "n_unavailable": n_unavail,
-        }
-
-    @torch.no_grad()
-    def ban_candidates(self, picks, bans, first_pick=0, k=4, top_picks=3,
-                       unavailable=None):
-        """Rank ban candidates by how likely the opponent was to take them.
-
-        The reference rollout lets the policy play the current ban itself,
-        then records the opponent's first pick. Each shortlisted candidate
-        is then banned for real and the draft is played out, so the win
-        probabilities are for genuinely different finished drafts (the
-        regime the value function was trained on) rather than different
-        bans on one unchanged board, where it is structurally flat.
-
-        The rollout carries the fearless pool through every simulated pick,
-        so a candidate ban cannot be "answered" with a champion that is
-        unavailable this game.
-
-        Returns None when the next move is not a ban.
-        """
-        board = build_board(picks, bans, self.num_champs, first_pick,
-                            self.device, unavailable=unavailable)
-        n_picks = int((~board["pad_mask"][0]).sum())
-        move_idx, _lb, _lp = resolve_position(
-            int(board["n_bans"][0]), n_picks, first_pick)
-        plan = move_plan(first_pick)
-        if move_idx >= N_MOVES or plan[move_idx][0] != MOVE_BAN:
-            return None
-        my_team = plan[move_idx][1]
-        opp = 1 - my_team
-        self._fill_roles(board)
-
-        # 1. reference: the policy bans its own choice, we watch their pick
-        ref = repeat_board(board, 1)
-        _ref, seen = self._rollout(ref, move_idx, watch=(MOVE_PICK, opp))
-        if seen is None:
-            return None
-        ref_probs = seen[0]
-
-        # 2. shortlist = the champions they were most likely to take
-        taken = board["taken"][0]
-        order = torch.argsort(ref_probs, descending=True)
-        short = [int(c) for c in order[:k + 8]
-                 if not bool(taken[int(c)]) and int(c) < self.num_champs][:k]
-        if not short:
-            return None
-
-        # 3. ban each candidate for real, finish the draft
-        arms = repeat_board(board, len(short))
-        sims, _ = self._rollout(arms, move_idx,
-                                forced=torch.tensor(short, device=self.device))
-        win = self._win_prob(sims)
-        if win is not None:
-            # report the acting side's win probability, not blue's
-            win = win if my_team == 0 else 1.0 - win
-
-        opp_top = []
-        for c in order[:top_picks + 4]:
-            c = int(c)
-            if taken[c] or c >= self.num_champs:
-                continue
-            opp_top.append({"idx": c, "prob": float(ref_probs[c])})
-            if len(opp_top) == top_picks:
-                break
-
-        cands = []
-        for j, champ in enumerate(short):
-            cands.append({
-                "idx": int(champ),
-                "denial": float(ref_probs[champ]),
-                "win_prob": (float(win[j]) if win is not None else None),
-            })
-        cands.sort(key=lambda c: (-c["denial"],
-                                  -(c["win_prob"] if c["win_prob"] is not None
-                                    else 0.0)))
-        for rank, c in enumerate(cands, 1):
-            c["rank"] = rank
-        return {
-            "move_idx": int(move_idx),
-            "side": int(my_team),
-            "opponent": int(opp),
-            "opponent_picks": opp_top,
-            "candidates": cands,
-            "ranked_by": "denial",
-            "win_prob_available": win is not None,
         }

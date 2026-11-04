@@ -20,9 +20,14 @@ state (move index, phase, side to move, first-pick side) via:
      without it the first ban of a game is unlearnable.
 
 Policy head output: [B, C] logits for the next move (champion id).
-Legality is enforced by setting logits of taken/banned/unavailable
-champions to -inf (the taken_mask from the dataset unions bans+picks;
-unavailable_mask adds fearless-picked champs).
+Legality is enforced by setting logits of taken/fearless champions to
+-inf (the taken_mask from the dataset unions bans+picks; unavailable_mask
+adds fearless-picked champs). This is the TRAINING contract: fearless
+champions stay bannable because 8 corpus rows ban one, and masking a
+training target out of the cross-entropy would dominate the loss. The
+serving path (`model/policy/infer.py:_policy_batch`) folds the fearless
+pool into `taken_mask` too, so the UI never suggests one on a pick OR a
+ban. Do not "simplify" the split below without handling those rows.
 
 Value head output: [B, 1] win logit for the side to move (or blue-win
 logit — configurable). Default: blue-win logit (matches finetune).
@@ -235,13 +240,18 @@ class PolicyValueModel(nn.Module):
         return torch.cat([vb, vr, vb - vr, vb * vr], dim=1)
 
     def _apply_legality(self, policy_logits, batch):
-        """Mask taken + unavailable champions to -inf.
+        """Mask taken + unavailable champions to -inf (TRAINING rule).
 
         taken_mask: banned|picked (hard legality — you can't ban or pick
         a champ that's already been banned or picked THIS game).
         unavailable_mask: fearless-picked (champs picked in earlier
-        series games). These are illegal to PICK but legal to BAN —
-        teams routinely ban champs the opponent picked earlier.
+        series games), masked on PICK moves only. The corpus has 8 ban
+        moves whose target is such a champion; masking those targets
+        here would put a 1e4-scale CE term into every epoch.
+
+        Inference is stricter without changing this function:
+        `infer._policy_batch` passes `taken | unavailable` as
+        `taken_mask`, which makes the pool illegal on bans too.
 
         Both masks are [B, C] bool, True = illegal.
         """

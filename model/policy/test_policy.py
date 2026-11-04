@@ -112,7 +112,13 @@ def test_forward_shapes_and_finite():
 
 
 def test_legality_masking():
-    """Taken champions must be masked; unavailable only on pick moves."""
+    """TRAINING contract: taken masked always, unavailable on pick moves only.
+
+    Serving is stricter - `infer._policy_batch` folds the fearless pool into
+    `taken_mask` so the UI never suggests one on a ban either. That split is
+    deliberate: 8 corpus ban targets are pool champions, and masking a
+    training target out of the loss would dominate every epoch.
+    """
     m = tiny_model()
     b = make_next_move_batch(B=2, seed=42)
     # Set some unavailable champs and make some examples bans, some picks
@@ -146,11 +152,14 @@ def test_target_champ_not_masked():
 
 
 def test_fearless_ban_target_not_masked():
-    """A ban move targeting a fearless-picked champ must NOT be masked.
+    """TRAINING contract: a fearless ban TARGET must keep a finite logit.
 
-    Unavailable (fearless-picked) champs are only illegal to PICK, not
-    BAN. The target of a ban move that's in unavailable_mask must still
-    have a finite logit (otherwise CE -> NaN).
+    The corpus contains 8 ban moves whose target is in the fearless pool
+    (technically legal, never sensible). Masking those targets here would
+    put a 1e4-scale CE term into every epoch, so the model stays permissive
+    and the serving path (`infer._policy_batch`) applies the strict mask
+    instead. This test exists to stop someone "fixing" the model class and
+    silently breaking training.
     """
     m = tiny_model()
     b = make_next_move_batch(B=1, seed=10)

@@ -115,9 +115,9 @@ docker compose run --rm -T -p 127.0.0.1:8777:8777 dev \
     python frontend/server.py --host 0.0.0.0 --port 8777
 ```
 
-For the next-move UI, load a policy checkpoint and let the value model default
-resolve (newest `model/checkpoints/value-*/best.pt`, usually absent — the ban
-panel then ranks by denial only), or pin it with `--value`:
+For the next-move UI, load a policy checkpoint; the header's patch selector
+defaults to 16.20 from that checkpoint's own patch table, so nothing else is
+needed:
 
 ```bash
 docker compose run --rm -T -p 127.0.0.1:8777:8777 dev \

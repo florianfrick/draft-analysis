@@ -8,7 +8,7 @@ prediction.
 | slot | checkpoint family | what it answers |
 |---|---|---|
 | **role model** | masked (`pma.*`, `heads.*`) | the role board: each pick's role, and the target champion for every empty role (role-conditioned MASK queries) |
-| **next move** | policy (`policy_head.*`) | one ranked list for the side on the clock, plus denial-ranked ban candidates |
+| **next move** | policy (`policy_head.*`) | one ranked list for the side on the clock (pick or ban) |
 
 They are different models doing different jobs — the masked model that can say
 "this team still wants a MID" is not the policy that ranks the next pick — so
@@ -30,10 +30,8 @@ Binds `127.0.0.1` only. `--ckpt <path>` pins the **role model** (default:
 with the highest val champ-top5 under `model/checkpoints/*/`),
 `--policy-ckpt <path>` pins the **next-move model** (default:
 `model/checkpoints/nextpick-proonly/best.pt`), `--no-policy` skips it
-entirely, `--value <path>` pins the value model used by ban ranking (default:
-the newest `model/checkpoints/value-*/best.pt` — no such artefact is kept, so
-the frontend normally runs without one), and `--device cuda` for GPU inference
-(CPU default keeps the GPU free).
+entirely, and `--device cuda` for GPU inference (CPU default keeps the GPU
+free).
 
 Through Docker, pass `--host 0.0.0.0` (a published port arrives on the
 container's `eth0`, not its loopback) — see `DOCKER.md` §"The frontend".
@@ -80,7 +78,9 @@ fill; `current` is per slot), `POST /api/load {"path": …, "role":
 `path` unloads that slot), `POST /api/upload?name=x.pt` (raw bytes, 512 MB
 cap), `GET /api/drafts?q=&limit=&offset=&random=` and `GET /api/draft?i=<row>`
 for the walkthrough, `/api/champions` (champions carry dDragon `img` URLs;
-`model` and `policy_model` describe the two slots), `POST /api/suggest`
+`model` and `policy_model` describe the two slots; `patches` is the loaded
+policy checkpoint's own patch vocabulary, newest first, with `default_patch`
+and `default_patch_id`), `POST /api/suggest`
 (always the role model; response adds `roles` — the role distribution per
 filled slot —, `assignment` — one role per pick, distinct within a team —,
 per-candidate `flex`, and `fearless_filtered` — how many pool champions were
@@ -90,16 +90,18 @@ model):
 ```json
 {"picks": ["Ezreal", null, "…"], "bans": ["Ashe", "…"],
  "first_pick": 0, "fearless": ["Vi", "…"],
- "k": 8, "ban_k": 4, "rollout": true}
+ "patch_id": 106, "k": 8}
 ```
 
 `fearless` is the series pool in the same id space as `picks`/`bans`; it is
-optional and defaults to empty.
+optional and defaults to empty, and it is excluded from the answer on both
+picks and bans. `patch_id` is a row of the loaded checkpoint's patch table
+(omitted → its `default_patch_id`, 16.20 on every kept checkpoint).
 
 → `{model, state{move_idx, kind, side, phase, first_pick, warning, complete,
-n_unavailable}, suggestions[{idx, prob, name}], roles, bans{side, opponent,
-ranked_by, win_prob_available, opponent_picks, candidates[{rank, idx, name,
-denial, win_prob}]}}`. `bans` is `null` on pick moves and on a complete board.
+n_unavailable}, patch_id, patch, suggestions[{idx, prob, name}], roles}`.
+`patch_id` is the row the model actually used: an unknown or out-of-range
+request comes back as `0` (UNK) with `patch: null`.
 `GET /api/draft?i=` also returns `unavailable` (the real fearless pool, in the
 same id space) and `fearless` (whether the series used it).
 
@@ -202,22 +204,30 @@ series. `clear` is the way out.
 ### Next-move panel (policy slot)
 
 A panel sits under the header whenever a policy checkpoint is loaded: **"Blue
-to ban · move 1/20 · bans1"**, eight champion chips with the policy's
-probability for the side on the clock, and — on ban moves — a ban-candidate
-list. Clicking either places the champion and the whole panel re-runs for the
-next move. It runs alongside the role board, not instead of it.
+to ban · move 1/20 · bans1 · patch 16.20"**, eight champion chips with the
+policy's probability for the side on the clock. Clicking a chip places the
+champion and the whole panel re-runs for the next move. It runs alongside the
+role board, not instead of it.
 
-- `ban rollout` (checkbox, default on) enables the ban-candidate list; it costs
-  ~0.6 s per query because it plays the rest of the draft `ban_k` times.
-- **Ban candidates** are ranked by **denial** = how likely the opponent was to
-  take that champion, with `win%` = the value model's score of the finished
-  simulated draft. Denial is the primary ordering on purpose: it is role-free
-  and measured (humans' phase-2 bans land in the opponent's predicted top-5 at
-  29.6% vs 8.3% for a frequency baseline). The simulated win% comes from a
-  value model whose resolution is weak on this comparison, so treat it as a
-  tiebreaker, not a decision.
-- Without `--value` (or with a missing value checkpoint) the list still works,
-  ranked by denial alone, and the subtitle says so.
+- **Patch** (header selector, default 16.20) is a model input, not a label:
+  the value is a row of the loaded checkpoint's patch embedding. The list
+  comes from `GET /api/champions` (`patches`), so it can only offer patches
+  that checkpoint was trained on; an `UNK (unseen patch)` entry covers the
+  next patch, and the control is disabled when the checkpoint has no patch
+  table. Loading a real game selects that game's patch (when the checkpoint
+  knows it), so a 16.09 walkthrough is not conditioned on 16.20. The same
+  selection is the default patch for the "why this move?" notes. It matters:
+  on `nextpick-proonly` the opening ban is champion 51 at 11.3% on 16.20,
+  versus a flat 4.1% for champion 6 on the UNK row.
+- **One ranked list, no second opinion.** A ban suggestion is the same
+  distribution as a pick suggestion — the policy's imitation of what a pro
+  does on that move. There is deliberately no separate "denial" ranking: a
+  pro-like ban already encodes denial, and the removed rollout ranked by a
+  simulated objective the value head could not measure (`STATUS.md` §5).
+- **Fearless champions never appear**, on a pick or a ban. The board accepts
+  one as an already-placed ban (8 corpus rows do it — legal, never sensible),
+  but the legality mask folds the pool into `taken`, so it cannot be
+  suggested.
 - The **role board** row belongs to the masked slot and is hidden only when
   *no* role model is loaded (`body.no-role-model`) — the masked model is the
   only family that can answer "what is this team still missing at MID". Every
@@ -367,20 +377,20 @@ Three states matter:
   champs → the one-to-one role assignment) plus role-conditioned MASK passes
   covering every role of both teams, with each picked champion held at its
   *assigned* role as context; bans/picks filtered from logits post-hoc. The
-  policy slot is 1 forward for the
-  move, plus `1 + ban_k` short rollouts when the ban list is requested. The
-  header shows each slot's checkpoint, its kind and its val metric.
+  policy slot is 1 role-head pass to infer the picked champions' roles, then
+  1 forward for the move. The header shows each slot's checkpoint, its kind
+  and its val metric.
 
 ## Limits (prototype)
 
-- The UI board carries no roles, so the next-move rollout infers each
-  simulated pick's role from the champion — the offline proposer is given the
-  real role from the pro row. The UI's simulated win% is therefore a harder
-  question than the offline number in `STATUS.md` §5, which is part of why it
-  is only a tiebreaker here.
+- The UI board carries no roles, so the next-move path infers each picked
+  champion's role from the encoder's role head before running the policy. A
+  pro row is handed the real role, so a UI answer is not a like-for-like
+  reproduction of the test-split number.
 - Phase-1 bans are deliberately not a target: pros ban specialists and game
-  plans there, which a symmetric model cannot represent. Denial ranking is
-  honest about this — it ranks by "they want it", not "it is good".
+  plans there, which a symmetric model cannot represent. The ranked list is
+  an imitation of what pros actually do, which is the honest answer available
+  here — it does not claim a ban is *good*.
 - A team's five role lists come from (5 − picks) MASKed slots per pass, so once
   several picks are filled, later roles are conditioned on slightly different
   empty-slot role inputs than earlier ones (≤ 6 tiny forwards).

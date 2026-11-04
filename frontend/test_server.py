@@ -578,22 +578,16 @@ def test_next_move_endpoint_returns_a_ban_decision(app, httpd, policy_ckpt):
     # roles stay in the shape the masked panel already renders
     assert len(d["roles"]) == 10
     assert d["roles"][0] == []                       # nothing picked yet
-    # ban panel: denial-ranked candidates from the rollout
-    bans = d["bans"]
-    assert bans and bans["candidates"] and bans["ranked_by"] == "denial"
-    assert [c["rank"] for c in bans["candidates"]] == \
-        list(range(1, len(bans["candidates"]) + 1))
-    denials = [c["denial"] for c in bans["candidates"]]
-    assert denials == sorted(denials, reverse=True)
-    for c in bans["candidates"]:
-        assert 0 <= c["idx"] < 173 and c["name"]
-        assert c["win_prob"] is None or 0.0 <= c["win_prob"] <= 1.0
-    for c in bans["opponent_picks"]:
-        assert 0 <= c["idx"] < 173 and c["name"]
+    # one answer per board: the removed ban rollout must not come back
+    assert "bans" not in d
+    # ... and the answer says which patch row it conditioned on
+    status, ch = _get(httpd, "/api/champions")
+    want = next(p for p in ch["patches"] if p["key"] == S.infer.DEFAULT_PATCH)
+    assert d["patch_id"] == want["id"]
+    assert d["patch"] == S.infer.DEFAULT_PATCH
 
 
-def test_next_move_reports_a_pick_move_without_a_ban_panel(app, httpd,
-                                                           policy_ckpt):
+def test_next_move_reports_a_pick_move(app, httpd, policy_ckpt):
     S.load_predictor(Path(policy_ckpt))
     body = json.dumps({"picks": [None] * 10,
                        "bans": [11, 12, 13, 14, 15, 16],
@@ -602,12 +596,43 @@ def test_next_move_reports_a_pick_move_without_a_ban_panel(app, httpd,
     assert status == 200, d
     assert d["state"]["kind"] == "pick"
     assert d["state"]["move_idx"] == 6
-    assert d["bans"] is None
-    # the ban panel can be skipped entirely for speed
-    status, d = _post(httpd, "/api/next-move",
-                      json.dumps({"picks": [None] * 10, "bans": [],
-                                  "rollout": False}))
-    assert status == 200 and d["bans"] is None
+    assert "bans" not in d
+
+
+# ---------------------------------------------------------------- patch id
+def test_champions_publishes_the_checkpoint_patch_table(app, httpd,
+                                                        policy_ckpt):
+    """The selector is built from the model's own vocabulary, not a list.
+
+    A patch id is an embedding row, so the client must be offered exactly
+    the rows this checkpoint was trained with.
+    """
+    S.load_predictor(Path(policy_ckpt))
+    status, d = _get(httpd, "/api/champions")
+    assert status == 200, d
+    patches = d["patches"]
+    assert patches == S.APP["policy"].patch_options()
+    keys = [p["key"] for p in patches]
+    assert keys[0] == S.infer.DEFAULT_PATCH        # newest first
+    assert [p["id"] for p in patches] == list(range(len(keys), 0, -1))
+    assert d["default_patch"] == S.infer.DEFAULT_PATCH
+    assert d["default_patch_id"] == patches[0]["id"]
+
+
+def test_next_move_honours_and_clamps_patch_id(app, httpd, policy_ckpt):
+    S.load_predictor(Path(policy_ckpt))
+    status, ch = _get(httpd, "/api/champions")
+    older = ch["patches"][2]                       # a patch that is not 16.20
+    body = json.dumps({"picks": [None] * 10, "bans": [],
+                       "patch_id": older["id"]})
+    status, d = _post(httpd, "/api/next-move", body)
+    assert status == 200, d
+    assert d["patch_id"] == older["id"] and d["patch"] == older["key"]
+    # an id the checkpoint cannot embed becomes UNK, not a 400
+    body = json.dumps({"picks": [None] * 10, "bans": [], "patch_id": 99999})
+    status, d = _post(httpd, "/api/next-move", body)
+    assert status == 200, d
+    assert d["patch_id"] == S.infer.PATCH_UNK_ID and d["patch"] is None
 
 
 def test_next_move_honours_first_pick(app, httpd, policy_ckpt):
@@ -648,22 +673,44 @@ def test_next_move_excludes_the_fearless_pool_on_a_pick(app, httpd,
     assert top not in [c["idx"] for c in d2["suggestions"]]
 
 
-def test_next_move_keeps_fearless_champions_bannable(app, httpd,
-                                                     policy_ckpt):
-    """The other half of the rule: the pool is masked on picks only."""
+def test_next_move_excludes_fearless_champions_from_bans(app, httpd,
+                                                         policy_ckpt):
+    """The pool is masked on bans too, not only on picks.
+
+    Differential on purpose: take whatever the model ranked first for the
+    opening ban, add *that* to the pool, and require it to be gone. A fixed
+    champion would pass or fail depending on the weights.
+    """
     S.load_predictor(Path(policy_ckpt))
     status, d = _post(httpd, "/api/next-move", _empty_board())
     assert status == 200, d
-    pool = [_riot_of(app, c["idx"]) for c in d["suggestions"][:3]]
+    top = d["suggestions"][0]["idx"]
     body = json.dumps({"picks": [None] * 10, "bans": [], "first_pick": 0,
-                       "fearless": pool})
+                       "fearless": [_riot_of(app, top)]})
     status, d2 = _post(httpd, "/api/next-move", body)
     assert status == 200, d2
-    # still a ban decision, and the pool is reported as three champions -
-    # not a 400, which is what folding them into `taken` would have caused
-    # for a board that bans one of them
     assert d2["state"]["kind"] == "ban"
-    assert d2["state"]["n_unavailable"] == 3
+    assert d2["state"]["n_unavailable"] == 1
+    assert top not in [c["idx"] for c in d2["suggestions"]]
+
+
+def test_a_board_that_bans_a_fearless_champion_still_loads(app, httpd,
+                                                           policy_ckpt):
+    """Technically legal, never done in practice - so no 400.
+
+    The corpus contains 8 such bans, which is why the board keeps the pool
+    separate from `taken`. The champion is already taken, so it cannot be
+    suggested regardless.
+    """
+    S.load_predictor(Path(policy_ckpt))
+    riot = _riot_of(app, 7)
+    body = json.dumps({"picks": [None] * 10, "bans": [riot],
+                       "first_pick": 0, "fearless": [riot]})
+    status, d = _post(httpd, "/api/next-move", body)
+    assert status == 200, d
+    assert d["state"]["kind"] == "ban"
+    assert d["state"]["n_unavailable"] == 1
+    assert 7 not in [c["idx"] for c in d["suggestions"]]
 
 
 def test_suggest_filters_the_fearless_pool(app, httpd):

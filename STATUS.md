@@ -245,8 +245,8 @@ same-flag numbers above are the only clean statement.
 A research thread that ran to a conclusion and then became unreproducible:
 every result recorded a checkpoint the 2026-11-03 reorganisation deleted. The
 scripts, their five result JSONs and their two tests were removed with it. This
-is the whole record; the only thing surviving in code is `infer.py`'s
-`ban_candidates`, which reimplements the propose-and-verify rule for the UI.
+is the whole record. The UI kept a `ban_candidates` rollout until 2026-11-04
+and then dropped it too — see the next-move note in §8.
 
 | what it measured | headline |
 |---|---|
@@ -443,12 +443,18 @@ refused at load rather than failing later.
   a contested role and older picks move aside; without that, a fresh Vi was
   pushed to its runner-up while Pantheon kept jungle.
 - **Next move** — `model/policy/infer.py:PolicyPredictor`, no dataset or training
-  imports. Resolves the canonical 20-move order (including a red first pick) and,
-  on ban moves, returns denial-ranked ban candidates: roll the policy forward to
-  the opponent's next pick, shortlist their top-k, ban each for real, score the
-  finished drafts, rank by denial. The UI infers each simulated pick's role from
-  the champion (a pro row has the real role), so its simulated win% is a harder
-  task than the offline number and is shown only as a tiebreaker.
+  imports. Resolves the canonical 20-move order (including a red first pick) and
+  runs one forward pass for the side on the clock. A ban suggestion is the same
+  distribution as a pick suggestion: the policy's imitation of what a pro does
+  on that move. The patch is a real input (`patch_id`, default 16.20), chosen
+  from the checkpoint's own `patch_vocab`; before 2026-11-04 every request used
+  the UNK row, which flattens the opening ban (top champion 4.1% instead of
+  11.3%). The board carries no role labels, so picked champions' roles are
+  inferred from the encoder's role head first.
+  **The rollout is gone** — `ban_candidates`, `_rollout`, `_win_prob`, the
+  `--value` flag and the ban panel were removed on 2026-11-04. A pro-like ban
+  already encodes denial, and with no usable value head the simulation only
+  compounded model error; §5 keeps the measurements that motivated it.
 - **Explanation** (`/api/explain`) — retrieves the k most similar pro drafts
   (bitmask coarse pass + exact Jaccard on the board *at the query move*; ranking
   on the final draft would surface the wrong games), pulls patch bullets when the
@@ -485,10 +491,16 @@ refused at load rather than failing later.
   pro games while the teams swap sides. **The pool is per game, not one
   running list**: a running list makes a closed game illegal against itself
   (its own picks are in the pool), so switching back to G1 would show a board
-  the server rejects. Only the two `nextpick-*` models consume it
-  (`unavailable_mask`, masked on pick moves only, so a fearless champion is
-  still bannable); the `masking-*` models have no such input, and their
-  answers are filtered rather than conditioned — the bar says so.
+  the server rejects. Only the two `nextpick-*` models consume it. Serving
+  folds the pool into `taken_mask`, so a fearless champion is excluded from
+  every suggestion, pick **or** ban: pro teams never ban one. The board still
+  *accepts* such a ban instead of returning 400 — 8 of 100,210 fearless-row
+  ban moves in the corpus do exactly that, and the UI must be able to display
+  a real game — it just never proposes one. Training keeps the looser rule
+  (`_apply_legality` masks the pool on picks only) because masking those 8
+  training targets would dominate the cross-entropy. The `masking-*` models
+  have no such input, and their answers are filtered rather than conditioned —
+  the bar says so.
 
 Verified against a live server on the seven test games, not by reading the
 loader: all five checkpoints load through `/api/load` and answer their own
@@ -611,8 +623,8 @@ those two must be separate invocations. `model/policy` must go in as a
 *directory*: `model/policy/model.py` shadows the `model` package when that folder
 is first on `sys.path`, which is what `pytest model/policy/test_infer.py` does.
 Green today: `pytest model/policy model/proonly model/pretraining model/tests
-model/test_split` (127 passed, 1 skipped), `pytest model/finetune` (25),
-`pytest "data/pro play" frontend` (111 passed). `soloq data
+model/test_split` (130 passed, 1 skipped), `pytest model/finetune` (25),
+`pytest "data/pro play" frontend` (114 passed). `soloq data
 analysis/explorer/test_explorer.py` is excluded: it opens an HTTP connection at
 import time and errors during collection when no server is running.
 

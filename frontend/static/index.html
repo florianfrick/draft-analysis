@@ -15,8 +15,8 @@
     <select id="ckpt-select"></select>
     <button id="btn-load-ckpt" title="load the selected role model">Load</button>
   </div>
-  <div class="model-pick" title="policy checkpoint: the next pick/ban, the ban
-    candidates and the explanation panel - loaded alongside the role model">
+  <div class="model-pick" title="policy checkpoint: the next pick/ban and the
+    explanation panel - loaded alongside the role model">
     <span class="mp-label">next move</span>
     <select id="policy-select"></select>
     <button id="btn-load-policy" title="load the selected next-move model">Load</button>
@@ -24,6 +24,13 @@
       by its kind)">From file…</button>
   </div>
   <div class="spacer"></div>
+  <label class="muted fp-label" title="Patch the next-move model conditions on:
+    one row of the loaded checkpoint's own patch vocabulary, not a free-text
+    label. Defaults to 16.20, the patch the frozen corpus ends on. Also the
+    default patch for the 'why this move?' notes. Disabled when the
+    checkpoint has no patch table, because then the choice would do nothing.">patch
+    <select id="patch-select"></select>
+  </label>
   <label class="muted fp-label" title="who has first pick in the game on the
     board (mirrors the whole draft order; ignored while a real game is
     loaded). Per game: the side holding it stays the same across a series
@@ -57,8 +64,9 @@
 
 <div id="fearless-bar">
   <span class="fb-title" title="Champions picked in an earlier game of this
-    series. They cannot be picked again, but they can still be banned - the
-    next-move model masks them on pick moves only.">Fearless</span>
+    series. The next-move model excludes them from every suggestion, pick or
+    ban: pro teams never ban one of these, so it should never be offered. A
+    board that already bans one still loads - it is legal, just never done.">Fearless</span>
   <div class="strip fb-strip" id="fearless-strip"></div>
   <button id="fearless-add" title="add a champion that is already gone">＋ fearless ban</button>
   <span id="fearless-note" class="muted"></span>
@@ -71,17 +79,9 @@
     <span class="spacer"></span>
     <button id="nm-explain" title="ask an LLM to explain this move from
       comparable pro drafts and the patch notes">why this move?</button>
-    <label class="muted nm-opt" title="simulate the rest of the draft for
-      each ban candidate (about a second on CPU)">
-      <input type="checkbox" id="nm-rollout" checked> ban rollout
-    </label>
   </div>
   <div id="nm-warning" class="nm-warn hidden"></div>
   <div class="nm-chips" id="nm-chips"></div>
-  <div id="nm-bans" class="hidden">
-    <div class="nm-sub" id="nm-ban-sub">Ban candidates</div>
-    <div class="nm-ban-list" id="nm-ban-list"></div>
-  </div>
 </section>
 
 <section id="explain" class="hidden">

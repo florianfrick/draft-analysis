@@ -208,18 +208,22 @@ draft continuations (expand via policy, evaluate via value).
 
 To use in the frontend: `infer.py` is that code path. `PolicyPredictor`
 builds the board from the UI's picks/bans, resolves the canonical 20-move
-order (`move_plan`, mirrored for a red first pick), runs the policy for the
-side on the clock, and — on ban moves — runs the propose-and-verify logic
-itself (roll out, shortlist the opponent's top-k, ban each for real, score the
-finished drafts with the value model, rank by denial). It imports no dataset
-or training module, so serving does not pull in `datasets.py`.
-`frontend/server.py` dispatches on the state-dict keys and exposes it as
-`POST /api/next-move`; the masked-draft path stays available for
-comp-completion queries. Two caveats travel with it: the UI board has no
-role labels, so the rollout infers each simulated pick's role from the
-champion (the offline proposer is handed the real role from the pro row),
-and the value model is weak on this comparison — which is why the UI ranks
-by denial and shows simulated win% only as a tiebreaker.
+order (`move_plan`, mirrored for a red first pick), and runs the policy for
+the side on the clock — one forward pass, ban or pick. The patch is an input
+(`patch_id`), selected in the UI from the checkpoint's own `patch_vocab`;
+`patch_id_for` clamps anything the checkpoint cannot embed to UNK. It
+imports no dataset or training module, so serving does not pull in
+`datasets.py`. `frontend/server.py` dispatches on the state-dict keys and
+exposes it as `POST /api/next-move`; the masked-draft path stays available
+for comp-completion queries.
+
+The fearless pool is excluded from every suggestion, pick **or** ban. The
+board keeps it separate from `taken` so a board that already bans one still
+loads (technically legal, never done), and `_policy_batch` folds it into
+`taken_mask` at the inference boundary. Training keeps the looser rule —
+`_apply_legality` masks the pool on picks only — because 8 of 100,210
+fearless-row ban moves do target a pool champion, and masking a training
+target out of the cross-entropy would dominate the loss.
 
 ## Ban decisions (moved out)
 
@@ -241,8 +245,14 @@ Their conclusions are kept in `STATUS.md` §5, which is the record:
 - the propose-and-verify rollout is a genuine null: −0.00007 [−0.00055,
   +0.00039] under `V` while changing the simulated draft in 87.9% of decisions.
 
-What survives in code is `infer.py`'s `ban_candidates`, which reimplements the
-propose-and-verify rule for the UI's ban panel. The reason the null is a
-property of the model class, not the game, is champion x champion
-complementarity: an additive `W` scores Karma by its role alone, so it has no
-term in which "Karma is worth more next to Ezreal" could live.
+The rollout in `infer.py` (`ban_candidates`, `_rollout`, `_win_prob`) was
+removed on 2026-11-04 as well. A pro-like ban already *is* the denial
+decision, so ranking bans by a second, simulated objective only added a
+source of error; with no usable value head the simulation had nothing to
+score with. The UI's ban suggestions are now the plain next-move
+distribution, which is what this model was trained to imitate.
+
+The reason the null is a property of the model class, not the game, is
+champion x champion complementarity: an additive `W` scores Karma by its
+role alone, so it has no term in which "Karma is worth more next to Ezreal"
+could live.

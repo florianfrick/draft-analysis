@@ -14,12 +14,14 @@ let WT = null;                             // walkthrough: {draft, step, ...}
 let SERIES = null;                         // {games:[slot], cur, fearless}
                                            // slot = {firstPick, picks, bans, done}
 let DRAFT_PLANS = null;                    // {0: [20 moves], 1: [...]} from /api/champions
+let PATCHES = [];                          // [{id, key}] the checkpoint's patch table
 
 async function init() {
   const d = await (await fetch('/api/champions')).json();
   CHAMPIONS = d.champions;
   CHAMPIONS.forEach(c => { BY_IDX[c.idx] = c; BY_RIOT[c.riot] = c; });
   DRAFT_PLANS = d.move_plan || null;
+  applyPatchPayload(d);
   setModels(d.model, d.policy_model);
   refreshCheckpoints();
   refreshDraftList();
@@ -50,7 +52,6 @@ function modelText(m, what) {
   txt += m.val_top5 == null ? ' · val top-5 n/a'
     : ` · val top-5 ${(100 * m.val_top5).toFixed(1)}%`;
   if (m.epoch != null) txt += ` · ep ${m.epoch}`;
-  if (m.value_ckpt) txt += ` · value ${m.value_ckpt.split('/').slice(-2).join('/')}`;
   return txt;
 }
 
@@ -132,7 +133,83 @@ async function switchModel(url, opts, role) {
   }
   resp = null; presp = null; respSig = null;
   await refreshCheckpoints();
-  changed();   // re-run suggestions with the new weights
+  await refreshPatches();   // the new checkpoint has its own patch table
+  changed();                // re-run suggestions with the new weights
+}
+
+// ---- patch conditioning -------------------------------------------------
+// The vocabulary belongs to the checkpoint: the patch embedding rows are
+// indexed by the vocab the model was trained with, so offering a patch it
+// never saw would silently select a different vector. The server publishes
+// the loaded policy model's own table; a checkpoint without one gets a single
+// disabled option instead of a control that does nothing.
+function applyPatchPayload(d) {
+  PATCHES = (d && d.patches) || [];
+  const sel = document.getElementById('patch-select');
+  if (!sel) return;
+  const prevKey = sel.options.length
+    ? sel.options[sel.selectedIndex].dataset.key : null;
+  sel.innerHTML = '';
+  if (!PATCHES.length) {
+    const o = document.createElement('option');
+    o.value = '0';
+    o.dataset.key = '';
+    o.textContent = ((d && d.default_patch) || '16.20') + ' (no patch table)';
+    sel.appendChild(o);
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  PATCHES.forEach(p => {
+    const o = document.createElement('option');
+    o.value = String(p.id);
+    o.dataset.key = p.key;
+    o.textContent = p.key;
+    sel.appendChild(o);
+  });
+  const unk = document.createElement('option');
+  unk.value = '0';
+  unk.dataset.key = '';
+  unk.textContent = 'UNK (unseen patch)';
+  sel.appendChild(unk);
+  // Keep the choice across a checkpoint switch when the new vocabulary has
+  // the same patch; otherwise fall back to that model's default.
+  const keep = prevKey != null
+    ? [...sel.options].find(o => o.dataset.key === prevKey) : null;
+  const dflt = [...sel.options].find(o => +o.value === +(d.default_patch_id || 0));
+  sel.value = (keep || dflt || sel.options[0]).value;
+}
+
+async function refreshPatches() {
+  let d;
+  try { d = await (await fetch('/api/champions')).json(); }
+  catch (e) { return; }
+  applyPatchPayload(d);
+}
+
+function currentPatchId() {
+  const sel = document.getElementById('patch-select');
+  return sel && sel.value ? +sel.value : 0;
+}
+
+function patchKeyOf(s) {
+  // `pipeline.patch_key` ('16.3' -> '16.03') in JS: the corpus stores both
+  // spellings, the checkpoint vocabulary only the padded one.
+  const m = /^\s*(\d+)\.(\d+)\s*$/.exec(String(s == null ? '' : s));
+  return m ? m[1] + '.' + m[2].padStart(2, '0') : '';
+}
+
+function setPatchByKey(key) {
+  // A real game carries its own patch, and that is the right conditioning
+  // for it. Returns false when the checkpoint never saw that patch, so the
+  // caller leaves the manual choice alone.
+  const sel = document.getElementById('patch-select');
+  const want = patchKeyOf(key);
+  if (!want || !sel || sel.disabled) return false;
+  const hit = [...sel.options].find(o => o.dataset.key === want);
+  if (!hit) return false;
+  sel.value = hit.value;
+  return true;
 }
 
 function currentFirstPick() {
@@ -708,8 +785,8 @@ async function runSuggest(sig) {
     ? postJSON('/api/next-move', {
       picks: picks, bans: allBansFlat(), first_pick: currentFirstPick(),
       fearless: fearlessPool(),
-      k: 8, ban_k: 4,
-      rollout: document.getElementById('nm-rollout').checked
+      patch_id: currentPatchId(),
+      k: 8
     })
     : null;
 
@@ -767,7 +844,6 @@ function renderNextMove() {
     document.getElementById('nm-turn').innerHTML = '<b>updating…</b>';
     document.getElementById('nm-meta').textContent = '';
     document.getElementById('nm-chips').innerHTML = '';
-    document.getElementById('nm-bans').classList.add('hidden');
     document.getElementById('nm-warning').classList.add('hidden');
     return;
   }
@@ -778,6 +854,7 @@ function renderNextMove() {
     : `<b>${sideName} to ${st.kind}</b>`;
   document.getElementById('nm-meta').textContent = st.complete
     ? '' : `move ${st.move_idx + 1}/20 · ${st.phase}`
+      + (presp.patch ? ` · patch ${presp.patch}` : '')
       + (st.n_unavailable ? ` · ${st.n_unavailable} fearless` : '');
   const warn = document.getElementById('nm-warning');
   if (st.warning) {
@@ -800,35 +877,6 @@ function renderNextMove() {
       chips.appendChild(b);
     });
   }
-  const banBox = document.getElementById('nm-bans');
-  const bd = presp.bans;
-  if (st.kind === 'ban' && bd && bd.candidates && bd.candidates.length) {
-    banBox.classList.remove('hidden');
-    document.getElementById('nm-ban-sub').innerHTML =
-      'Ban candidates — ' + (bd.win_prob_available
-        ? 'denial% = how likely they were to take it, win% = simulated '
-          + 'finished draft (value model is weak, treat as a tiebreaker)'
-        : 'ranked by how likely they were to take it · no value model '
-          + 'loaded, so no simulated win%');
-    const list = document.getElementById('nm-ban-list');
-    list.innerHTML = '';
-    bd.candidates.forEach(c => {
-      const row = document.createElement('button');
-      row.className = 'nm-ban-row';
-      row.innerHTML = `<span class="rk">#${c.rank}</span>`
-        + imgTag(BY_IDX[c.idx])
-        + `<span class="nm">${c.name}</span>`
-        + `<span class="p">${(100 * c.denial).toFixed(0)}% they take it</span>`
-        + (c.win_prob != null
-          ? `<span class="wp">win ${(100 * c.win_prob).toFixed(1)}%</span>`
-          : '');
-      row.title = `ban ${c.name}`;
-      row.addEventListener('click', () => applyMove('ban', st.side, c.idx));
-      list.appendChild(row);
-    });
-  } else {
-    banBox.classList.add('hidden');
-  }
 }
 
 function renderNextMoveError(msg) {
@@ -838,7 +886,6 @@ function renderNextMoveError(msg) {
   document.getElementById('nm-turn').innerHTML = '<b>no suggestion</b>';
   document.getElementById('nm-meta').textContent = '';
   document.getElementById('nm-chips').innerHTML = '';
-  document.getElementById('nm-bans').classList.add('hidden');
   const warn = document.getElementById('nm-warning');
   warn.textContent = msg;
   warn.classList.remove('hidden');
@@ -855,8 +902,10 @@ let EXPLAIN_BUSY = false;
 let EXPLAIN_SIG = null;    // board the explanation was fetched for
 
 function boardSig() {
+  // The patch is part of the answer, not of the board: switching it must
+  // invalidate an in-flight reply exactly like a pick does.
   return JSON.stringify([picks, bans.blue, bans.red, currentFirstPick(),
-                         SERIES ? fearlessPool() : []]);
+                         SERIES ? fearlessPool() : [], currentPatchId()]);
 }
 
 function hideExplain() {
@@ -870,6 +919,7 @@ function explainBody(force) {
     picks: picks,
     bans: allBansFlat(),
     first_pick: currentFirstPick(),
+    patch_id: currentPatchId(),   // the same row the next-move model used
     k: 8,
     k_games: 5,
     force: !!force
@@ -1172,6 +1222,7 @@ async function wtLoad(i) {
   const fp = document.getElementById('first-pick');
   fp.value = d.first_pick ? '1' : '0';
   fp.disabled = true;              // the game dictates the order
+  setPatchByKey(d.patch);          // ... and the patch it was played on
   // Seed the pool from the game itself: `unavailable` is the real fearless
   // set for this game (champions picked in earlier games of the same
   // series), so a walkthrough of G3 starts with the 20 that are actually
@@ -1275,8 +1326,11 @@ document.getElementById('first-pick').addEventListener('change', () => {
   syncGame();                  // the value belongs to the game on the board
   if (!WT) changed();          // the whole order mirrors
 });
-document.getElementById('nm-rollout').addEventListener('change', () => {
-  requestSuggest();
+document.getElementById('patch-select').addEventListener('change', () => {
+  // A patch change re-asks both panels: the next move conditions on it and
+  // the explanation's notes default to it.
+  hideExplain();
+  changed();
 });
 document.getElementById('nm-explain').addEventListener('click',
   () => requestExplain(false));
