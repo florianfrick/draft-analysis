@@ -21,6 +21,20 @@ Two tests are reported, because they answer different questions:
   the interval reflects the correlation inside a draft. If the McNemar p is
   small and this interval straddles zero, the effect is carried by a handful
   of drafts, not by the model.
+
+`--split shared` exists because the 2026-11-04 refresh changed the split, and
+two checkpoints trained under different splits do not have a common val set any
+more. `shared` is the rows that are val in *both* protocols - val for the old
+`--val-scope all` split and val for the refresh's newest-patch-only split - so
+neither model trained on them. On this corpus that is 27 games, all patch 16.20.
+`--split latest-val` is the refresh's whole val (52 games); use it only when
+both models are refresh-era, because the old split trained on 25 of those.
+
+`--mask-mode slot` hides each picked slot in turn (10 queries per game) instead
+of the training objective's 15% random masking (~1.5 per game). It is the
+protocol `model/test_split/eval_test_split.py` uses, so its numbers are
+comparable with STATUS §7; at 27 games the random mode yields ~40 masked slots,
+which cannot rank two models.
 """
 import argparse
 import importlib.util
@@ -153,16 +167,94 @@ def policy_ranks(ckpt, rows, splits, args, device):
     return ranks, games, patches
 
 
+def masked_ranks_slot(ckpt, rows, splits, args, device):
+    """Hide each picked slot in turn - 10 queries per game, not 15% of them.
+
+    The protocol `model/test_split/eval_test_split.py` uses, so a number from
+    here is comparable with the STATUS §7 table. The training objective's 15%
+    random masking gives ~1.5 queries per game, which is fine on 4,768 val rows
+    and useless on 27.
+    """
+    payload = torch.load(str(ckpt), map_location="cpu", weights_only=False)
+    cfg = payload["config"]
+    enc = C.build_encoder(cfg["num_champs"], cfg["embed_dim"],
+                          cfg["num_intra"], cfg["num_cross"],
+                          cfg["num_heads"], cfg.get("dropout", 0.0),
+                          cfg.get("n_patches", 0))
+    _load_encoder(enc, payload["model"])
+    enc.to(device).eval()
+    patch_vocab = payload.get("patch_vocab") or cfg.get("patch_vocab") or []
+    patch_index = {k: i + 1 for i, k in enumerate(patch_vocab)} or None
+    n_slots = PRO_DATA.N_SLOTS
+    ranks, games, patches = [], [], []
+    for i in splits[args.split]:
+        row = rows[i]
+        champ = torch.tensor(row["champ"], dtype=torch.long)
+        role = torch.tensor(row["role"], dtype=torch.long)
+        pid = PRO_DATA.patch_to_id(row.get("patch"), patch_index)
+        for slot in range(n_slots):
+            cids = champ.clone()
+            cids[slot] = PRO_DATA.CHAMP_MASK_ID
+            is_m = torch.zeros(1, n_slots, dtype=torch.bool)
+            is_m[0, slot] = True
+            batch = {"champ_ids": cids.unsqueeze(0).to(device),
+                     "role_ids": role.unsqueeze(0).to(device),
+                     "pad_mask": torch.zeros(1, n_slots, dtype=torch.bool,
+                                             device=device),
+                     "is_masked": is_m.to(device),
+                     "patch_id": torch.tensor([pid], dtype=torch.long,
+                                              device=device)}
+            with torch.no_grad():
+                lg = enc(batch)["champ_logits"][0, slot]
+            ranks.append(int((lg > lg[int(champ[slot])]).sum()))
+            games.append(row["gameid"])
+            patches.append(row.get("patch"))
+    return ranks, games, patches
+
+
+def _build_splits(rows, args):
+    """Both protocols' splits, plus the rows that are honest for both.
+
+    `shared` is the intersection of the refresh's val and the *other*
+    protocol's val (`--other`): val for both, so neither model trained on those
+    rows, which is the only property that makes a cross-protocol comparison
+    mean anything. `--other old` is the original every-patch split with the
+    pinned test held out; `--other all` is the every-patch split with no test
+    holdout, which is what a `--val-scope all --no-test` run trains against.
+    """
+    new = C.PRO_PIPE.split_within_patch(
+        rows, val_frac=args.val_frac_latest, test_frac=0.0,
+        min_patch_rows=args.min_patch_rows, pinned_test=(),
+        val_patches="latest")
+    if args.other == "old":
+        other = C.PRO_PIPE.split_within_patch(
+            rows, val_frac=args.val_frac, test_frac=args.test_frac,
+            min_patch_rows=args.min_patch_rows,
+            pinned_test=C.PRO_PIPE.TEST_SERIES)
+    else:
+        other = C.PRO_PIPE.split_within_patch(
+            rows, val_frac=args.val_frac, test_frac=0.0,
+            min_patch_rows=args.min_patch_rows, pinned_test=())
+    return {"val": other["val"], "test": other["test"],
+            "latest-val": new["val"],
+            "shared": sorted(set(other["val"]) & set(new["val"]))}
+
+
 def mcnemar(a_hits, b_hits):
-    """Two-sided McNemar on paired binary outcomes -> (b, c, chi2, p)."""
-    b = sum(1 for x, y in zip(a_hits, b_hits) if x and not y)
-    c = sum(1 for x, y in zip(a_hits, b_hits) if y and not x)
-    n = b + c
+    """Two-sided McNemar on paired binary outcomes -> (a_only, b_only, chi2, p).
+
+    `a_only` counts examples A got right and B got wrong; `b_only` the reverse.
+    The two counts are the whole content of a paired comparison - the p-value
+    only says whether their imbalance is larger than coin-flipping would give.
+    """
+    a_only = sum(1 for x, y in zip(a_hits, b_hits) if x and not y)
+    b_only = sum(1 for x, y in zip(a_hits, b_hits) if y and not x)
+    n = a_only + b_only
     if n == 0:
-        return b, c, 0.0, 1.0
-    chi2 = (abs(b - c) - 1) ** 2 / n
+        return a_only, b_only, 0.0, 1.0
+    chi2 = (abs(a_only - b_only) - 1) ** 2 / n
     p = math.erfc(math.sqrt(max(0.0, chi2) / 2.0))
-    return b, c, chi2, p
+    return a_only, b_only, chi2, p
 
 
 def game_bootstrap(ra, rb, games, k=5, n_boot=2000, seed=0):
@@ -197,11 +289,29 @@ def main():
     ap.add_argument("--task", choices=("masked", "policy"), required=True)
     ap.add_argument("--a", required=True)
     ap.add_argument("--b", required=True)
-    ap.add_argument("--split", choices=("val", "test"), default="test")
+    ap.add_argument("--split", default="test",
+                    choices=("val", "test", "shared", "latest-val"),
+                    help="val/test = the old every-patch protocol; shared = "
+                         "rows that are val in BOTH protocols (the only "
+                         "cross-protocol set neither model trained on); "
+                         "latest-val = the refresh's newest-patch val")
     ap.add_argument("--corpus", choices=sorted(C.CORPORA), default="2022")
-    ap.add_argument("--val-frac", type=float, default=0.10)
+    ap.add_argument("--val-frac", type=float, default=0.10,
+                    help="the old split's val share, per patch")
+    ap.add_argument("--val-frac-latest", type=float, default=0.20,
+                    help="the refresh split's val share, newest patch only - "
+                         "must match the --val-frac the refresh trained with")
     ap.add_argument("--test-frac", type=float, default=0.10)
     ap.add_argument("--min-patch-rows", type=int, default=40)
+    ap.add_argument("--other", choices=("old", "all"), default="old",
+                    help="which protocol --split shared intersects with: old = "
+                         "every-patch val + pinned test (the original model), "
+                         "all = every-patch val, no test (a --val-scope all "
+                         "--no-test run)")
+    ap.add_argument("--mask-mode", choices=("random", "slot"), default="random",
+                    help="masked task only: random = the training objective's "
+                         "15%% masking; slot = hide each pick in turn, 10 per "
+                         "game (needed below ~100 games)")
     ap.add_argument("--half-life", type=float, default=0.0)
     ap.add_argument("--limit-drafts", type=int, default=0)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available()
@@ -211,9 +321,17 @@ def main():
                          "lives in model/proonly/reports/, the weights do not)")
     args = ap.parse_args()
     device = torch.device(args.device)
-    rows, splits, _, _ = C.load_split(args, verbose=False)
+    rows, _, _, _ = C.load_split(args, verbose=False)
+    splits = _build_splits(rows, args)
+    if not splits[args.split]:
+        raise SystemExit("split %r is empty" % args.split)
 
-    fn = masked_ranks if args.task == "masked" else policy_ranks
+    if args.task == "masked" and args.mask_mode == "slot":
+        fn = masked_ranks_slot
+    elif args.task == "masked":
+        fn = masked_ranks
+    else:
+        fn = policy_ranks
     ra, games, patches = fn(args.a, rows, splits, args, device)
     rb, games_b, _ = fn(args.b, rows, splits, args, device)
     assert games == games_b, "the two models must score the same examples"
@@ -225,12 +343,17 @@ def main():
     for k in (1, 5, 10):
         ha = [r < k for r in ra]
         hb = [r < k for r in rb]
-        b, c, chi2, p = mcnemar(ha, hb)
+        a_only, b_only, chi2, p = mcnemar(ha, hb)
         acc_a, acc_b = sum(ha) / len(ha), sum(hb) / len(hb)
+        lo_a, hi_a = EP.wilson(sum(ha), len(ha))
+        lo_b, hi_b = EP.wilson(sum(hb), len(hb))
         out["top%d" % k] = {"a": acc_a, "b": acc_b, "delta": acc_b - acc_a,
-                            "b_only": b, "a_only": c, "p": p}
-        print("  top%-2d  A %.4f  B %.4f  delta %+.4f  (B only %d / A only "
-              "%d, McNemar p=%.3g)" % (k, acc_a, acc_b, acc_b - acc_a, b, c, p))
+                            "a_ci": [lo_a, hi_a], "b_ci": [lo_b, hi_b],
+                            "a_only": a_only, "b_only": b_only, "p": p}
+        print("  top%-2d  A %.4f [%.2f,%.2f]  B %.4f [%.2f,%.2f]  "
+              "delta %+.4f  (A only %d / B only %d, McNemar p=%.3g)"
+              % (k, acc_a, lo_a, hi_a, acc_b, lo_b, hi_b, acc_b - acc_a,
+                 a_only, b_only, p))
     for k in (1, 5):
         d, lo, hi, n_games = game_bootstrap(ra, rb, games, k=k)
         out["bootstrap_top%d" % k] = {"delta": d, "lo": lo, "hi": hi,

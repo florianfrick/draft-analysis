@@ -463,6 +463,53 @@ latest` is what makes the second row's 4.03x comparable to the 3.22x the
 original reported on its 4,768-row val only in the loosest sense: different val
 sets, so read them as "the refresh did not break anything", not as a delta.
 
+### Is the 16.20-only val helping or hurting?
+
+Asked on 2026-11-04, because a 52-game val is a noisy place to choose an epoch
+and the whole refresh rests on it. Answered by scoring the checkpoints on games
+**neither model trained on**, which needs a split that is val in both protocols:
+`compare.py --split shared`. That is 27 games (all patch 16.20) — val for the
+original every-patch split and val for the refresh's newest-patch split. Both
+models selected their epoch on those rows; neither trained on them, so the
+comparison is paired and symmetric.
+
+Reproducing §7 exactly first (0.714 masked top-5 and 0.564 next-move top-5 for
+the originals) is what makes the harness trustworthy; `--mask-mode slot` hides
+each pick in turn, so a number here is the same protocol as the tables above.
+
+| comparison | set | task | top-1 | top-5 | top-10 |
+|---|---|---|---|---|---|
+| refresh vs original | shared 27 | next move | +0.002 | +0.015 (p .43) | −0.022 (p .21) |
+| refresh vs original | shared 27 | masked | **+0.052** (p .055) | +0.007 | −0.004 |
+| refresh vs original | pinned 7 | next move | +0.014 | +0.014 | +0.036 |
+| refresh vs original | pinned 7 | masked | +0.014 | −0.014 | −0.057 |
+| 16.20 val vs all-patch val | shared 29 | next move | −0.002 | **+0.026** (p .12) | −0.021 |
+| 16.20 val vs all-patch val | shared 29 | masked | 0.000 | −0.031 (p .31) | **−0.041** (p .031) |
+| refresh ep 9 vs ep 40 | shared 27 | masked | +0.022 | **+0.056** | **+0.059** |
+
+The middle two rows are the actual question: a third pair trained on the same
+46,879 drafts with `--val-scope all --no-test` (42,107 train / 4,772 val,
+selected epoch 6 and 38) isolates the val scope from the extra data. **The
+16.20-only val is not hurting.** It is ahead on the product metric — next-move
+top-5, the number of candidates the panel shows — by 2.6 pp, and behind on
+masked top-10 by 4.1 pp, which is the one nominally significant result (p .031)
+and rests on McNemar alone; the game-level bootstrap on the same rows straddles
+zero, and McNemar treats the 10 slots of a draft as independent. The role board
+renders top-5, where the two are tied. Keep the 16.20 val, and keep it for the
+reason that does not depend on any of these p-values: it trains on 4,720 more
+rows and stops on the distribution the model is served on.
+
+The last row is the one that settles the *method*. The refresh's own val picked
+epoch 9; on held-out 16.20 games epoch 9 beats epoch 40 by 5.6 pp top-5 (bootstrap
+CI [−0.104, −0.007]) and 5.9 pp top-10. A "train 40 epochs, keep the last" run
+would have shipped a measurably worse encoder, and the 52-game val is what
+caught it — which is the argument for keeping a val at all, at whatever scope.
+
+Evidence: `model/proonly/reports/compare_{shared,pinned,allval}_{policy,masked}.json`
+and `compare_epoch9_vs_40_masked.json`. The all-patch-val weights were deleted
+after losing the comparison; reproduce with the two `--val-scope all --no-test`
+commands in §10.
+
 ---
 
 ## 8. The frontend
@@ -671,7 +718,7 @@ those two must be separate invocations. `model/policy` must go in as a
 *directory*: `model/policy/model.py` shadows the `model` package when that folder
 is first on `sys.path`, which is what `pytest model/policy/test_infer.py` does.
 Green today: `pytest model/policy model/proonly model/pretraining model/tests
-model/test_split` (140 passed, 1 skipped), `pytest model/finetune` (25),
+model/test_split` (143 passed, 1 skipped), `pytest model/finetune` (25),
 `pytest "data/pro play" frontend` (114 passed). `soloq data
 analysis/explorer/test_explorer.py` is excluded: it opens an HTTP connection at
 import time and errors during collection when no server is running.

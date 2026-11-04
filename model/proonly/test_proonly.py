@@ -286,3 +286,74 @@ def test_no_test_keeps_every_pinned_series_row_in_the_split():
     for sp in (with_pin, without):
         total = sum(len(sp[k]) for k in ("train", "val", "test"))
         assert total == len(rows), "a row went missing from the split"
+
+
+# ------------------------------------------------ cross-protocol comparison --
+
+def _compare_args(**kw):
+    """The subset of compare.py's namespace `_build_splits` reads."""
+    import argparse
+    ns = argparse.Namespace(val_frac=0.10, val_frac_latest=0.20, test_frac=0.10,
+                            min_patch_rows=40, other="old")
+    for k, v in kw.items():
+        setattr(ns, k, v)
+    return ns
+
+
+def test_shared_split_is_val_for_both_protocols(monkeypatch):
+    """`--split shared` is only honest if neither protocol trained on it.
+
+    This is the whole basis of the 2026-11-04 verdict: two checkpoints trained
+    under different splits have no common val set otherwise, and scoring one on
+    the other's training rows would decide the comparison by construction.
+    """
+    import compare
+    rows = _patch_rows()
+    pinned = ("16.18|A0|B0|2026-01-01|s1",)
+    monkeypatch.setattr(C.PRO_PIPE, "TEST_SERIES", pinned)
+    splits = compare._build_splits(rows, _compare_args())
+    shared = set(splits["shared"])
+    assert shared, "the synthetic rows should produce a non-empty shared set"
+
+    old = C.PRO_PIPE.split_within_patch(rows, val_frac=0.10, test_frac=0.10,
+                                        pinned_test=pinned)
+    new = C.PRO_PIPE.split_within_patch(rows, val_frac=0.20, test_frac=0.0,
+                                        pinned_test=(), val_patches="latest")
+    assert shared <= set(old["val"]) and shared <= set(new["val"])
+    assert not shared & set(old["train"]), "shared row was trained by the old split"
+    assert not shared & set(new["train"]), "shared row was trained by the new split"
+    # and it is the newest patch only, because the refresh's val is
+    assert {rows[i]["patch"] for i in shared} == {"16.20"}
+
+
+def test_shared_split_against_the_all_patch_protocol(monkeypatch):
+    """`--other all` intersects with a --val-scope all --no-test run instead."""
+    import compare
+    rows = _patch_rows()
+    pinned = ("16.18|A0|B0|2026-01-01|s1",)
+    monkeypatch.setattr(C.PRO_PIPE, "TEST_SERIES", pinned)
+    splits = compare._build_splits(rows, _compare_args(other="all"))
+    shared = set(splits["shared"])
+    assert shared
+    other = C.PRO_PIPE.split_within_patch(rows, val_frac=0.10, test_frac=0.0,
+                                          pinned_test=())
+    assert shared <= set(other["val"])
+    assert not shared & set(other["train"])
+    assert not splits["test"], "--other all has no test split"
+
+
+def test_mcnemar_separates_a_only_from_b_only():
+    """The two counts are the content of the comparison; swapping them inverts
+    the reading of every table in the report."""
+    import compare
+    a_only, b_only, chi2, p = compare.mcnemar([1, 1, 0, 0], [0, 1, 1, 0])
+    assert (a_only, b_only) == (1, 1)
+    # balanced discordant pairs are not significant (the continuity correction
+    # is why this is 0.48 rather than 1.0)
+    assert p > 0.4
+    # a clear win for B
+    a_only, b_only, chi2, p = compare.mcnemar([0] * 10 + [1] * 2,
+                                              [1] * 10 + [0] * 2)
+    assert (a_only, b_only) == (2, 10)
+    assert p < 0.05
+    assert compare.mcnemar([], []) == (0, 0, 0.0, 1.0)

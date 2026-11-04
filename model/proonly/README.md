@@ -15,7 +15,7 @@ root — that is the single record. This file is only about running the folder.
 | `train_masked.py` | stage 1 — masked completion; from-scratch init, `--patch-emb` / `--no-patch-emb` toggles the patch embedding |
 | `train_policy.py` | stage 2 — next-pick, initialised from stage 1 |
 | `compare.py` | paired comparison of two checkpoints on identical rows (McNemar + game bootstrap + per-year) |
-| `test_proonly.py` | 13 tests: patch id reaches the encoder, checkpoints round-trip, both trainers resolve the same split, the team-code table and its fallback, the `-through-` name, and `--val-scope latest` |
+| `test_proonly.py` | 19 tests: patch id reaches the encoder, checkpoints round-trip, both trainers resolve the same split, the team-code table and its fallback, the `-through-` name, `--val-scope latest`, and that `compare.py --split shared` really is val for both protocols |
 | `ckpt/` | **local only** (git-ignored) — scratch runs from `--out-dir`-less invocations; the kept artefacts are in `model/checkpoints/` |
 | `reports/` | every run's `test_report.json` and every paired comparison, committed |
 
@@ -135,6 +135,32 @@ docker compose run --rm dev python model/proonly/compare.py --task policy \
     --a model/checkpoints/nextpick-proonly/best.pt \
     --b model/checkpoints/nextpick-policy/best_policy.pt
 ```
+
+Two checkpoints trained under *different splits* have no common val set, so
+scoring one on the other's val decides the comparison by construction. `--split
+shared` intersects them instead: rows that are val in both protocols, therefore
+trained by neither. `--other` picks which protocol to intersect with.
+
+```bash
+# refresh vs original: 27 games, val for both, trained by neither
+docker compose run --rm dev python model/proonly/compare.py --task policy \
+    --split shared --other old \
+    --a model/checkpoints/nextpick-proonly/best.pt \
+    --b model/checkpoints/nextpick-proonly-through-wlds-ig-tes/best.pt
+
+# refresh vs an all-patch-val run (--other all), and exhaustive masking
+docker compose run --rm dev python model/proonly/compare.py --task masked \
+    --split shared --other all --mask-mode slot \
+    --a model/checkpoints/masking-proonly-through-wlds-ig-tes/best.pt \
+    --b model/checkpoints/masking-proonly-allval-through-wlds-ig-tes/best.pt
+```
+
+`--mask-mode slot` hides each pick in turn (10 queries per game) instead of the
+training objective's 15% random masking (~1.5), which is the protocol
+`model/test_split/eval_test_split.py` uses — so it reproduces §7 exactly, and it
+is the only mode with enough queries to rank two models on 27 games. The verdict
+that came out of these runs is in STATUS §7 ("Is the 16.20-only val helping or
+hurting?").
 
 The pruned arms (`p-patch-s0`, `p-nopatch-s0`, seed 1, the pretrained-init
 six) can no longer be re-compared: their weights are gone and their numbers
