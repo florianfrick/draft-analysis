@@ -19,6 +19,16 @@ split the test patches are unseen, so a patch id is UNK on every test row and
 a patch embedding can only memorise; this split keeps each patch on both sides
 so the question becomes whether the head of a patch teaches its tail.
 
+`--no-test` and `--val-scope latest` are the *production* shape, not the
+measurement shape: no test split, and val is only the newest patch's tail
+because the model is only ever asked about the current patch. A run that uses
+either has no out-of-sample number and cannot be compared with the recorded
+ones - it exists to ship fresher weights, not to answer a question. The
+checkpoint name states the data frontier either way: `--out-dir` must end in
+`-through-<league>-<a>-<b>` for the newest series in the corpus, and the
+report records both that frontier and the newest series that is actually in
+train (val takes the newest games, so the two differ whenever val is non-empty).
+
 Patch embedding (`--patch-emb`, default on; `--no-patch-emb` is the ablation):
 one zero-initialised vector per patch, added to every slot before the
 LayerNorm (a segment embedding). At step 0 the two arms are bit-identical, so
@@ -38,6 +48,7 @@ import argparse
 import json
 import math
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -209,6 +220,13 @@ def train(args):
     rows, splits, patch_vocab, patch_index = C.load_split(args)
     num_champs = 173
     n_patches = (len(patch_vocab) + 1) if args.patch_emb else 0
+    frontier = C.corpus_frontier(rows)
+    through = C.through_suffix(frontier)
+    C.check_out_dir_name(args.out_dir, through,
+                         "model/checkpoints/masking-proonly-" + through)
+    print("data frontier: %s (%s, patch %s) -> %s"
+          % (frontier["series_id"], frontier["date"], frontier["patch"],
+             through))
 
     def loader(idxs, mask_prob, shuffle, seed, patch_index=patch_index):
         ds = PRO_DATA.ProMaskedDraftDataset(
@@ -224,7 +242,8 @@ def train(args):
     # Eval views are fixed (EVAL_SEED), not seed-dependent: the patch arm and
     # the seed arms must all be scored on the same masked slots.
     va_loader = loader(splits["val"], args.mask_prob, False, C.EVAL_SEED)
-    te_loader = loader(splits["test"], args.mask_prob, False, C.EVAL_SEED)
+    te_loader = loader(splits["test"], args.mask_prob, False, C.EVAL_SEED) \
+        if splits["test"] else None
 
     model = C.build_encoder(num_champs, args.embed_dim, args.num_intra,
                             args.num_cross, args.num_heads, args.dropout,
@@ -318,16 +337,31 @@ def train(args):
             break
 
     # ---- test report on the selected checkpoint
+    train_end = C.newest_train_series(rows, splits["train"])
+    if not (run_dir / "best.pt").exists():
+        # A degenerate val (e.g. a baseline of 0, which makes rel_champ_top5
+        # NaN) never beats `best`, so nothing was ever selected. Fall back to
+        # the last epoch rather than losing the run to a missing file.
+        print("WARNING: no epoch improved on val (best %.4f); using the last "
+              "epoch" % best)
+        shutil.copyfile(str(run_dir / "latest.pt"), str(run_dir / "best.pt"))
     report = {"protocol": {
         "corpus": args.corpus, "patch_emb": bool(args.patch_emb),
         "n_patches": n_patches,
-        "split": "within-patch (train=head, val=tail); "
-                 "test = the pinned TEST_SERIES",
+        "split": ("within-patch (train=head, val=tail); "
+                  + ("test = the pinned TEST_SERIES"
+                     if splits["test"] else "no test split (--no-test)")),
+        "val_scope": args.val_scope,
         "val_frac": args.val_frac,
-        "test_frac": args.test_frac, "seed": args.seed,
+        "test_frac": 0.0 if args.no_test else args.test_frac,
+        "seed": args.seed,
         "n_train": len(splits["train"]), "n_val": len(splits["val"]),
         "n_test": len(splits["test"]),
         "selection": "rel_champ_top5 (val)",
+        "through": frontier["series_id"], "through_suffix": through,
+        "through_date": frontier["date"], "through_patch": frontier["patch"],
+        "train_through": train_end["series_id"],
+        "train_through_date": train_end["date"],
         "model": {k: cfg[k] for k in ("embed_dim", "num_intra", "num_cross",
                                       "num_heads", "dropout")},
         "params": C.param_count(model)}}
@@ -335,18 +369,24 @@ def train(args):
                       weights_only=False)
     model.load_state_dict(blob["model"])
     report["val"] = blob["metrics"]
-    slices = C.SliceAccumulator()
-    te = evaluate(model, te_loader, slot_rank, args, device, slices=slices)
-    report["test"] = te
-    report["test"]["slices"] = slices.report()
-    print("TEST top1 %.4f top5 %.4f (base %.4f, rel %.3fx) rolecond5 %.4f"
-          % (te["champ_top1"], te["champ_top5"], te["base_champ_top5"],
-             te["rel_champ_top5"], te["role_cond_top5"]))
-    years = report["test"]["slices"]["by_year"]
-    for y in sorted(years):
-        r = years[y]
-        print("  %s: n=%d top5 %.4f base %.4f rel %.2fx"
-              % (y, r["n"], r["top5"], r["base_top5"], r.get("rel_top5", 0)))
+    if te_loader is None:
+        report["test"] = {"skipped": "no test split (--no-test)"}
+        print("no test split: the best.pt above is the val-selected "
+              "checkpoint and has no out-of-sample number")
+    else:
+        slices = C.SliceAccumulator()
+        te = evaluate(model, te_loader, slot_rank, args, device, slices=slices)
+        report["test"] = te
+        report["test"]["slices"] = slices.report()
+        print("TEST top1 %.4f top5 %.4f (base %.4f, rel %.3fx) rolecond5 %.4f"
+              % (te["champ_top1"], te["champ_top5"], te["base_champ_top5"],
+                 te["rel_champ_top5"], te["role_cond_top5"]))
+        years = report["test"]["slices"]["by_year"]
+        for y in sorted(years):
+            r = years[y]
+            print("  %s: n=%d top5 %.4f base %.4f rel %.2fx"
+                  % (y, r["n"], r["top5"], r["base_top5"],
+                     r.get("rel_top5", 0)))
     with open(run_dir / "test_report.json", "w", encoding="utf-8") as f:
         json.dump(report, f, indent=1)
     print("done (%s)" % run_dir)

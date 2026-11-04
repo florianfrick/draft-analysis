@@ -22,7 +22,10 @@ thing that determines the answer is this patch's ban priority, which is why
 the soloQ-based policy scored 0.98x a lookup table on bans1 (STATUS.md).
 
 Split: `pipeline.split_within_patch` - same as the masked stage, so the two
-stages see the same train/val/test.
+stages see the same train/val/test. `--no-test` / `--val-scope latest` give
+the production shape (no test split, val on the newest patch only) and are
+described in `train_masked.py`; a run that uses them has no out-of-sample
+number, and its `--out-dir` must still end in the `-through-...` suffix.
 
 Loss: policy CE over 173 champions with taken/banned/fearless illegal moves at
 -inf. No value head, no econ head: both measured at chance/worse in the soloQ
@@ -32,6 +35,7 @@ import argparse
 import json
 import math
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -206,6 +210,13 @@ def train(args):
     rows, splits, patch_vocab, patch_index = C.load_split(args)
     num_champs = 173
     n_patches = (len(patch_vocab) + 1) if args.patch_emb else 0
+    frontier = C.corpus_frontier(rows)
+    through = C.through_suffix(frontier)
+    C.check_out_dir_name(args.out_dir, through,
+                         "model/checkpoints/nextpick-proonly-" + through)
+    print("data frontier: %s (%s, patch %s) -> %s"
+          % (frontier["series_id"], frontier["date"], frontier["patch"],
+             through))
 
     # ---- encoder
     if args.init_ckpt == "scratch":
@@ -248,9 +259,11 @@ def train(args):
     tr_ds, tr_loader = loader(splits["train"], args.prefix_mode, True,
                               args.seed)
     _, va_loader = loader(splits["val"], "all", False, 0)
-    _, te_loader = loader(splits["test"], "all", False, 0)
+    te_loader = loader(splits["test"], "all", False, 0)[1] \
+        if splits["test"] else None
     print("train examples/epoch %d, val %d, test %d"
-          % (len(tr_ds), len(va_loader.dataset), len(te_loader.dataset)))
+          % (len(tr_ds), len(va_loader.dataset),
+             0 if te_loader is None else len(te_loader.dataset)))
 
     move_rank = EP.move_popularity_ranks(rows, splits["train"], num_champs)
 
@@ -348,34 +361,54 @@ def train(args):
             break
 
     # ---- test report
+    train_end = C.newest_train_series(rows, splits["train"])
+    if not (run_dir / "best.pt").exists():
+        print("WARNING: no epoch improved on val (best %.4f); using the last "
+              "epoch" % best)
+        shutil.copyfile(str(run_dir / "latest.pt"), str(run_dir / "best.pt"))
     report = {"protocol": {
         "corpus": args.corpus, "patch_emb": bool(args.patch_emb),
         "n_patches": n_patches, "init_ckpt": args.init_ckpt,
-        "split": "within-patch (train=head, val=tail); test = the pinned TEST_SERIES",
+        "split": ("within-patch (train=head, val=tail); "
+                  + ("test = the pinned TEST_SERIES"
+                     if splits["test"] else "no test split (--no-test)")),
+        "val_scope": args.val_scope,
         "prefix_mode": args.prefix_mode, "swap_aug": args.swap_aug,
         "seed": args.seed, "n_train": len(splits["train"]),
         "n_val": len(splits["val"]), "n_test": len(splits["test"]),
-        "selection": "rel_top5 (val)", "params": C.param_count(model)}}
+        "selection": "rel_top5 (val)", "params": C.param_count(model),
+        "through": frontier["series_id"], "through_suffix": through,
+        "through_date": frontier["date"], "through_patch": frontier["patch"],
+        "train_through": train_end["series_id"],
+        "train_through_date": train_end["date"]}}
     blob = torch.load(str(run_dir / "best.pt"), map_location="cpu",
                       weights_only=False)
     model.load_state_dict(blob["model"])
     report["val"] = blob["metrics"]
-    slices = C.SliceAccumulator()
-    te = evaluate(model, te_loader, move_rank, args, device, slices=slices)
-    # leave-one-out same-patch reference: the bar that decides whether the
-    # model beats "just use this patch's move frequencies"
-    report["same_patch_reference"] = EP.self_move_topk(
-        rows, splits["test"], num_champs, k=(1, 5))
-    report["test"] = te
-    report["test"]["slices"] = slices.report()
-    print("TEST top1 %.4f top5 %.4f (base %.4f, rel %.2fx; same-patch ref %.4f)"
-          % (te["top1"], te["top5"], te["base_top5"], te["rel_top5"],
-             report["same_patch_reference"]["top5"]))
-    for ph in ("ban1", "pick1", "ban2", "pick2"):
-        r = te["phase"].get(ph)
-        if r:
-            print("  %-5s n=%-6d top5 %.4f base %.4f rel %.2fx"
-                  % (ph, r["n"], r["top5"], r["base_top5"], r["rel_top5"]))
+    if te_loader is None:
+        report["test"] = {"skipped": "no test split (--no-test)"}
+        print("no test split: the best.pt above is the val-selected "
+              "checkpoint and has no out-of-sample number")
+    else:
+        slices = C.SliceAccumulator()
+        te = evaluate(model, te_loader, move_rank, args, device,
+                      slices=slices)
+        # leave-one-out same-patch reference: the bar that decides whether the
+        # model beats "just use this patch's move frequencies"
+        report["same_patch_reference"] = EP.self_move_topk(
+            rows, splits["test"], num_champs, k=(1, 5))
+        report["test"] = te
+        report["test"]["slices"] = slices.report()
+        print("TEST top1 %.4f top5 %.4f (base %.4f, rel %.2fx; same-patch "
+              "ref %.4f)"
+              % (te["top1"], te["top5"], te["base_top5"], te["rel_top5"],
+                 report["same_patch_reference"]["top5"]))
+        for ph in ("ban1", "pick1", "ban2", "pick2"):
+            r = te["phase"].get(ph)
+            if r:
+                print("  %-5s n=%-6d top5 %.4f base %.4f rel %.2fx"
+                      % (ph, r["n"], r["top5"], r["base_top5"],
+                         r["rel_top5"]))
     with open(run_dir / "test_report.json", "w", encoding="utf-8") as f:
         json.dump(report, f, indent=1)
     print("done (%s)" % run_dir)

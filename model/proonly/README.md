@@ -11,11 +11,11 @@ root — that is the single record. This file is only about running the folder.
 
 | file | what it does |
 |---|---|
-| `common.py` | corpus/split/eval plumbing: `CORPORA`, `load_split`, `build_encoder`, `encoder_from_checkpoint`, `SliceAccumulator` |
+| `common.py` | corpus/split/eval plumbing: `CORPORA`, `load_split`, `build_encoder`, `encoder_from_checkpoint`, `SliceAccumulator`, and the naming helpers `corpus_frontier` / `newest_train_series` / `through_suffix` / `check_out_dir_name` |
 | `train_masked.py` | stage 1 — masked completion; from-scratch init, `--patch-emb` / `--no-patch-emb` toggles the patch embedding |
 | `train_policy.py` | stage 2 — next-pick, initialised from stage 1 |
 | `compare.py` | paired comparison of two checkpoints on identical rows (McNemar + game bootstrap + per-year) |
-| `test_proonly.py` | 6 tests: patch id reaches the encoder, checkpoints round-trip, both trainers resolve the same split |
+| `test_proonly.py` | 13 tests: patch id reaches the encoder, checkpoints round-trip, both trainers resolve the same split, the team-code table and its fallback, the `-through-` name, and `--val-scope latest` |
 | `ckpt/` | **local only** (git-ignored) — scratch runs from `--out-dir`-less invocations; the kept artefacts are in `model/checkpoints/` |
 | `reports/` | every run's `test_report.json` and every paired comparison, committed |
 
@@ -30,6 +30,22 @@ inference and the stage:
 |---|---|---|
 | `masking-proonly` | this folder's `train_masked.py` | masked completion, role board |
 | `nextpick-proonly` | this folder's `train_policy.py` | next-move ranking |
+| `masking-proonly-through-wlds-ig-tes` | `train_masked.py --no-test --val-scope latest` | the same, on all 46,879 drafts |
+| `nextpick-proonly-through-wlds-ig-tes` | `train_policy.py`, init from the row above | the same, on all 46,879 drafts |
+
+**The `-through-<league>-<a>-<b>` suffix** states which series the training data
+ends on. `--out-dir` is refused unless it ends with the suffix derived from the
+corpus (`common.through_suffix`), so a retrain cannot land in an old directory
+name and pass for the run it replaced. `through-wlds-ig-tes` is the Worlds 2026
+final, Invictus Gaming vs Top Esports on 2026-11-04; the two team tags come from
+`data/pro play/team_codes.json` and fall back to a deterministic initialism for
+an unlisted org.
+
+The suffix names the **corpus** frontier, not the last row the optimiser saw:
+val is the tail of the newest patch, so the newest games are val rows. The
+checkpoint's `test_report.json` records both — `through` (corpus) and
+`train_through` (last row in the train split, `WLDs|Gen.G|LYON|2026-10-25` for
+this pair).
 
 The three runs this table used to list (`p-patch-s0`, `m-patch-s0`,
 `p-nopatch-s0`) were the previous generation: `p-nopatch-s0` was the no-patch
@@ -70,10 +86,43 @@ therefore disagree at epoch 1 if the epoch counts differ — which makes a
 shorter run look better and makes a re-run at a different `--epochs` a
 *different experiment*, not a reproduction.
 
-`--corpus all` switches to the wider 2017-2026 export (81,161 drafts, separate
+`--corpus all` switches to the wider 2017-2026 export (81,227 drafts, separate
 cache file). It is **not** the default: `CSV_GLOB` is pinned to `202[2-9]_*` so
 newly-arrived CSVs cannot silently swap the corpus out from under every
 recorded number.
+
+### Refreshing on all the data (`--no-test`, `--val-scope latest`)
+
+```bash
+# stage 1 (~7 min), then stage 2 (~8 min) from it
+docker compose run --rm dev python model/proonly/train_masked.py \
+    --no-test --val-scope latest --val-frac 0.20 --seed 0 \
+    --out-dir model/checkpoints/masking-proonly-through-wlds-ig-tes
+docker compose run --rm dev python model/proonly/train_policy.py \
+    --no-test --val-scope latest --val-frac 0.20 --seed 0 \
+    --init-ckpt model/checkpoints/masking-proonly-through-wlds-ig-tes/best.pt \
+    --out-dir model/checkpoints/nextpick-proonly-through-wlds-ig-tes
+```
+
+Two switches, and both trade a measurement for data:
+
+* `--no-test` drops the pinned test split entirely. The pinned series become
+  ordinary rows, `test` is empty and the trainer says so instead of writing a
+  report of zeros. **The result has no held-out number.** Nothing in `STATUS.md`
+  §7 describes these checkpoints; §7 belongs to the originals.
+* `--val-scope latest` makes only the newest patch's tail val, so every other
+  patch is 100% train. That is worth ~4,700 rows (42,100 → 46,827) and points
+  the only selection signal at the distribution the model is actually asked
+  about. `--val-frac 0.20` is a deliberate compromise: patch 16.20 has 262 rows,
+  so 10% is 26 games (78 masked slots, a coin flip) and 40% would cost 105 of
+  the newest games. It buys a *correct* val, not a precise one — at 52 games
+  the difference between the selected epoch and the plateau is inside the noise.
+
+The masked stage peaks early and then overfits: val `rel_champ_top5` reaches
+2.17x at epoch 9 and drifts down to 1.78x by epoch 40 while train loss falls
+4.33 → 0.73. The original `masking-proonly` picked epoch 5 on a 4,768-row val,
+so the early peak is a property of the task, not of the smaller val. The policy
+stage is the opposite — it selected epoch 20 and was still improving.
 
 ## Compare two checkpoints
 

@@ -141,3 +141,148 @@ def test_slice_accumulator_reports_relative_scores():
     assert p2["top5"] == 0.0 and p2["base_top5"] == 1.0
     assert p2["rel_top5"] == 0.0
     assert set(rep["by_year"]) == {"16"}
+
+
+# ------------------------------------------------------- checkpoint naming --
+
+def test_team_codes_are_the_orgs_tags():
+    """The suffix must read like the tag, not like an initialism.
+
+    'Top Esports' -> 'TES' is only knowable from the table; the fallback would
+    say 'TE'. Both are unique, so nothing raises - which is exactly why the
+    table has to be checked rather than assumed.
+    """
+    assert C.team_code("Top Esports") == "TES"
+    assert C.team_code("Invictus Gaming") == "IG"
+    assert C.team_code("Hanwha Life Esports") == "HLE"
+    assert C.team_code("100 Thieves") == "100T"
+
+
+def test_team_code_falls_back_deterministically():
+    """An unlisted team must still produce a stable, ASCII, short code."""
+    a = C.team_code("Some Unlisted Org")
+    assert a == C.team_code("Some Unlisted Org") == "SUO"
+    assert C.team_code("LYON") == "LYON"          # single token keeps its name
+    assert C.team_code("LØS") == "LOS"            # Ø is not silently dropped
+    assert C.team_code("") == "TBD"
+    assert all(ord(ch) < 128 for ch in C.team_code("Naïve Ünïcode Esports"))
+
+
+def test_team_codes_file_has_no_conflicting_duplicates():
+    codes = C.load_team_codes()
+    assert codes, "team_codes.json did not load"
+    assert all(not k.startswith("_") for k in codes)
+
+
+def test_through_suffix_names_the_frontier_series():
+    """The newest row wins, and the name is league + both tags, slugged."""
+    rows = _rows(n=6)
+    for i, r in enumerate(rows):
+        r["blue_team"], r["red_team"] = "Invictus Gaming", "Top Esports"
+        r["league"] = "WLDs"
+        r["date_ordinal"] = 738000 + i
+    frontier = C.corpus_frontier(rows)
+    assert frontier["teams"] == ("Invictus Gaming", "Top Esports")
+    assert frontier["n_games"] == 2          # _rows puts 2 games per series
+    assert C.through_suffix(frontier) == "through-wlds-ig-tes"
+    # sorting the pair means the name does not depend on who was on blue side
+    rows[5]["blue_team"], rows[5]["red_team"] = "Top Esports", "Invictus Gaming"
+    assert C.through_suffix(C.corpus_frontier(rows)) == "through-wlds-ig-tes"
+    # and the suffix follows the newest row, not row order
+    rows[0]["date_ordinal"] = 739999
+    rows[0]["league"] = "LPL"
+    assert C.through_suffix(C.corpus_frontier(rows)) == "through-lpl-ig-tes"
+
+
+def test_frontier_does_not_parse_the_series_id():
+    """A team called 'JD|XL' exists in the NLC exports; splitting the id on
+    '|' would mangle it. The row's own team fields are the source."""
+    rows = _rows(n=2)
+    for r in rows:
+        r["series_id"] = "NLC|Dusty|JD|XL|2022-01-10|s1"
+        r["blue_team"], r["red_team"], r["league"] = "Dusty", "JD|XL", "NLC"
+    frontier = C.corpus_frontier(rows)
+    assert frontier["teams"] == ("Dusty", "JD|XL")
+    assert C.through_suffix(frontier) == "through-nlc-dusty-jd-xl"
+
+
+def test_check_out_dir_name_rejects_a_stale_name():
+    C.check_out_dir_name("model/checkpoints/masking-proonly-through-wlds-ig-tes",
+                         "through-wlds-ig-tes", "x")
+    C.check_out_dir_name("", "through-wlds-ig-tes", "x")   # smoke runs
+    for bad in ("model/checkpoints/masking-proonly",
+                "model/checkpoints/masking-proonly-through-wlds-g2-hle"):
+        try:
+            C.check_out_dir_name(bad, "through-wlds-ig-tes", "suggested")
+        except SystemExit as exc:
+            assert "through-wlds-ig-tes" in str(exc)
+        else:
+            raise AssertionError("%s should have been refused" % bad)
+
+
+# ------------------------------------------------------------ val scope ----
+
+def _patch_rows():
+    """Three patches of 60 rows, each in its own series of 3 games."""
+    rows = []
+    for p, patch in enumerate(("16.18", "16.19", "16.20")):
+        for i in range(60):
+            rows.append({
+                "series_id": "%s|A%d|B%d|2026-01-01|s1" % (patch, i // 3, i // 3),
+                "date_ordinal": 738000 + p * 100 + i, "gameid": "g%d-%d" % (p, i),
+                "patch": patch, "game_number": 1, "league": "X",
+                "blue_team": "A", "red_team": "B", "date": "2026-01-01",
+                "champ": list(range(10)), "role": list(range(5)) * 2,
+                "blue_win": 1, "weight": 1.0, "has_econ": False, "econ": None,
+                "moves": [(1, 0, j, j) for j in range(10)],
+                "unavailable": [], "first_pick": 0,
+            })
+    return rows
+
+
+def test_val_scope_all_is_the_default_protocol():
+    rows = _patch_rows()
+    sp = C.PRO_PIPE.split_within_patch(rows, val_frac=0.10, pinned_test=(),
+                                       test_frac=0.0)
+    assert len(sp["val"]) == 3 * 6            # a tail in every patch
+    assert {rows[i]["patch"] for i in sp["val"]} == {"16.18", "16.19", "16.20"}
+
+
+def test_val_scope_latest_validates_only_on_the_newest_patch():
+    rows = _patch_rows()
+    sp = C.PRO_PIPE.split_within_patch(rows, val_frac=0.10, pinned_test=(),
+                                       test_frac=0.0, val_patches="latest")
+    assert {rows[i]["patch"] for i in sp["val"]} == {"16.20"}
+    assert len(sp["val"]) == 6
+    # every other patch is entirely train - that is the point of the switch
+    assert len(sp["train"]) == 60 + 60 + 54
+    assert not sp["test"]
+
+
+def test_val_scope_latest_skips_a_patch_below_min_patch_rows():
+    """A too-small newest patch cannot own the val tail, or val is empty."""
+    rows = _patch_rows()
+    small = [r for r in rows if r["patch"] == "16.20"][:10]
+    for r in small:
+        r["patch"] = "16.21"
+    rows = [r for r in rows if r["patch"] != "16.20"]
+    sp = C.PRO_PIPE.split_within_patch(rows, val_frac=0.10, pinned_test=(),
+                                       test_frac=0.0, val_patches="latest")
+    assert {rows[i]["patch"] for i in sp["val"]} == {"16.19"}
+    assert sum(1 for i in sp["train"] if rows[i]["patch"] == "16.21") == 10
+
+
+def test_no_test_keeps_every_pinned_series_row_in_the_split():
+    """--no-test must not drop rows: the pinned series become train/val."""
+    rows = _patch_rows()
+    for i, r in enumerate(rows[:7]):
+        r["series_id"] = "PINNED|A|B|2026-01-02|s1"
+    pinned = ("PINNED|A|B|2026-01-02|s1",)
+    with_pin = C.PRO_PIPE.split_within_patch(rows, pinned_test=pinned)
+    without = C.PRO_PIPE.split_within_patch(rows, pinned_test=(),
+                                            test_frac=0.0)
+    assert len(with_pin["test"]) == 7
+    assert not without["test"]
+    for sp in (with_pin, without):
+        total = sum(len(sp[k]) for k in ("train", "val", "test"))
+        assert total == len(rows), "a row went missing from the split"

@@ -108,7 +108,14 @@ CACHE_VERSION = 3  # v3: prior_picks + data-driven fearless flag
 # that the corpus has never seen cannot be a test split, only a holdout that
 # nothing can be trained against. The pin now sits after them, and
 # `split_within_patch` keeps them out of train/val by id instead of by date.
-CORPUS_MAX_DATE = "2026-11-01 23:59:59"
+#
+# 2026-11-01 -> 2026-11-04 23:59:59 (the export was refreshed on 2026-11-04).
+# The refresh added the Worlds final itself: Invictus Gaming vs Top Esports on
+# 2026-11-03 and again on 2026-11-04, 4 drafts. Those 4 rows are the reason the
+# corpus grew 46,875 -> 46,879. Raising the freeze again is the same deliberate
+# act as above: every number recorded under the old freeze is a number about a
+# 46,875-draft corpus, and the checkpoints that carry them are still on disk.
+CORPUS_MAX_DATE = "2026-11-04 23:59:59"
 
 # The test split: three series, 7 games, all patch 16.20, all played on the
 # last day of Worlds 2026 (2026-10-31). Pinned by `series_id` rather than by
@@ -653,7 +660,7 @@ def split_series_by_date(rows, val_frac=0.05, test_frac=0.05):
 
 def split_within_patch(rows, val_frac=0.10, test_frac=0.10,
                        min_patch_rows=40, pinned_test=TEST_SERIES,
-                       strict_pin=True, verbose=False):
+                       strict_pin=True, verbose=False, val_patches=None):
     """Train/val/test by SERIES *inside* each patch: head -> train, tail -> val/test.
 
     Why this split exists, next to `split_series_by_date`. The global date
@@ -696,6 +703,17 @@ def split_within_patch(rows, val_frac=0.10, test_frac=0.10,
     Returns {"train": [...], "val": [...], "test": [...]} index lists. A
     patch below `min_patch_rows` contributes all of its rows to train and
     nothing to val/test.
+
+    `val_patches`: which patches contribute a val tail. `None` (default) is
+    every patch - the protocol above, where each patch's head teaches its own
+    tail. `"latest"` (or an explicit iterable of normalised patch keys) is the
+    production shape: only the newest patch is validated on, and every other
+    patch goes entirely to train. Use it when the model will only ever be
+    asked about the current patch, because then a val spread over 100 old
+    patches measures the wrong distribution and costs ~10% of the corpus in
+    training rows. With `"latest"` the newest patch *above `min_patch_rows`*
+    is the one validated on - a patch too small to have a tail stays in train
+    and the next-newest takes over, so val is never silently empty.
     """
     series = defaultdict(list)
     for i, row in enumerate(rows):
@@ -735,6 +753,19 @@ def split_within_patch(rows, val_frac=0.10, test_frac=0.10,
                      if patch_key(rows[i].get("patch")) != first_patch)
 
     out = {"train": [], "val": [], "test": list(test_idx)}
+    if val_patches is None:
+        val_keys = None
+    elif val_patches == "latest":
+        eligible = [p for p, ss in by_patch.items()
+                    if sum(len(s) for s in ss) >= min_patch_rows]
+        if not eligible:
+            raise ValueError("val_patches='latest' but no patch reaches "
+                             "min_patch_rows=%d" % min_patch_rows)
+        val_keys = {max(eligible, key=patch_sort_key)}
+    elif isinstance(val_patches, str):
+        val_keys = {patch_key(val_patches)}
+    else:
+        val_keys = {patch_key(p) for p in val_patches}
     report = []
     for patch in sorted(by_patch, key=patch_sort_key):
         ordered = sorted(by_patch[patch],
@@ -748,6 +779,8 @@ def split_within_patch(rows, val_frac=0.10, test_frac=0.10,
             continue
         n_test = max(1, int(round(n * test_frac))) if test_frac > 0 else 0
         n_val = max(1, int(round(n * val_frac))) if val_frac > 0 else 0
+        if val_keys is not None and patch not in val_keys:
+            n_val = 0
         test_series, val_series, acc = [], [], 0
         cut = len(ordered)
         for j in range(len(ordered) - 1, -1, -1):
@@ -783,6 +816,9 @@ def split_within_patch(rows, val_frac=0.10, test_frac=0.10,
                   "tail: %s" % (len(pinned), len(out["test"]),
                                 ", ".join(p.split("|")[1] + " vs "
                                           + p.split("|")[2] for p in pinned)))
+        if val_keys is not None:
+            print("  val is the tail of %s only; every other patch is "
+                  "100%% train" % ", ".join(sorted(val_keys)))
         if moved:
             print("  %d rows follow their series into an earlier patch "
                   "(series spanning a patch boundary)" % moved)

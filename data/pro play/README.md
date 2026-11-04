@@ -15,8 +15,12 @@ pipeline.py mirrors `../../solo queue/process matchdata/pipeline.py`
 conventions (scan_and_index, kept/skipped stats, per-run provenance in
 the cache) but parses per-game draft sequences instead of full drafts:
 
-- 46,662 drafts (12-row OE blocks -> global 20-move sequence on the
+- 46,879 drafts (12-row OE blocks -> global 20-move sequence on the
   2026 First-Selection ban/pick order; pre-2026 defaults to blue-first).
+  Frozen at `CORPUS_MAX_DATE = "2026-11-04 23:59:59"`: the 2026 export was
+  refreshed on 2026-11-04 and added the Worlds final (Invictus Gaming vs Top
+  Esports on 11-03 and 11-04, 4 drafts, 46,875 -> 46,879). Every number in
+  `STATUS.md` recorded before that refresh describes a 46,875-draft corpus.
 - Shared champion space with soloQ: names resolve through the same
   Data Dragon `champ_mapping.json` (173/173 coverage in every year).
 - Era handling: fearless `unavailable`/`prior_picks` are data-driven per
@@ -35,3 +39,16 @@ next-pick/ban finetuning, incl. turn info, taken/unavailable legality
 masks, win_label) and `ProMaskedDraftDataset` (full pro drafts through
 the verbatim soloQ masking, for encoder finetune + masked eval that
 satisfies the soloQ contract).
+
+## `team_codes.json`
+
+Team name -> short code (`"Top Esports": "TES"`), read by
+`model/proonly/common.py:team_code` to build a checkpoint name that states
+which series the training data ends on (`masking-proonly-through-wlds-ig-tes`).
+Keys are the exact `teamname` strings from the exports. It is a readability
+layer, not a dependency: an unlisted team falls back to a deterministic
+initialism (`"Top Esports"` -> `TE`), so nothing breaks when a new org appears,
+the name is just less recognisable. Only real org tags belong in the file -
+an invented abbreviation is worse than an honest initialism. The grouped
+layout and `_`-prefixed comment keys are for humans; the loader flattens and
+skips them, and raises if one team is given two different codes.

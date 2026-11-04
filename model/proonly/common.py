@@ -18,7 +18,10 @@ comparison script cannot drift apart:
   independent percentages.
 """
 import importlib.util
+import json
+import re
 import sys
+import unicodedata
 from pathlib import Path
 
 import torch
@@ -28,6 +31,7 @@ MODEL_DIR = HERE.parent                           # .../model
 ROOT = MODEL_DIR.parent                           # .../lol draft analysis
 PRO_DIR = ROOT / "data" / "pro play"
 SOLOQ_PROC_DIR = ROOT / "data" / "solo queue" / "process matchdata"
+TEAM_CODES_PATH = PRO_DIR / "team_codes.json"
 
 sys.path.insert(0, str(ROOT))
 from model.pretraining.soloq_model import SoloQPretrainedModel, load_encoder_state  # noqa: E402
@@ -66,6 +70,18 @@ def add_corpus_args(ap):
                          "(pipeline.TEST_SERIES); it only applies to "
                          "--limit-drafts smoke runs, which cannot hold the "
                          "pinned series out")
+    ap.add_argument("--no-test", dest="no_test", action="store_true",
+                    help="hold no test split out at all: every patch's tail "
+                         "goes to val (or to train, see --val-scope) and the "
+                         "pinned TEST_SERIES are ordinary rows. For a "
+                         "production refresh, not a measurement run - the "
+                         "resulting checkpoint has no held-out score")
+    ap.add_argument("--val-scope", choices=("all", "latest"), default="all",
+                    help="all (default) = every patch's tail is val, the "
+                         "protocol every recorded number uses. latest = only "
+                         "the newest patch's tail is val and every other "
+                         "patch is 100%% train, for a model that will only be "
+                         "asked about the current patch")
     ap.add_argument("--min-patch-rows", type=int, default=40,
                     help="patches smaller than this stay entirely in train "
                          "(their tail would be 1-2 games)")
@@ -92,10 +108,15 @@ def load_split(args, verbose=True):
     # A smoke run subsamples the corpus, so the pinned test series are
     # usually gone; relax the pin rather than abort, and fall back to the
     # fractional tail. Never true for a measured run.
+    no_test = bool(getattr(args, "no_test", False))
     splits = PRO_PIPE.split_within_patch(
-        rows, val_frac=args.val_frac, test_frac=args.test_frac,
+        rows, val_frac=args.val_frac,
+        test_frac=0.0 if no_test else args.test_frac,
         min_patch_rows=args.min_patch_rows,
-        strict_pin=not args.limit_drafts, verbose=verbose)
+        pinned_test=() if no_test else PRO_PIPE.TEST_SERIES,
+        strict_pin=not args.limit_drafts, verbose=verbose,
+        val_patches=("latest" if getattr(args, "val_scope", "all") == "latest"
+                     else None))
     patch_vocab, patch_index = PRO_DATA.build_patch_vocab(rows)
     if verbose:
         print("corpus %s: %d drafts, %d patches (%s..%s)"
@@ -104,7 +125,154 @@ def load_split(args, verbose=True):
         print("split: train %d / val %d / test %d"
               % (len(splits["train"]), len(splits["val"]),
                  len(splits["test"])))
+        print("data ends at: %s (newest series in train: %s)"
+              % (corpus_frontier(rows)["series_id"],
+                 newest_train_series(rows, splits["train"])["series_id"]))
     return rows, splits, patch_vocab, patch_index
+
+
+# ---------------------------------------------------------------- naming ----
+# A checkpoint directory states which inference it serves and which stage
+# produced it; the `-through-<league>-<a>-<b>` suffix states which series its
+# data ends on, so two runs of the same stage are distinguishable at a glance
+# and a stale artefact cannot pass for a fresh one.
+
+def _ascii(text):
+    """Best-effort ASCII for a directory name ('LØS' -> 'LOS', not 'LS')."""
+    s = str(text or "")
+    for src, dst in (("Ø", "O"), ("ø", "o"), ("Đ", "D"), ("đ", "d"),
+                     ("Ł", "L"), ("ł", "l"), ("ß", "ss")):
+        s = s.replace(src, dst)
+    return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
+
+
+def _slug(text):
+    """Lowercase, non-alphanumeric -> '-', collapsed, trimmed."""
+    s = re.sub(r"[^a-z0-9]+", "-", _ascii(text).replace("|", "-").lower())
+    return s.strip("-") or "x"
+
+
+def _initialism(name):
+    """Deterministic fallback for a team missing from team_codes.json.
+
+    Not the org's tag - 'Top Esports' gives 'TE', not 'TES' - but stable, and
+    a wrong tag invented here would be worse than an honest initialism.
+    """
+    toks = [t for t in re.split(r"[\s._-]+", _ascii(name)) if t]
+    if not toks:
+        return "TBD"
+    if len(toks) == 1:
+        # Keep '|' - a team called 'JD|XL' exists in the NLC exports, and
+        # dropping the separator would make the name read 'jdxl'. _slug turns
+        # it into '-'.
+        return re.sub(r"[^A-Za-z0-9|]", "", toks[0]).upper()[:6] or "TBD"
+    return "".join(t[0] for t in toks).upper()[:5]
+
+
+def load_team_codes(path=TEAM_CODES_PATH):
+    """Flatten the grouped JSON into {teamname: CODE}.
+
+    Keys starting with '_' are comments and are skipped, so the file can
+    explain itself. A team listed twice with different codes raises: silently
+    taking the last one would make a name depend on dict order.
+    """
+    if not Path(path).exists():
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+    out = {}
+
+    def walk(node, group):
+        for k, v in node.items():
+            if k.startswith("_"):
+                continue
+            if isinstance(v, dict):
+                walk(v, k)
+                continue
+            prev = out.get(k)
+            if prev is not None and prev != v:
+                raise ValueError(
+                    "team_codes.json: %r is both %r and %r (in %r)"
+                    % (k, prev, v, group))
+            out[k] = v
+
+    walk(payload, "?")
+    return out
+
+
+_TEAM_CODES = None
+
+
+def team_code(name):
+    global _TEAM_CODES
+    if _TEAM_CODES is None:
+        _TEAM_CODES = load_team_codes()
+    return _TEAM_CODES.get(name) or _initialism(name)
+
+
+def corpus_frontier(rows, indices=None):
+    """The newest series in the corpus, or in `indices` if given.
+
+    Returned as a dict rather than a series_id string because `series_id` is
+    built by joining team names with '|' and a team called 'JD|XL' exists in
+    the NLC exports - so the id cannot be reliably split back into its parts.
+    The row already carries league and both team names, which is what the name
+    needs.
+    """
+    pool = range(len(rows)) if indices is None else list(indices)
+    if not pool:
+        raise ValueError("corpus_frontier: no rows")
+    best = max(pool, key=lambda i: (rows[i]["date_ordinal"],
+                                    rows[i].get("gameid") or ""))
+    row = rows[best]
+    sid = row.get("series_id")
+    return {
+        "series_id": sid,
+        "league": row.get("league") or "?",
+        "teams": tuple(sorted([row.get("blue_team") or "?",
+                               row.get("red_team") or "?"])),
+        "date": row.get("date") or "",
+        "patch": PRO_PIPE.patch_key(row.get("patch")),
+        "gameid": row.get("gameid") or "",
+        "n_games": sum(1 for i in pool if rows[i].get("series_id") == sid),
+    }
+
+
+def newest_train_series(rows, train_idx):
+    """The newest series that actually receives gradient updates.
+
+    Different from `corpus_frontier` whenever val is non-empty: val is every
+    patch's tail, so the newest games in the corpus are usually val rows. Both
+    are recorded - the directory name states the data frontier, the checkpoint
+    states where training stops.
+    """
+    return corpus_frontier(rows, train_idx)
+
+
+def through_suffix(frontier):
+    """'through-wlds-ig-tes' from a corpus_frontier dict."""
+    return "through-%s-%s-%s" % (
+        _slug(frontier["league"]),
+        _slug(team_code(frontier["teams"][0])),
+        _slug(team_code(frontier["teams"][1])))
+
+
+def check_out_dir_name(out_dir, suffix, suggested):
+    """Refuse a checkpoint directory whose name misstates the data frontier.
+
+    The name is the only thing a later reader has; a retrain that lands in
+    `masking-proonly` while the data moved is indistinguishable from one that
+    did not, which is exactly the confusion the suffix exists to prevent.
+    """
+    if not out_dir:
+        return
+    if Path(out_dir).name.endswith(suffix):
+        return
+    raise SystemExit(
+        "--out-dir must end with %r (the newest series in this corpus).\n"
+        "  got:       %s\n  suggested: %s/%s"
+        % (suffix, out_dir, str(Path(out_dir).parent).replace("\\", "/"),
+           Path(out_dir).name + suffix))
 
 
 def build_encoder(num_champs, embed_dim, num_intra, num_cross, num_heads,

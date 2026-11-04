@@ -43,19 +43,32 @@ of the two UI slots may load it.
 | pro-only, from scratch | `masking-proonly/best.pt` | masked completion, role board |
 | policy (soloQ encoder) | `nextpick-policy/best_policy.pt` | next-move ranking |
 | policy (pro-only) | `nextpick-proonly/best.pt` | next-move ranking |
+| pro-only, all data | `masking-proonly-through-wlds-ig-tes/best.pt` | masked completion, role board — **the shipped default** |
+| pro-only, all data | `nextpick-proonly-through-wlds-ig-tes/best.pt` | next-move ranking — **the shipped default** |
+
+The two `-through-` checkpoints were added on 2026-11-04: same architecture and
+seed, retrained on the whole corpus with no test split (§7). The suffix states
+which series the training data ends on, so a retrain cannot quietly land in an
+old directory name. They are the defaults because they see 4,727 more drafts;
+they are *not* the ones §7 scores, because a run with `--no-test` has no
+held-out number by construction.
 
 Weights are git-ignored. 18 older checkpoints (1.9 GB) were deleted on
 2026-11-03; their numbers live in `model/proonly/reports/` and §4/§6 here, but
 their paired comparisons can no longer be re-run.
 
-**The corpus is pinned** at `pipeline.CORPUS_MAX_DATE = "2026-11-01 23:59:59"`
-— 46,875 drafts, patch 16.20 = 258 rows. The 2026 OE export keeps growing, so
+**The corpus is pinned** at `pipeline.CORPUS_MAX_DATE = "2026-11-04 23:59:59"`
+— 46,879 drafts, patch 16.20 = 262 rows. The 2026 OE export keeps growing, so
 without the pin a rebuild folds new games in and moves every recorded number.
 This is not bookkeeping: during the 2026-11-01 merge an ordinary `pytest` run
 called `build_rows()`, saw the 2026 CSV had changed, rescanned and overwrote
-`pro_drafts.pt` — training the corpus on its own holdout. Rebuilding today
-returns the same 46,875 drafts; raising the pin means re-measuring everything,
-which is exactly what happened on 2026-11-03.
+`pro_drafts.pt` — training the corpus on its own holdout. Raising the pin means
+re-measuring everything, which is exactly what happened on 2026-11-03 and again
+on 2026-11-04.
+
+The 2026-11-04 raise exists because the export was refreshed and added the
+Worlds final: Invictus Gaming vs Top Esports, 2 games on 2026-11-03 and 2 on
+2026-11-04, 46,875 → 46,879. Every number in §4/§7 was measured on 46,875.
 
 **The test split is pinned by series id**, not by a fraction: three Worlds 2026
 final-day series, 7 games, all patch 16.20. Split: **42,100 train / 4,768 val /
@@ -133,7 +146,7 @@ semantics, so anything patch-conditioned must be retrained. The outcome is used
 only by the separate value head.
 
 **Pro play** (Oracle's Elixir, 2022-2026). Raw CSVs → `pro_drafts.pt`, same
-173-champion space, 46,875 drafts, skipping only for documented reasons (bad
+173-champion space, 46,879 drafts, skipping only for documented reasons (bad
 rows, incomplete bans/picks, duplicate champion, pick mismatch). 12-row OE
 blocks become a global 20-move sequence (6 bans1 + 6 picks1 + 4 bans2 + 4 picks2)
 on the 2026 First-Selection order, pre-2026 blue-first; a move is
@@ -143,8 +156,8 @@ decoupling is 2026 only.
 
 Pro teaches what soloQ cannot: order/phase/side effects (ban priority, B1 blind
 vs R5 counter, first-pick asymmetry), fearless depth — the main 2025+ shift —
-and coordinated comp value. Limits: 46k games is small, no player identity, econ
-labels are weak. Synergy/counter structure is assumed to drift slower than
+and coordinated comp value. Limits: 46.9k games is small, no player identity,
+econ labels are weak. Synergy/counter structure is assumed to drift slower than
 popularity.
 
 **The split is load-bearing, not bookkeeping.** `split_series_by_date` (the old
@@ -427,6 +440,29 @@ board.
 Full report: `model/test_split/REPORT_test_split_evaluation.{md,html}`; evidence:
 `model/test_split/reports/test_split.json`.
 
+**The all-data refresh has no number here, by construction.** The two
+`-through-wlds-ig-tes` checkpoints (2026-11-04) are trained with `--no-test` on
+the whole 46,879-draft corpus, and their val is the tail of patch 16.20 only —
+52 games, 78 masked slots, 1,040 next-move states. That is a *correct* val
+(16.20 is the only patch the product is asked about) but a small one, so it
+ranks nothing and the tables above still belong to the originals. What it does
+establish, from `test_report.json`:
+
+| | selected epoch | val top-5 | val rel | val n |
+|---|---|---|---|---|
+| `masking-proonly-through-wlds-ig-tes` | 9 | 0.641 | 2.17x | 52 games / 78 slots |
+| `nextpick-proonly-through-wlds-ig-tes` | 20 | 0.500 | 4.03x | 52 games / 1,040 states |
+
+Two things worth keeping. **The masked stage peaks early and then overfits**:
+val `rel_champ_top5` is 2.17x at epoch 9 and 1.78x at epoch 40 while train loss
+falls 4.33 → 0.73. The original `masking-proonly` picked epoch 5 on a 4,768-row
+val, so this is the task, not the smaller val. **The policy stage is the
+opposite** — it selected epoch 20 and was still flat-to-improving at 40, with
+per-phase rel 3.29 ban1 / 4.20 pick1 / 6.00 ban2 / 4.10 pick2. `--val-scope
+latest` is what makes the second row's 4.03x comparable to the 3.22x the
+original reported on its 4,768-row val only in the loosest sense: different val
+sets, so read them as "the refresh did not break anything", not as a delta.
+
 ---
 
 ## 8. The frontend
@@ -590,13 +626,25 @@ docker compose run --rm dev python model/policy/train.py \
     --out-dir model/checkpoints/nextpick-policy
 # the pretrain is kept, not retrained: model/checkpoints/masking-soloqueue/
 
+# the all-data refresh (no test split, val on 16.20 only) - the shipped defaults
+docker compose run --rm dev python model/proonly/train_masked.py \
+    --no-test --val-scope latest --val-frac 0.20 \
+    --out-dir model/checkpoints/masking-proonly-through-wlds-ig-tes
+docker compose run --rm dev python model/proonly/train_policy.py \
+    --no-test --val-scope latest --val-frac 0.20 \
+    --init-ckpt model/checkpoints/masking-proonly-through-wlds-ig-tes/best.pt \
+    --out-dir model/checkpoints/nextpick-proonly-through-wlds-ig-tes
+
 # the comparison
 docker compose run --rm dev python model/test_split/eval_test_split.py
 docker compose run --rm dev python model/test_split/render_test_split.py
 ```
 
 `--out-dir` writes a run straight to its final name; without it a run lands in
-`ckpt/run_<ts>[_<name>]/`.
+`ckpt/run_<ts>[_<name>]/`. For the two `-through-` commands the name is not
+free text: `--out-dir` is refused unless it ends with the `-through-<league>-<a>-<b>`
+suffix derived from the corpus frontier, so a retrain cannot inherit a stale
+name. A later export moves that suffix, which is the point.
 
 **The recipe.** Defaults in `train_masked.py` / `train_policy.py`; both stages
 are D=256 / 2 intra + 1 cross / 8 heads / dropout 0.1 / weight decay 0.01.
@@ -623,7 +671,7 @@ those two must be separate invocations. `model/policy` must go in as a
 *directory*: `model/policy/model.py` shadows the `model` package when that folder
 is first on `sys.path`, which is what `pytest model/policy/test_infer.py` does.
 Green today: `pytest model/policy model/proonly model/pretraining model/tests
-model/test_split` (130 passed, 1 skipped), `pytest model/finetune` (25),
+model/test_split` (140 passed, 1 skipped), `pytest model/finetune` (25),
 `pytest "data/pro play" frontend` (114 passed). `soloq data
 analysis/explorer/test_explorer.py` is excluded: it opens an HTTP connection at
 import time and errors during collection when no server is running.

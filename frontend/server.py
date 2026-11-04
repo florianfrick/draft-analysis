@@ -24,9 +24,22 @@ can do, the suffix which stage produced it.
 
   masking-soloqueue   soloQ-pretrained encoder (masking-finetune's init)
   masking-finetune    soloQ encoder fine-tuned on pro drafts
-  masking-proonly     pro drafts only, from scratch
+  masking-proonly     pro drafts only, from scratch (through 2026-10-31)
   nextpick-policy     soloQ encoder + policy head
   nextpick-proonly    pro drafts only, encoder + policy head from scratch
+                      (through 2026-10-31)
+
+A `-through-<league>-<a>-<b>` suffix states which series the training data ends
+on, so two runs of the same stage are distinguishable and a stale artefact
+cannot pass for a fresh one:
+
+  masking-proonly-through-wlds-ig-tes    all 46,879 drafts, no test split
+  nextpick-proonly-through-wlds-ig-tes   the same data, next-move head
+
+The two `-through-` checkpoints are the shipped defaults: they see ~4,700 more
+drafts than the originals and validate on patch 16.20 only, but they hold no
+held-out number (the run trains with `--no-test`), so `STATUS.md` §7 — the
+pinned-test scores — still belongs to the originals.
 
 `_ckpt_roles` reads that prefix, so the dropdown never offers a policy
 checkpoint to the role board. Select via --ckpt / --policy-ckpt (CLI), the
@@ -78,8 +91,13 @@ CKPT_PATTERNS = (                 # what the dropdown offers (no torch.load)
 # are separate slots so both can be loaded at once - the model that answers
 # "which role / what is this team still missing" is not the model that ranks
 # the next pick.
-MASKED_DEFAULT = CKPT_DIR / "masking-proonly" / "best.pt"
-POLICY_DEFAULT = CKPT_DIR / "nextpick-proonly" / "best.pt"
+#
+# Both point at the `-through-wlds-ig-tes` refresh: same architecture, ~4,700
+# more drafts (46,827 train vs 42,100) and val on patch 16.20 only. They were
+# trained with `--no-test`, so they have no pinned-test score - §7 of STATUS.md
+# is the originals' number, not theirs. Override with --ckpt / --policy-ckpt.
+MASKED_DEFAULT = CKPT_DIR / "masking-proonly-through-wlds-ig-tes" / "best.pt"
+POLICY_DEFAULT = CKPT_DIR / "nextpick-proonly-through-wlds-ig-tes" / "best.pt"
 UPLOAD_DIR = ROOT / "model" / "uploaded"
 MAX_UPLOAD_BYTES = 512 * 1024 * 1024      # generous; ckpts are 20-150 MB
 LOAD_LOCK = threading.Lock()              # serialize runtime model swaps
@@ -1402,12 +1420,14 @@ def main():
     ap.add_argument("--ckpt", default="",
                     help="role-model checkpoint (a masking-* checkpoint) - "
                          "drives the role board and the per-role targets "
-                         "(default: model/checkpoints/masking-proonly/best.pt, "
+                         "(default: model/checkpoints/masking-proonly-through-wlds-ig-tes"
+                         "/best.pt, "
                          "else the best masking checkpoint by val champ_top5)")
     ap.add_argument("--policy-ckpt", default="",
                     help="next-move checkpoint (a nextpick-* checkpoint) - "
                          "loaded alongside the role model, not instead of it "
-                         "(default: model/checkpoints/nextpick-proonly/best.pt)")
+                         "(default: model/checkpoints/nextpick-proonly-through-wlds-ig-tes"
+                         "/best.pt)")
     ap.add_argument("--no-policy", action="store_true",
                     help="run the role board only, without a next-move model")
     args = ap.parse_args()
