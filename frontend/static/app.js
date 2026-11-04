@@ -463,6 +463,11 @@ function loadGame(i) {
   bans = { blue: g.bans.blue.slice(), red: g.bans.red.slice() };
   lastSlot = null;
   document.getElementById('first-pick').value = g.firstPick ? '1' : '0';
+  // `cur` is part of the persisted state, so switching games has to be
+  // saved here - otherwise "next game in series" (which saves *before*
+  // calling this) stores the previous index and a refresh lands on the
+  // wrong game.
+  saveSeries();
   renderAll();
   requestSuggest();
 }
