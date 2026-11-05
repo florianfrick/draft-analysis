@@ -35,7 +35,7 @@ if str(ROOT) not in sys.path:
 from model.winpred import data as D              # noqa: E402
 from model.winpred import evaluate as E          # noqa: E402
 from model.winpred import metrics as M           # noqa: E402
-from model.winpred.baseline import BlueWinRateBaseline  # noqa: E402
+from model.winpred.models.baseline import BlueWinRateBaseline  # noqa: E402
 
 VIEWS = ("soloq", "pro")
 

@@ -1,0 +1,136 @@
+{
+ "ref": "v1",
+ "ref_path": "model/checkpoints/winpred-soloq-ce-seed20261105-p16_20/test_preds.npz",
+ "n_boot": 2000,
+ "seed": 20261105,
+ "results": {
+  "v2": {
+   "n": 38436,
+   "unit": "game",
+   "n_units": 38436,
+   "ref": {
+    "name": "v1",
+    "report": {
+     "n": 38436,
+     "n_blue_wins": 18274,
+     "base_rate": 0.47543969195545843,
+     "log_loss": 0.6888388955957911,
+     "brier": 0.24785691935749207,
+     "roc_auc": 0.5438100925569539,
+     "accuracy": 0.5371006348215215,
+     "accuracy_ci": [
+      0.5321122557939296,
+      0.5420815983243453
+     ],
+     "mean_p": 0.47189538487566535,
+     "ece": 0.004896909702530096,
+     "mce": 0.010982280174607728,
+     "brier_skill": 0.006174385417837103,
+     "log_loss_skill": 0.004482152558632491,
+     "const_brier": 0.24939679126875725,
+     "const_log_loss": 0.6919402774809231,
+     "confident": {
+      "lo": 0.35,
+      "hi": 0.65,
+      "n_blue_calls": 0,
+      "n_red_calls": 0,
+      "n_confident": 0,
+      "coverage": 0.0,
+      "precision_blue": NaN,
+      "precision_blue_ci": [
+       0.0,
+       1.0
+      ],
+      "recall_blue": 0.0,
+      "precision_red": NaN,
+      "precision_red_ci": [
+       0.0,
+       1.0
+      ],
+      "recall_red": 0.0,
+      "precision_confident": NaN
+     }
+    }
+   },
+   "new": {
+    "name": "v2",
+    "report": {
+     "n": 38436,
+     "n_blue_wins": 18274,
+     "base_rate": 0.47543969195545843,
+     "log_loss": 0.688768142205662,
+     "brier": 0.24782220949128644,
+     "roc_auc": 0.5448451935187952,
+     "accuracy": 0.5365282547611614,
+     "accuracy_ci": [
+      0.5315395105253107,
+      0.5415096978772547
+     ],
+     "mean_p": 0.4751853920075062,
+     "ece": 0.007053424182723738,
+     "mce": 0.0425458069031055,
+     "brier_skill": 0.006313560689616082,
+     "log_loss_skill": 0.0045844061669738645,
+     "const_brier": 0.24939679126875725,
+     "const_log_loss": 0.6919402774809231,
+     "confident": {
+      "lo": 0.35,
+      "hi": 0.65,
+      "n_blue_calls": 0,
+      "n_red_calls": 69,
+      "n_confident": 69,
+      "coverage": 0.0017951920074929753,
+      "precision_blue": NaN,
+      "precision_blue_ci": [
+       0.0,
+       1.0
+      ],
+      "recall_blue": 0.0,
+      "precision_red": 0.7101449275362319,
+      "precision_red_ci": [
+       0.5942832702456184,
+       0.8038408785924083
+      ],
+      "recall_red": 0.002430314452931257,
+      "precision_confident": 0.7101449275362319
+     }
+    }
+   },
+   "delta": {
+    "log_loss": {
+     "metric": "log_loss",
+     "delta": -7.075339012918569e-05,
+     "lo": -0.0004178139395458441,
+     "hi": 0.00028054498883855176,
+     "n_boot": 2000,
+     "n_groups": 38436,
+     "excludes_zero": false,
+     "frac_draws_lt_zero": 0.673
+    },
+    "brier": {
+     "metric": "brier",
+     "delta": -3.470986620562888e-05,
+     "lo": -0.00020633209952813716,
+     "hi": 0.00013888509364749847,
+     "n_boot": 2000,
+     "n_groups": 38436,
+     "excludes_zero": false,
+     "frac_draws_lt_zero": 0.6745
+    },
+    "accuracy": {
+     "metric": "accuracy",
+     "delta": -0.0005723800603600893,
+     "lo": -0.003928608596107777,
+     "hi": 0.0028879175772713594,
+     "n_boot": 2000,
+     "n_groups": 38436,
+     "excludes_zero": false,
+     "frac_draws_lt_zero": 0.63
+    }
+   },
+   "auc_delta": 0.0010351009618413398,
+   "ref_side_bias_logit": -0.11330025623646911,
+   "new_side_bias_logit": -0.10023451993983513
+  }
+ }
+}

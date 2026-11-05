@@ -12,12 +12,15 @@ stage). If it works, the folder moves to `main` as a whole.
 ```
 data.py       full-draft tables, the 80/10/10 split, prediction-set I/O
 metrics.py    log-loss, Brier, ECE, ROC-AUC, precision/recall at high confidence
-baseline.py   the blue-side win-rate prior (one scalar)
-model.py      Siamese draft encoder -> MLP(h_blue, h_red, h_blue - h_red) + side bias
+models/
+  baseline.py        the blue-side win-rate prior (one scalar)
+  siamese_model.py   Siamese encoder -> MLP(h_blue, h_red, h_blue-h_red[, h_blue*h_red])
+                     + side bias, with the optional [5,5] role prior on cross attention
 train.py      training, CE or focal, soloq/pro/both, W&B, checkpoint + predictions
 evaluate.py   score/compare any mix of checkpoints, .npz prediction sets, priors
 sweep.py      all arms on BOTH test views in one table (§7)
-test_winpred.py  31 tests
+compare_arms.py  paired model-vs-model test on the same rows (§8)
+test_winpred.py  40 tests
 reports/      the JSON evidence behind every number below
 ```
 
@@ -44,6 +47,11 @@ python model/winpred/evaluate.py --data pro --split test --seed 20261105 \
 python model/winpred/sweep.py --seed 20261105 --ckpt pro-ce=... --ckpt pro-focal=... \
     --ckpt soloq-ce=... --ckpt soloq-focal=... --ckpt both-ce=... --ckpt both-focal=... \
     --out model/winpred/reports/sweep_seed20261105.json
+
+# the v2 architecture (§8): product term in the head + role prior on cross attention
+# --tag keeps it from overwriting the v1 checkpoints the tables above cite
+python model/winpred/train.py --data pro --loss ce --seed 20261105 --epochs 40 \
+    --head-product --role-bias --tag v2
 
 pytest model/winpred
 ```
@@ -132,7 +140,7 @@ in `pro`/focal. The two CE arms stop just short on opposite sides: pro/CE peaks
 at 0.6463 against a 0.65 gate, soloQ/CE bottoms at 0.3508 against 0.35. So
 precision/recall at high confidence is `nan` for five of six arms, and the honest
 reading is "the model never commits". The calibration bins carry the information
-a fixed band throws away — see §8 item 5.
+a fixed band throws away — see §9 item 5.
 
 ---
 
@@ -178,6 +186,21 @@ slot = LayerNorm(champ[173] + role[5] + patch[106+UNK] [+ attrs])
   so the role embedding is what tells the set which pick is the support.
 * **`h_blue - h_red` is an explicit head input**, so the head's job is "how
   much does the difference matter", not "compare two vectors".
+* **Two optional parts exist behind flags** (`--head-product`, `--role-bias`;
+  both default off, so §5–§7 describe exactly the model that produced them):
+  - `h_blue * h_red`, appended to the head input (3D → 4D). The difference is
+    linear in each team vector; the product is the elementwise interaction, the
+    shape a *match-up* takes, and it separates cases the difference cannot
+    (`a - b` and `a' - b` coincide whenever `a - a'` is orthogonal to the
+    weight row). It is symmetric under a blue/red swap, so it carries no side
+    information. +66,073 parameters, +2.50 %.
+  - a `[5,5]` additive bias on the cross-attention logits, indexed by *role id*
+    (not slot position, which keeps the block permutation-invariant), with a
+    hand-set start: 0.5 same-role, +0.2 jungle row/column, 0.3 bot↔sup. That is
+    the only prior knowledge in the model and all of it is about the map. It is
+    a strict superset of `SymmetricCrossAttention` — zero it and the two blocks
+    are numerically identical (`test_zeroed_role_bias_reproduces_the_plain_block`).
+  §8 measures whether either helps.
 * **The patch vector is a segment embedding** (zero-initialised, added to every
   slot), so patch-on and patch-off are bit-identical at step 0.
 * **`b_side` is one scalar and the head's last layer has `bias=False`**, so it
@@ -354,7 +377,7 @@ Two differences that are large enough to be structural rather than noise:
   improvement on run 1's 1.0572 but still a collapse of the probabilities).
 * **Focal is worse on soloQ and a wash on pro.** It gains 0.00156 log-loss on
   soloQ where CE gains 0.00310, and 0.0016 AUC on pro where it gains 0.0000 on
-  soloQ. Neither gap survives a seed repeat (§8).
+  soloQ. Neither gap survives a seed repeat (§9).
 
 ### The cross view — the sweep's real question
 
@@ -459,20 +482,130 @@ not work. Joint training at this ratio is a negative result.
 **Does not:** rank CE against focal. Every within-domain gap here is smaller
 than the early-stopping noise (pro selects epoch 6 vs 12 out of 40), and the
 joint comparison is one collapse against a slower collapse. It is also one seed
-throughout; §8 lists the repeat as the cheapest way to settle it.
+throughout; §9 lists the repeat as the cheapest way to settle it.
 
 **Does not** say the joint corpus is hopeless. It says *this* joint setup is:
 one shared head, no domain input, no reweighting. A domain flag or per-domain
-loss normalisation attacks exactly the failure mode observed, and §8 puts it
+loss normalisation attacks exactly the failure mode observed, and §9 puts it
 first for that reason.
 
 ---
 
-## 8. Next steps
+## 8. Architecture v2 — the product term is small, the role prior is a no-op
+
+Two changes, both behind flags (§4). Everything else is held fixed: same seed,
+same split, same hyperparameters (`protocol.hyperparameters` is identical across
+the four arms below except the two new booleans), so the delta is the
+architecture. `--tag` keeps the new checkpoints out of the v1 paths, because
+§7's tables cite those.
+
+A 2×2 on **pro** (n = 4,762, 2,737 series), each arm differenced against v1 on
+the same rows (`compare_arms.py`, 2,000 grouped bootstraps):
+
+| arm | sel. ep | params | log-loss | Brier | ECE | AUC | acc | Δ log-loss vs v1 [95 % CI] | ΔAUC |
+|---|---|---|---|---|---|---|---|---|---|
+| v1 (neither) | 6 | 2,642,177 | 0.68833 | 0.24761 | 0.0156 | 0.5521 | 0.5378 | — | — |
+| + product | 7 | 2,708,225 | 0.68780 | 0.24733 | 0.0205 | 0.5596 | 0.5435 | −0.00053 [−0.00381, +0.00270] | +0.0075 |
+| + role bias | 5 | 2,642,202 | 0.68800 | 0.24742 | 0.0193 | 0.5584 | 0.5475 | −0.00033 [−0.00277, +0.00215] | +0.0063 |
+| + both (v2) | 6 | 2,708,250 | 0.68728 | 0.24708 | 0.0144 | 0.5600 | 0.5428 | −0.00105 [−0.00334, +0.00133] | +0.0078 |
+
+Every variant is ahead of v1 on every metric and **no interval excludes zero**.
+The three variants are also indistinguishable from each other (0.0007 nats,
+0.0016 AUC apart) — which is not a lack of power in the usual sense: repeating
+the identical v2 config twice moves log-loss by 0.00006 and AUC by 0.0002. The
+arms are tied because pro's test set is small, not because the runs are noisy.
+
+### The role prior is inert — measured, not assumed
+
+The `[5,5]` matrix barely moves in training, and deleting it from a trained
+checkpoint changes nothing:
+
+| | v2 (both) | role-bias only |
+|---|---|---|
+| mean abs drift from the hand-set start | 0.0103 | 0.0056 |
+| zero it at inference → Δ log-loss | **+0.000004** | **+0.000028** |
+| zero it at inference → Δ AUC | −0.00004 | −0.00007 |
+| max change to any single prediction | 0.0017 | — |
+
+So the prior contributes nothing to the served model: 25 parameters that moved
+1–2 % of their own scale and can be removed without a measurable effect. The
+role-only arm's +0.006 AUC over v1 therefore **cannot be the prior itself** —
+25 extra parameters changed the gradient path, the model converged somewhere
+else, and that somewhere else scored higher. That is the useful warning: on this
+test set **±0.007 AUC is what a trajectory perturbation buys**, so a single-seed
+architecture comparison of that size proves nothing (§9 item 2 is still open).
+
+Why inert: the slot embedding already contains the role, so cross-attention can
+learn role weighting from content, and an additive ±0.2–0.9 on a softmax over
+logits the network already controls is redundant. The prior would matter for a
+smaller model or scarcer data; here it is a no-op with a plausible story.
+
+### The product term: a real but small gain on pro, nothing on soloQ
+
+Same seed, the large corpus (n = 38,436, CI ±0.0004):
+
+| | log-loss | Brier | ECE | AUC | acc |
+|---|---|---|---|---|---|
+| v1 | 0.68884 | 0.24786 | 0.0049 | 0.5438 | 0.5371 |
+| v2 | 0.68877 | 0.24782 | 0.0071 | 0.5449 | 0.5365 |
+| Δ | −0.00007 [−0.00042, +0.00028] | −0.00003 | +0.0022 | +0.0010 | −0.0006 |
+
+Indistinguishable, and the interval rules out any gain larger than 0.0003 nats —
+a tenth of the entire draft signal v1 has on this corpus (0.0031). On the corpus
+that can actually resolve a small effect, the extra term buys nothing.
+
+What it does change is the *shape* of the output, which is the problem §7 flagged:
+
+* std of `p`: 0.041 → 0.047 (soloQ), 0.045 → 0.052 (pro)
+* calls outside 0.35/0.65: **0 → 69** (soloQ), **0 → 32** (pro)
+* the 69 soloQ calls hit **71.0 % [59.4, 80.4]** against a 47.6 % base rate; the
+  32 pro calls hit 53.1 % [36.5, 69.1] against a 53.3 % prior, i.e. nothing
+* ECE gets *worse* on soloQ (0.0049 → 0.0071): the wider tails are not calibrated
+
+So v2 commits where v1 refused to, and on soloQ those commitments beat the base
+rate — the first non-degenerate reading of §7's confidence metric — but the
+calibration loss cancels the accuracy gain and log-loss does not move. It is a
+diagnostic, not yet a reason to prefer the model.
+
+### A second seed, because one seed cannot carry this
+
+The pro arms above are one split. Re-running **both** configs at seed 20261106
+(different split, so the pair is compared against itself):
+
+| seed 20261106, n = 4,785 | v1 | v2 | Δ [95 % CI] |
+|---|---|---|---|
+| log-loss | 0.69015 | 0.68782 | **−0.00233 [−0.00416, −0.00053]** |
+| Brier | 0.24847 | 0.24736 | **−0.00111 [−0.00201, −0.00025]** |
+| AUC | 0.55256 | 0.55637 | +0.00381 |
+| ECE | 0.03303 | 0.02312 | −0.00991 |
+| selected epoch | 4 | 4 | — |
+
+Both intervals exclude zero here, so on pro the product term survives a change
+of split. Two facts keep this from being a strong claim:
+
+* the two arms selected the **same** epoch (4) with val log-loss 0.68361 vs
+  0.68366 — the selection is not biased, but it also means both are early-stopped
+  by the same noisy val set;
+* v1's own AUC is the stable quantity across seeds (0.5521 → 0.5526) while its
+  log-loss moved 0.0018 — *more* than the v1→v2 gap at seed 1. AUC is the metric
+  to trust on pro at this n; log-loss and ECE are not.
+
+**Verdict.** The product term is worth +0.004 to +0.008 AUC on pro across two
+seeds and 0.000 on soloQ, where the interval is tight enough to say so. The role
+prior is measurably a no-op. Keeping v2 is defensible if pro is the target
+(§1's brief is pro drafts, and +2.5 % parameters is cheap); it is not established
+on the corpus that can measure it, and neither change touches the two results
+that matter — the within-domain signal size (§7) and the absence of cross-domain
+transfer.
+
+---
+
+## 9. Next steps
 
 The brief's "don't train more experiments yet" expired with the six-arm sweep, so
 items 1, 2 and 4 of the old list are **done** (§7): `b_side` is bias-free, soloQ
-has been run, and dropout is 0.2 everywhere. What is left:
+has been run, and dropout is 0.2 everywhere. §8's architecture variant is also
+done. What is left:
 
 1. **Domain conditioning, before any further joint training.** §7 shows a shared
    head on an 8:1 mixture drifting to the constant under both losses. Two cheap
@@ -489,16 +622,28 @@ has been run, and dropout is 0.2 everywhere. What is left:
 4. **Per-patch calibration.** The pooled ECE is 0.009–0.016, but the newest
    patches are where a shipped number would be read; check whether calibration
    holds on 16.18–16.20 alone before quoting a probability in the UI.
-5. **Give the confidence gate a rank readout.** The band is crossed 5 times in
-   172,792 own-view predictions (all in `pro`/focal, 0.6 precision on n = 5), so
-   precision/recall-at-high-confidence is `nan` everywhere else. The calibration
-   bins already carry the alternative: the top 107 pro games are predicted 0.613
-   and won by blue 67.3 %, i.e. the model is *under*-confident at the extremes.
-   Report the top decile of confidence instead of a fixed band.
+5. **Give the confidence gate a rank readout.** In v1 the band is crossed 5 times
+   in 172,792 own-view predictions (all in `pro`/focal, 0.6 precision on n = 5),
+   so precision/recall-at-high-confidence is `nan` everywhere else. §8's product
+   term fixes the symptom — 69 soloQ calls at 71 % — but the *metric* is still
+   the wrong one: on 4,762 pro games a 0.35/0.65 band yields 32 calls, and a
+   32-call precision has a Wilson interval 0.33 wide. Report the top decile of
+   confidence (n = 477 on pro) instead of a fixed band, and quote the interval.
+6. **Don't add more hand-set priors before measuring the one that exists.** §8's
+   `[5,5]` role prior was inert: it moved 1 % of its scale and can be deleted
+   from the checkpoint with no measurable change, because the role is already an
+   input and the attention can learn the same weighting from content. If a role
+   prior is wanted, it has to go where the role is *not* already available (ban
+   slots, a fearless pool) or be strong enough to change the softmax — but
+   measure it the same way (drift + zero-it-at-inference) before crediting it
+   with any part of a delta.
 
 **What not to do:** don't quote accuracy as the headline (the prior alone gets
 52 %, and a model can win accuracy by drifting to the majority side — §7's
 `both/ce` pro subset does exactly that: accuracy +0.019 with log-loss *worse*
 than the prior). Don't read a joint-corpus number without the per-domain block.
 Don't add a blue/red swap augmentation while `b_side` exists — it zeroes it by
-construction.
+construction. Don't compare architectures on pro alone: at n = 4,762 a single
+seed moves AUC by ±0.007, which is the size of the effect §8 measured on the
+second seed (§8's role-only arm is the demonstration — it "gained" 0.006 AUC
+with a parameter that provably does nothing).

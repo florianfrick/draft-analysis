@@ -41,8 +41,8 @@ if str(ROOT) not in sys.path:
 
 from model.winpred import data as D              # noqa: E402
 from model.winpred import metrics as M           # noqa: E402
-from model.winpred import model as W             # noqa: E402
-from model.winpred.baseline import BlueWinRateBaseline  # noqa: E402
+from model.winpred.models import siamese_model as W     # noqa: E402
+from model.winpred.models.baseline import BlueWinRateBaseline  # noqa: E402
 
 
 def parse_args(argv=None):
@@ -73,6 +73,19 @@ def parse_args(argv=None):
                          "data comparisons are not confounded by it.")
     ap.add_argument("--head-dim", type=int, default=0, help="0 = embed_dim")
     ap.add_argument("--pool", choices=("mean", "pma"), default="mean")
+    # architecture variant. Both default OFF so a run without these flags
+    # reproduces the six-arm sweep exactly.
+    ap.add_argument("--head-product", action="store_true", default=False,
+                    help="add h_blue * h_red to the head input "
+                         "(3D -> 4D; the elementwise match-up term)")
+    ap.add_argument("--role-bias", action="store_true", default=False,
+                    help="add the [5,5] additive role x role prior to the "
+                         "cross attention")
+    ap.add_argument("--tag", default="",
+                    help="appended to the default checkpoint dir name, e.g. "
+                         "v2 -> winpred-pro-ce-v2-seed...-through-...; use it "
+                         "so a new architecture does not overwrite the "
+                         "checkpoints an earlier report cites")
     ap.add_argument("--patch-emb", dest="patch_emb", action="store_true",
                     default=True)
     ap.add_argument("--no-patch-emb", dest="patch_emb", action="store_false")
@@ -250,7 +263,8 @@ def setup_wandb(args, cfg):
 
 
 def default_out_dir(args, table, meta):
-    tag = "winpred-%s-%s-seed%d" % (args.data, args.loss, args.seed)
+    variant = "-" + args.tag if getattr(args, "tag", "") else ""
+    tag = "winpred-%s-%s%s-seed%d" % (args.data, args.loss, variant, args.seed)
     if table.source in ("pro", "both"):
         newest = meta.get("newest_row_date") or meta.get("corpus_max_date", "")
         return ROOT / "model" / "checkpoints" / (
@@ -313,15 +327,20 @@ def train(args):
                            num_heads=args.num_heads, dropout=args.dropout,
                            n_patches=n_patches, attr_matrix=attr_matrix,
                            pool=args.pool,
-                           head_dim=args.head_dim or None).to(device)
+                           head_dim=args.head_dim or None,
+                           head_product=args.head_product,
+                           role_bias=args.role_bias).to(device)
     cfg = W.config_of(model, data=args.data, loss=args.loss,
                       focal_gamma=args.focal_gamma,
                       focal_alpha=args.focal_alpha, seed=args.seed,
                       patch_emb=bool(args.patch_emb),
                       attrs=bool(args.attr), pool=args.pool)
     print("model: %.2fM params | patch emb %s (%d rows) | attrs %s | pool %s"
+          " | head product %s | role bias %s"
           % (W.param_count(model) / 1e6, "ON" if n_patches else "OFF",
-             n_patches, "ON" if attr_matrix is not None else "OFF", args.pool))
+             n_patches, "ON" if attr_matrix is not None else "OFF", args.pool,
+             "ON" if args.head_product else "OFF",
+             "ON" if args.role_bias else "OFF"))
 
     # ---- optimisation
     steps_per_epoch = math.ceil(len(tr_loader))
@@ -390,7 +409,7 @@ def train(args):
                 import wandb
                 wandb.log({"train/loss": agg / max(1, nb),
                            "train/lr": sched.get_last_lr()[0],
-                           "train/side_bias": float(model.side_bias),
+                           "train/side_bias": float(model.side_bias.detach()),
                            **{"val/" + k: vm[k] for k in
                               ("log_loss", "brier", "roc_auc", "accuracy",
                                "ece")}}, step=global_step)
@@ -466,6 +485,11 @@ def train(args):
                 "num_cross": args.num_cross, "num_heads": args.num_heads,
                 "dropout": args.dropout, "pool": args.pool,
                 "patch_emb": bool(args.patch_emb), "attrs": bool(args.attr),
+                # Architecture, not optimisation, but it belongs in the same
+                # record: without these two the report of a v2 run is
+                # indistinguishable from a v1 run except by `params`.
+                "head_product": bool(args.head_product),
+                "role_bias": bool(args.role_bias),
                 "batch_size": args.batch_size, "lr": args.lr,
                 "weight_decay": args.weight_decay,
                 "warmup_frac": args.warmup_frac, "epochs": args.epochs,

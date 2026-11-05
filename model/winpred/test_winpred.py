@@ -19,10 +19,11 @@ ROOT = HERE.parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from model.pretraining.soloq_model import SymmetricCrossAttention  # noqa: E402
 from model.winpred import data as D              # noqa: E402
 from model.winpred import metrics as M           # noqa: E402
-from model.winpred import model as W             # noqa: E402
-from model.winpred.baseline import BlueWinRateBaseline  # noqa: E402
+from model.winpred.models import siamese_model as W     # noqa: E402
+from model.winpred.models.baseline import BlueWinRateBaseline  # noqa: E402
 from model.winpred.train import focal_loss        # noqa: E402
 
 EP = D._load("winpred_test_eval_protocol", D.PRO_DIR / "eval_protocol.py")
@@ -461,3 +462,132 @@ def test_config_roundtrips_into_a_loadable_model(tmp_path):
     loaded, payload = W.load_checkpoint(path)
     assert loaded.num_champs == m.num_champs
     assert payload["config"]["seed"] == 1
+
+
+# --------------------------------------------------- architecture: the head
+def test_head_product_appends_the_elementwise_term():
+    m = W.WinPredictor(embed_dim=32, num_intra=1, num_cross=1, num_heads=4,
+                       head_product=True)
+    assert m.head_in == 32 * 4
+    assert tuple(m.head[0].normalized_shape) == (32 * 4,)
+    vb, vr = torch.randn(3, 32), torch.randn(3, 32)
+    z = m.head_input(vb, vr)
+    assert z.shape == (3, 32 * 4)
+    assert torch.allclose(z[:, :32], vb)
+    assert torch.allclose(z[:, 32:64], vr)
+    assert torch.allclose(z[:, 64:96], vb - vr)
+    assert torch.allclose(z[:, 96:], vb * vr)
+
+
+def test_head_without_the_flag_is_byte_for_byte_the_old_head():
+    m = W.WinPredictor(embed_dim=32, num_intra=1, num_cross=1, num_heads=4)
+    assert m.head_in == 96
+    assert m.head_input(torch.randn(2, 32), torch.randn(2, 32)).shape == (2, 96)
+
+
+def test_product_term_is_symmetric_under_a_team_swap():
+    """The product cannot carry side information, so `h_b - h_r` and
+    `side_bias` remain the only asymmetric paths to the logit."""
+    m = W.WinPredictor(embed_dim=16, num_intra=1, num_cross=1, num_heads=4,
+                       head_product=True)
+    vb, vr = torch.randn(4, 16), torch.randn(4, 16)
+    a = m.head_input(vb, vr)
+    b = m.head_input(vr, vb)
+    assert torch.allclose(a[:, 48:], b[:, 48:])       # product: unchanged
+    assert torch.allclose(a[:, 32:48], -b[:, 32:48])  # difference: negated
+
+
+# ---------------------------------------- architecture: the role-aware bias
+def test_role_bias_starts_at_the_stated_prior():
+    m = W.WinPredictor(embed_dim=16, num_intra=1, num_cross=1, num_heads=4,
+                       role_bias=True)
+    rb = m.cross_team[0].role_bias.detach()
+    assert tuple(rb.shape) == (5, 5)
+    assert m.cross_team[0].role_bias.requires_grad
+    for i in range(5):
+        # the diagonal is 0.5, except jungle, which also collects its own
+        # row/column boost: 0.5 + 0.2 + 0.2
+        assert float(rb[i, i]) == pytest.approx(0.9 if i == 1 else 0.5)
+    assert float(rb[3, 4]) == pytest.approx(0.3)
+    assert float(rb[4, 3]) == pytest.approx(0.3)
+    assert float(rb[0, 1]) == pytest.approx(0.2)      # jungle column
+    assert float(rb[1, 0]) == pytest.approx(0.2)      # jungle row
+    assert float(rb[0, 2]) == pytest.approx(0.0)      # top vs mid: no prior
+    assert float(rb[2, 4]) == pytest.approx(0.0)
+
+
+def test_role_bias_is_indexed_by_role_not_by_slot():
+    blk = W.RoleAwareCrossAttention(embed_dim=16, num_heads=4)
+    roles = torch.tensor([[2, 0, 4, 1, 3]])           # deliberately permuted
+    mask = blk._additive_mask(roles, roles, torch.float32).detach()
+    assert tuple(mask.shape) == (4, 5, 5)             # [B*heads, 5, 5]
+    assert float(mask[0, 0, 4]) == pytest.approx(0.0)   # role 2 -> role 3
+    assert float(mask[0, 2, 3]) == pytest.approx(0.2)   # role 4 -> role 1
+    assert torch.allclose(mask[0], mask[3])            # shared across heads
+
+
+def test_role_bias_changes_the_logit_and_receives_gradient():
+    m = W.WinPredictor(embed_dim=16, num_intra=1, num_cross=1, num_heads=4,
+                       dropout=0.0, role_bias=True).eval()
+    batch = _batch(3, seed=2)
+    with torch.no_grad():
+        before = m(batch)["logit"].clone()
+        m.cross_team[0].role_bias.zero_()
+        after = m(batch)["logit"]
+    assert not torch.allclose(before, after, atol=1e-5)
+    m.train()
+    m(batch)["logit"].sum().backward()
+    g = m.cross_team[0].role_bias.grad
+    assert g is not None and torch.isfinite(g).all() and float(g.abs().sum()) > 0
+
+
+def test_zeroed_role_bias_reproduces_the_plain_block():
+    """A strict superset: at zero bias the new block IS the block the six arms
+    were trained with, so a difference can only come from the bias."""
+    torch.manual_seed(0)
+    plain = SymmetricCrossAttention(16, 4, 0.0).eval()
+    aware = W.RoleAwareCrossAttention(16, 4, 0.0).eval()
+    missing, unexpected = aware.load_state_dict(plain.state_dict(), strict=False)
+    assert unexpected == [] and set(missing) == {"role_bias"}
+    with torch.no_grad():
+        aware.role_bias.zero_()
+        blue, red = torch.randn(3, 5, 16), torch.randn(3, 5, 16)
+        pb, pr = plain(blue, red)
+        ab, ar = aware(blue, red)
+    assert torch.allclose(pb, ab, atol=1e-6)
+    assert torch.allclose(pr, ar, atol=1e-6)
+
+
+def test_role_aware_model_is_still_permutation_invariant():
+    """Gathering the bias by role is what keeps slot order irrelevant."""
+    m = W.WinPredictor(embed_dim=16, num_intra=1, num_cross=1, num_heads=4,
+                       dropout=0.0, role_bias=True, head_product=True).eval()
+    batch = _batch(3, seed=1)
+    perm = torch.tensor([3, 0, 4, 1, 2])
+    shuffled = dict(batch)
+    shuffled["champ_ids"] = batch["champ_ids"].clone()
+    shuffled["role_ids"] = batch["role_ids"].clone()
+    for half in (slice(0, 5), slice(5, 10)):
+        shuffled["champ_ids"][:, half] = batch["champ_ids"][:, half][:, perm]
+        shuffled["role_ids"][:, half] = batch["role_ids"][:, half][:, perm]
+    with torch.no_grad():
+        assert torch.allclose(m(batch)["logit"], m(shuffled)["logit"], atol=1e-5)
+
+
+def test_architecture_flags_roundtrip_and_old_configs_still_build():
+    m = W.WinPredictor(embed_dim=16, num_intra=1, num_cross=1, num_heads=4,
+                       head_product=True, role_bias=True)
+    cfg = W.config_of(m)
+    assert cfg["head_product"] is True and cfg["role_bias"] is True
+    rebuilt = W.build_from_config(cfg)
+    rebuilt.load_state_dict(m.state_dict())
+    assert W.param_count(rebuilt) == W.param_count(m)
+    assert isinstance(rebuilt.cross_team[0], W.RoleAwareCrossAttention)
+
+    # A config written before the flags existed (README 7's six arms).
+    old = {k: v for k, v in cfg.items()
+           if k not in ("head_product", "role_bias")}
+    old_model = W.build_from_config(old)
+    assert old_model.head_in == 16 * 3
+    assert not isinstance(old_model.cross_team[0], W.RoleAwareCrossAttention)
+    assert old_model.head[1].in_features == 48

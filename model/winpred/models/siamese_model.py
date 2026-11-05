@@ -6,8 +6,9 @@ contract), with the masked-modelling heads replaced by one outcome head:
     slot embedding = LayerNorm(champ + role [+ attrs] [+ patch])
       -> Siamese intra-team self-attention   (ONE encoder, applied to [2B,5,D])
       -> symmetric inter-team cross-attention (ONE block, both directions)
+         + an additive, learned role x role bias on the cross attention logits
       -> per-team pooled vector h_blue, h_red
-      -> logit = MLP([h_blue, h_red, h_blue - h_red]) + b_side
+      -> logit = MLP([h_blue, h_red, h_blue - h_red, h_blue * h_red]) + b_side
 
 Design notes, each of which is a decision rather than a default
 ---------------------------------------------------------------
@@ -34,6 +35,27 @@ Design notes, each of which is a decision rather than a default
   has to discover. `[h_blue, h_red, h_blue - h_red]` is the same asymmetry
   recipe the repo's value heads use, and it makes the head's job "how much does
   the difference matter" rather than "compare two vectors".
+* **`h_blue * h_red` is the second-order term** (`head_product=True`). The
+  difference is linear in each team vector; the product is the elementwise
+  *interaction* - "these two team vectors point the same way along dimension d",
+  which is the shape of a match-up (a pick that is good into the other pick) and
+  is what a pure difference cannot express: `(a-b)` and `(a'-b)` are
+  indistinguishable whenever `a-a'` is orthogonal to the weight row, and the
+  product separates exactly those cases. It is also **symmetric** under a
+  blue/red swap, so it cannot carry side information - all of the asymmetry
+  still has to come from `h_blue - h_red` and `b_side`, which is the split we
+  want. Cost is one extra `D`-wide input to the head: +0.066 M parameters at
+  D=256 (a 2.5% increase).
+* **A role x role bias on the cross attention** (`role_bias=True`). Cross-team
+  attention starts with no notion that a TOP query should weight the enemy TOP
+  more than the enemy SUP; the slot embeddings carry the role, so it *can* learn
+  this, but from 37 k pro games it has no reason to spend capacity on it. A
+  5x5 additive matrix on the attention logits states the prior once: same-role
+  pairs, jungle-to-everything, and the bot/sup pair. One instance is applied in
+  both directions (Siamese), and it is indexed by *role id*, not by slot
+  position, so permuting the five slots still cannot change the output.
+  Not applied to the intra-team encoder: inside one team each role appears
+  exactly once, so a "same-role" prior there has no pair to act on.
 * **A scalar `side_bias`** is added to the logit. It is the whole blue-side
   prior: one parameter, initialised at 0, so the model has to learn it. This is
   what makes the baseline comparison meaningful - the network has exactly the
@@ -58,13 +80,100 @@ N_SLOTS = 10
 TEAM_SIZE = 5
 NUM_REAL_CHAMPS = 173
 
+# Where the role prior starts. Kept as module-level constants rather than
+# literals inside the initialiser so a test can assert the numbers the design
+# claims, and so the README has one place to point at.
+ROLE_PRIOR = {
+    "same_role": 0.5,     # TOP vs TOP, ... SUP vs SUP
+    "jungle": 0.2,        # row 1 and column 1: jungle touches every lane
+    "bot_sup": 0.3,       # 3 <-> 4: the one lane that is a pair
+}
+
+
+def init_role_bias_(role_bias, team_size=TEAM_SIZE):
+    """Fill a [5,5] cross-attention role prior in place.
+
+    Rows are the *query* slot's role, columns the *key* slot's role, so
+    `role_bias[i, j]` is added to the attention logit of "role i looks at role
+    j". Positive = attend more.
+
+    These three entries are the only prior knowledge in the whole model, and all
+    three are about the map rather than about any champion: a lane opponent is
+    the natural reference class, the jungler is the only role not tied to one
+    lane, and bot/sup are the only two roles that share a lane. Everything else
+    starts at zero and has to be learned.
+
+    Note `role_bias[1, 1]` ends at 0.9, not 0.5: it is on the diagonal *and* on
+    the jungle row and column. That is the intended reading (the jungle mirror
+    is the strongest single pair on the board), not an oversight.
+    """
+    if tuple(role_bias.shape) != (team_size, team_size):
+        raise ValueError("role_bias must be [%d,%d], got %s"
+                         % (team_size, team_size, tuple(role_bias.shape)))
+    with torch.no_grad():
+        role_bias.zero_()
+        for i in range(team_size):
+            role_bias[i, i] = ROLE_PRIOR["same_role"]
+        role_bias[1, :] += ROLE_PRIOR["jungle"]          # jungle row
+        role_bias[:, 1] += ROLE_PRIOR["jungle"]          # jungle column
+        role_bias[3, 4] = ROLE_PRIOR["bot_sup"]
+        role_bias[4, 3] = ROLE_PRIOR["bot_sup"]
+    return role_bias
+
+
+class RoleAwareCrossAttention(SymmetricCrossAttention):
+    """`SymmetricCrossAttention` + a learned additive role x role bias.
+
+    A strict superset of the parent: same projections, same norms, same FFN,
+    same state-dict key names, plus one [5,5] parameter. With `role_bias`
+    zeroed the two blocks are numerically identical, which is what
+    `test_zeroed_role_bias_reproduces_the_plain_block` asserts - so a
+    difference in the experiment is attributable to the bias and nothing else.
+
+    The bias is gathered by *role id*, not by slot index. In this dataset the
+    two coincide (slot i of a team is always role i), but keying on the id is
+    what keeps the block honest: the test that shuffles slots within a team
+    still passes, because the bias follows the role rather than the position.
+    """
+
+    def __init__(self, embed_dim=128, num_heads=8, dropout=0.1,
+                 team_size=TEAM_SIZE):
+        super().__init__(embed_dim, num_heads, dropout)
+        self.team_size = int(team_size)
+        self.role_bias = init_role_bias_(
+            nn.Parameter(torch.zeros(team_size, team_size)), self.team_size)
+
+    def _additive_mask(self, role_q, role_k, dtype):
+        """[B,5] x [B,5] role ids -> [B*num_heads,5,5] additive attn mask."""
+        bias = self.role_bias[role_q.unsqueeze(-1), role_k.unsqueeze(-2)]
+        return bias.to(dtype).repeat_interleave(self.attn.num_heads, dim=0)
+
+    def _one_way(self, query, kv, kv_pad_mask, role_q, role_k):
+        a, _ = self.attn(query, kv, kv, key_padding_mask=kv_pad_mask,
+                         attn_mask=self._additive_mask(role_q, role_k,
+                                                       query.dtype),
+                         need_weights=False)
+        query = self.norm1(query + a)
+        return self.norm2(query + self.ffn(query))
+
+    def forward(self, blue, red, blue_pad_mask=None, red_pad_mask=None,
+                blue_roles=None, red_roles=None):
+        """Roles default to canonical order, for standalone use in tests."""
+        if blue_roles is None or red_roles is None:
+            ar = torch.arange(blue.shape[1], device=blue.device)
+            blue_roles = ar.unsqueeze(0).expand(blue.shape[0], -1)
+            red_roles = ar.unsqueeze(0).expand(red.shape[0], -1)
+        return (self._one_way(blue, red, red_pad_mask, blue_roles, red_roles),
+                self._one_way(red, blue, blue_pad_mask, red_roles, blue_roles))
+
 
 class WinPredictor(nn.Module):
     """Full 10-pick draft -> P(blue wins) as a single logit."""
 
     def __init__(self, num_champs=NUM_REAL_CHAMPS, embed_dim=256,
                  num_intra=2, num_cross=1, num_heads=8, dropout=0.1,
-                 n_patches=0, attr_matrix=None, pool="mean", head_dim=None):
+                 n_patches=0, attr_matrix=None, pool="mean", head_dim=None,
+                 head_product=False, role_bias=False):
         super().__init__()
         if pool not in ("mean", "pma"):
             raise ValueError("pool must be 'mean' or 'pma', got %r" % (pool,))
@@ -72,6 +181,12 @@ class WinPredictor(nn.Module):
         self.embed_dim = int(embed_dim)
         self.n_patches = int(n_patches or 0)
         self.pool = pool
+        # Kept as flags on the module so `config_of` can round-trip them: a
+        # checkpoint that does not record which blocks it was built from cannot
+        # be rebuilt, and `load_checkpoint` is strict on purpose.
+        self.head_product = bool(head_product)
+        self.use_role_bias = bool(role_bias)
+        self.head_in = self.embed_dim * (4 if self.head_product else 3)
 
         self.embed = DraftSlotEmbedding(num_champs=self.num_champs,
                                         embed_dim=self.embed_dim,
@@ -88,15 +203,17 @@ class WinPredictor(nn.Module):
         # ONE instance applied to both teams -> Siamese intra-team encoder.
         self.intra_team = nn.TransformerEncoder(layer,
                                                 num_layers=num_intra)
+        block_cls = (RoleAwareCrossAttention if self.use_role_bias
+                     else SymmetricCrossAttention)
         self.cross_team = nn.ModuleList(
-            [SymmetricCrossAttention(self.embed_dim, num_heads, dropout)
+            [block_cls(self.embed_dim, num_heads, dropout)
              for _ in range(num_cross)])
         self.pma = PMAPool(self.embed_dim, num_heads) if pool == "pma" else None
 
         hidden = int(head_dim or self.embed_dim)
         self.head = nn.Sequential(
-            nn.LayerNorm(self.embed_dim * 3),
-            nn.Linear(self.embed_dim * 3, hidden),
+            nn.LayerNorm(self.head_in),
+            nn.Linear(self.head_in, hidden),
             nn.GELU(),
             nn.Dropout(dropout),
             # bias=False on purpose: a bias here is a second constant added to
@@ -144,12 +261,14 @@ class WinPredictor(nn.Module):
         both = self.intra_team(both, src_key_padding_mask=both_pad
                                if bool(both_pad.any()) else None)
         blue, red = both[:B], both[B:]
-        if bool(both_pad.any()):
-            for block in self.cross_team:
-                blue, red = block(blue, red, blue_pad, red_pad)
-        else:
-            for block in self.cross_team:
-                blue, red = block(blue, red)
+        pad_args = (blue_pad, red_pad) if bool(both_pad.any()) else (None, None)
+        # Only the role-aware block takes role ids; `SymmetricCrossAttention`
+        # does not, and every checkpoint written before it existed must still
+        # load (README §7's six arms).
+        role_args = ((role_ids[:, :TEAM_SIZE], role_ids[:, TEAM_SIZE:])
+                     if self.use_role_bias else ())
+        for block in self.cross_team:
+            blue, red = block(blue, red, *pad_args, *role_args)
         return blue, red
 
     def team_vectors(self, batch, h=None):
@@ -171,10 +290,17 @@ class WinPredictor(nn.Module):
         return vb, vr
 
     # ------------------------------------------------------------- forward
+    def head_input(self, vb, vr):
+        """The head's view of the matchup: both vectors, their difference, and
+        (opt-in) their elementwise product."""
+        parts = [vb, vr, vb - vr]
+        if self.head_product:
+            parts.append(vb * vr)
+        return torch.cat(parts, dim=1)               # [B, 3D or 4D]
+
     def forward(self, batch):
         vb, vr = self.team_vectors(batch)
-        z = torch.cat([vb, vr, vb - vr], dim=1)      # [B, 3D]
-        logit = self.head(z).squeeze(-1) + self.side_bias
+        logit = self.head(self.head_input(vb, vr)).squeeze(-1) + self.side_bias
         return {"logit": logit, "h_blue": vb, "h_red": vr}
 
     @torch.no_grad()
@@ -192,7 +318,12 @@ def config_of(model, **extra):
            "dropout": model.intra_team.layers[0].dropout.p,
            "n_patches": model.n_patches, "attr_dim": model.attr_dim,
            "pool": model.pool,
-           "head_dim": model.head[1].out_features}
+           "head_dim": model.head[1].out_features,
+           # The two architecture flags are part of the config, not a default:
+           # a checkpoint that cannot say how it was built is a checkpoint
+           # `load_checkpoint` (strict) will refuse.
+           "head_product": model.head_product,
+           "role_bias": model.use_role_bias}
     cfg.update(extra)
     return cfg
 
@@ -205,6 +336,9 @@ def build_from_config(cfg, attr_matrix=None):
     would then serve a model whose attribute path is frozen at zero - silently
     different from the one that was trained. Same reasoning as
     `soloq_model.attr_matrix_for_config`.
+
+    The two architecture flags default to False, so every checkpoint written
+    before they existed (the six arms of README §7) still rebuilds exactly.
     """
     if attr_matrix is None:
         attr_matrix = attr_matrix_for_config(cfg)
@@ -217,7 +351,9 @@ def build_from_config(cfg, attr_matrix=None):
                         n_patches=cfg.get("n_patches", 0),
                         attr_matrix=attr_matrix,
                         pool=cfg.get("pool", "mean"),
-                        head_dim=cfg.get("head_dim"))
+                        head_dim=cfg.get("head_dim"),
+                        head_product=cfg.get("head_product", False),
+                        role_bias=cfg.get("role_bias", False))
 
 
 def load_checkpoint(path, device="cpu"):
