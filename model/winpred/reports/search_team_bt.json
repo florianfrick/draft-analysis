@@ -1,0 +1,129 @@
+{
+ "grid": "team_bt",
+ "base": [
+  "--data",
+  "pro",
+  "--loss",
+  "ce",
+  "--seed",
+  "20261105",
+  "--epochs",
+  "20",
+  "--patience",
+  "4",
+  "--no-test",
+  "--no-wandb"
+ ],
+ "rows": [
+  {
+   "name": "bt-k10",
+   "tokens": [
+    "--team-feat",
+    "--dropout",
+    "0.3",
+    "--team-mode",
+    "bt"
+   ],
+   "val_log_loss": 0.6474658487024875,
+   "val_auc": 0.6696691137691707,
+   "val_brier": 0.2281823925929449,
+   "epoch": 1,
+   "params": 2642951,
+   "corpus": "2022",
+   "seconds": 20.1
+  },
+  {
+   "name": "bt-k4",
+   "tokens": [
+    "--team-feat",
+    "--dropout",
+    "0.3",
+    "--team-mode",
+    "bt",
+    "--team-k",
+    "4"
+   ],
+   "val_log_loss": 0.6488891012980695,
+   "val_auc": 0.6788408258267761,
+   "val_brier": 0.22822900709072586,
+   "epoch": 1,
+   "params": 2642951,
+   "corpus": "2022",
+   "seconds": 21.3
+  },
+  {
+   "name": "bt-k20",
+   "tokens": [
+    "--team-feat",
+    "--dropout",
+    "0.3",
+    "--team-mode",
+    "bt",
+    "--team-k",
+    "20"
+   ],
+   "val_log_loss": 0.6559585191772264,
+   "val_auc": 0.6766510031010695,
+   "val_brier": 0.23009757554220903,
+   "epoch": 6,
+   "params": 2642951,
+   "corpus": "2022",
+   "seconds": 35.6
+  },
+  {
+   "name": "bt-hl365",
+   "tokens": [
+    "--team-feat",
+    "--dropout",
+    "0.3",
+    "--team-mode",
+    "bt",
+    "--team-half-life",
+    "365"
+   ],
+   "val_log_loss": 0.6621058208438313,
+   "val_auc": 0.6495740424305072,
+   "val_brier": 0.23415740696864412,
+   "epoch": 5,
+   "params": 2642951,
+   "corpus": "2022",
+   "seconds": 29.3
+  },
+  {
+   "name": "bt-hl730",
+   "tokens": [
+    "--team-feat",
+    "--dropout",
+    "0.3",
+    "--team-mode",
+    "bt",
+    "--team-half-life",
+    "730"
+   ],
+   "val_log_loss": 0.6565155295719994,
+   "val_auc": 0.671549005337215,
+   "val_brier": 0.2307689867574055,
+   "epoch": 5,
+   "params": 2642951,
+   "corpus": "2022",
+   "seconds": 29.4
+  },
+  {
+   "name": "rate-hl365",
+   "tokens": [
+    "--team-feat",
+    "--dropout",
+    "0.3",
+    "--team-half-life",
+    "365"
+   ],
+   "val_log_loss": 0.6670932519139825,
+   "val_auc": 0.6316595644438819,
+   "val_brier": 0.23698591804421815,
+   "epoch": 5,
+   "params": 2642951,
+   "corpus": "2022",
+   "seconds": 30.2
+  }
+ ]
+}

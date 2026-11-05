@@ -5,6 +5,7 @@ session and every test slices them. The point of the suite is the contract -
 that a metric cannot be quietly wrong, that the split cannot leak a series,
 that the model cannot see a ban, and that a checkpoint round-trips.
 """
+import copy
 import importlib.util
 import math
 import sys
@@ -591,3 +592,56 @@ def test_architecture_flags_roundtrip_and_old_configs_still_build():
     assert old_model.head_in == 16 * 3
     assert not isinstance(old_model.cross_team[0], W.RoleAwareCrossAttention)
     assert old_model.head[1].in_features == 48
+
+
+# ------------------------------------------------- strength estimators
+def test_strength_features_never_read_val_or_test_labels(pro_table):
+    """Both fits take `train_idx` and nothing else, so flipping the labels of
+    the rows they must not see cannot move the feature by a single bit.
+
+    This is the whole fairness argument for §10-§13: the split is series-
+    grouped, so a team's (or player's) test games are never in its own history,
+    and a leak would show up here as a feature that changed.
+    """
+    table, _ = pro_table
+    splits, _ = D.make_splits(table, verbose=False)
+    tr = splits["train"]
+    other = np.concatenate([splits["val"], splits["test"]])
+
+    flipped = copy.deepcopy(table)
+    flipped.y[other] = 1 - flipped.y[other]
+    assert not np.array_equal(flipped.y[other], table.y[other])
+
+    for mode in ("rate", "bt", "player"):
+        a = D.team_strength(table, tr, mode=mode)
+        b = D.team_strength(flipped, tr, mode=mode)
+        assert np.array_equal(a, b), mode
+
+
+def test_bt_shrinks_more_as_k_grows(pro_table):
+    """`k` is pseudo-games, so the ratings must spread out as it falls."""
+    table, _ = pro_table
+    splits, _ = D.make_splits(table, verbose=False)
+    tr = splits["train"]
+    spread = [np.std(np.diff(D.team_strength(table, tr, k=k, mode="bt"),
+                             axis=1)) for k in (2.0, 10.0, 100.0)]
+    assert spread[0] > spread[1] > spread[2]
+
+
+def test_player_block_is_not_a_silent_no_op(pro_table):
+    """Regression for the lambda inversion.
+
+    With `lambda = k / (4 v^2)` instead of `0.25 v^2 k`, the player block was
+    penalised 100x too hard: it moved nothing, correlated 0.999 with the team
+    ratings, and looked like a negative result. It must disagree with the team
+    ratings on a real fraction of rows, and stay on a comparable scale.
+    """
+    table, _ = pro_table
+    splits, _ = D.make_splits(table, verbose=False)
+    tr = splits["train"]
+    team = np.diff(D.team_strength(table, tr, k=10.0, mode="bt"), axis=1)[:, 0]
+    player = np.diff(D.team_strength(table, tr, k=10.0, mode="player",
+                                     kp=10.0), axis=1)[:, 0]
+    assert np.corrcoef(team, player)[0, 1] < 0.99
+    assert np.std(player) > 0.5
+    assert abs(np.std(player) - np.std(team)) < np.std(team)

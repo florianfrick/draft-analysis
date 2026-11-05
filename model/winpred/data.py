@@ -59,6 +59,8 @@ import random
 from collections import Counter, defaultdict
 from pathlib import Path
 
+import datetime
+
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -247,6 +249,314 @@ def load_pro(corpus="2022", verbose=True):
               % (len(patch_vocab), patch_vocab[0], patch_vocab[-1],
                  meta["newest_row_date"], PRO_PIPE.CORPUS_MAX_DATE))
     return table, meta
+
+
+def _team_pairs(table, corpus="2022", verbose=False):
+    """Per-row (blue team, red team) names, aligned to `table`'s rows."""
+    rows, _ = _pro_rows(corpus, verbose=verbose)
+    teams = {str(r["gameid"]): (str(r["blue_team"]), str(r["red_team"]))
+             for r in rows}
+    tb = np.array([teams[g][0] for g in table.game_id], dtype=object)
+    tr = np.array([teams[g][1] for g in table.game_id], dtype=object)
+    return tb, tr
+
+
+_PLAYER_INDEX = {}
+
+
+def _player_index(corpus="2022", verbose=False):
+    """`gameid -> ([blue player ids in role order], [red ...])`.
+
+    Read straight from the CSVs rather than through `pipeline.build_rows` on
+    purpose: the row schema there is shared with the policy work and the cached
+    `pro_drafts.pt` would have to be rebuilt for every consumer just so this
+    experiment could see one extra column. The scan is 18 s for 2022-2026 and
+    is memoised for the process, which is what a search run needs.
+
+    `playerid` is preferred over `playername` (it survives a rename) and rows
+    without either are dropped - a game missing a player simply contributes no
+    player term, which is the same treatment an unseen player gets.
+    """
+    if corpus in _PLAYER_INDEX:
+        return _PLAYER_INDEX[corpus]
+    import csv
+    import glob
+
+    pattern = str(PRO_PIPE.CSV_GLOB if corpus == "2022"
+                  else PRO_PIPE.CSV_GLOB_ALL)
+    role_of = {"top": 0, "jng": 1, "mid": 2, "bot": 3, "sup": 4}
+    out = {}
+    for path in sorted(glob.glob(pattern)):
+        with open(path, newline="", encoding="utf-8") as fh:
+            for row in csv.DictReader(fh):
+                role = role_of.get(row.get("position"))
+                side = row.get("side")
+                if role is None or side not in ("Blue", "Red"):
+                    continue
+                pid = ((row.get("playerid") or "").strip()
+                       or (row.get("playername") or "").strip())
+                gid = row.get("gameid")
+                if not gid or not pid:
+                    continue
+                slot = out.setdefault(gid, ([None] * 5, [None] * 5))
+                slot[0 if side == "Blue" else 1][role] = pid
+    _PLAYER_INDEX[corpus] = out
+    if verbose:
+        print("  player index: %d games" % len(out))
+    return out
+
+
+def _roster_columns(table, corpus="2022", verbose=False):
+    """Per-row `(blue, red)` tuples of player ids, aligned to `table`."""
+    index = _player_index(corpus, verbose=verbose)
+    blue, red = [], []
+    for g in table.game_id:
+        b, r = index.get(str(g), ((), ()))
+        blue.append(tuple(p for p in b if p))
+        red.append(tuple(p for p in r if p))
+    return blue, red
+
+
+def _age_days(dates):
+    """Days *before the corpus frontier*, 0 = newest row possible.
+
+    Relative to `CORPUS_MAX_DATE` and not to the train maximum, because the
+    train maximum moves with the split; a decay weight that shifts when the
+    split is redrawn would make two runs incomparable for a reason that has
+    nothing to do with the model. Unparseable dates count as "newest", which
+    fails toward keeping the row rather than silently dropping it.
+    """
+    try:
+        frontier = datetime.date.fromisoformat(str(PRO_PIPE.CORPUS_MAX_DATE)[:10])
+    except ValueError:
+        frontier = None
+    out = np.zeros(len(dates), dtype=np.float64)
+    for i, d in enumerate(dates):
+        if frontier is None:
+            break
+        try:
+            out[i] = float((frontier
+                            - datetime.date.fromisoformat(str(d)[:10])).days)
+        except ValueError:
+            out[i] = 0.0
+    return out
+
+
+def _bt_ratings(tb, tr, y, idx, k, weight, verbose=False, roster=None, kp=None,
+                use_team=True):
+    """Bradley-Terry ratings by L2 logistic regression, train rows only.
+
+    The smoothed win rate treats every game as equally informative about a
+    team; Bradley-Terry does not, because it conditions on the opponent. A team
+    at 60 % in a league of strong teams is not a team at 60 % in a minor
+    league, and the marginal rate cannot tell them apart - which matters here
+    because the corpus spans several leagues and the whole point of the feature
+    is *who is playing*.
+
+    Model: `logit P(blue wins) = r_blue - r_red + h`, with `r` an L2-penalised
+    per-team rating and `h` a side intercept. `h` is fitted (ratings should be
+    side-agnostic) but **not** returned - the head already owns a `side_bias`,
+    and shipping the same constant twice would double-count it.
+
+    `k` keeps its meaning from the rate version by dividing it by the curvature
+    of the log-loss at p = 0.5 (0.25 per game): `k` pseudo-games of shrinkage
+    is then `lambda = k / 4` in the penalised objective. With `weight` this
+    becomes a recency-weighted fit, which is the second reason to prefer it -
+    rosters change, and a 2022 win rate is weak evidence about a 2026 team.
+
+    `roster=(blue_players, red_players)` adds a **player block**: a joint fit of
+    `r_blue - r_red + mean(r_player_blue) - mean(r_player_red) + h`. A team tag
+    is a roster that changes; a player rating is not, so this separates "T1 is
+    good" from "T1 still has Faker". `kp` is the player shrinkage (default
+    `k`). Returns `[N, 2]` float32 - per-side strength, not ratings - so the
+    caller never has to know which blocks were active.
+    """
+    kp = k if kp is None else kp
+    names = sorted({tb[i] for i in idx} | {tr[i] for i in idx}) if use_team \
+        else []
+    tcol = {t: j for j, t in enumerate(names)}
+    n_team = len(names)
+    idx = np.asarray(idx, dtype=np.int64)
+
+    rows_i, cols_i, vals = [], [], []
+    if n_team:
+        ii = np.repeat(np.arange(idx.size), 2)
+        cc = np.empty(2 * idx.size, dtype=np.int64)
+        cc[0::2] = [tcol[tb[i]] for i in idx]
+        cc[1::2] = [tcol[tr[i]] for i in idx]
+        rows_i.append(ii)
+        cols_i.append(cc)
+        vals.append(np.tile([1.0, -1.0], idx.size))
+
+    # Optional player block: each of the five players contributes 1/5, so a
+    # side's player term is the *mean* of its five ratings. Mean and not sum
+    # because the returned feature must stay on the same scale as the team
+    # term - the head consumes the two together and cannot rescale one of them.
+    blue_p = red_p = None
+    pcol, n_player = {}, 0
+    if roster is not None:
+        blue_p, red_p = roster
+        pnames = sorted({p for i in idx for p in blue_p[i]}
+                        | {p for i in idx for p in red_p[i]})
+        pcol = {p: n_team + j for j, p in enumerate(pnames)}
+        n_player = len(pnames)
+        pr, pc, pv = [], [], []
+        for n, i in enumerate(idx):
+            for p in blue_p[i]:
+                pr.append(n)
+                pc.append(pcol[p])
+                pv.append(0.2)
+            for p in red_p[i]:
+                pr.append(n)
+                pc.append(pcol[p])
+                pv.append(-0.2)
+        rows_i.append(np.asarray(pr, dtype=np.int64))
+        cols_i.append(np.asarray(pc, dtype=np.int64))
+        vals.append(np.asarray(pv, dtype=np.float64))
+
+    total = n_team + n_player
+    X = torch.sparse_coo_tensor(
+        torch.as_tensor(np.stack([np.concatenate(rows_i),
+                                  np.concatenate(cols_i)])),
+        torch.as_tensor(np.concatenate(vals), dtype=torch.float64),
+        (idx.size, total), check_invariants=False).coalesce()
+
+    r = torch.zeros(total, dtype=torch.float64, requires_grad=True)
+    h = torch.zeros(1, dtype=torch.float64, requires_grad=True)
+    yt = torch.as_tensor(y[idx], dtype=torch.float64)
+    wt = torch.as_tensor(weight, dtype=torch.float64)
+    # Per-column penalty so both blocks shrink by *pseudo-games*, not by raw
+    # lambda. For a column of per-game weight v the Hessian is 0.25 * v^2, so
+    # the shrinkage factor is 0.25 v^2 n / (0.25 v^2 n + lambda); "k games of
+    # shrinkage" is therefore lambda = 0.25 * v^2 * k. v = 1 for a team (k/4)
+    # and 0.2 for a player (k/100) - getting this backwards shrinks the player
+    # block by 6,250 pseudo-games and makes it a silent no-op.
+    lam = np.full(total, max(k, 1e-6) / 4.0)
+    if n_player:
+        lam[n_team:] = 0.25 * 0.2 ** 2 * max(kp, 1e-6)
+    lam_t = torch.as_tensor(lam, dtype=torch.float64)
+
+    opt = torch.optim.LBFGS([r, h], lr=1.0, max_iter=300, history_size=30,
+                            line_search_fn="strong_wolfe")
+
+    def closure():
+        opt.zero_grad()
+        z = torch.sparse.mm(X, r.unsqueeze(1)).squeeze(1) + h
+        bce = torch.nn.functional.binary_cross_entropy_with_logits(
+            z, yt, reduction="none")
+        loss = ((wt * bce).sum() + 0.5 * (lam_t * r ** 2).sum()) / wt.sum()
+        loss.backward()
+        return loss
+
+    opt.step(closure)
+    rating = r.detach().numpy()
+
+    # Back out a per-side strength for every row: the team term plus the mean
+    # of that side's five player ratings. This is the quantity the head sees,
+    # and it equals the model's own linear predictor minus the intercept. A
+    # team (or player) with no train game is the *average* one, 0 logits - in
+    # Bradley-Terry the zero point is the league average, and the head's
+    # side_bias carries the intercept that the rate version bakes in.
+    sb = np.zeros(len(tb))
+    sr = np.zeros(len(tb))
+    if n_team:
+        sb = sb + np.array([rating[tcol[t]] if t in tcol else 0.0 for t in tb])
+        sr = sr + np.array([rating[tcol[t]] if t in tcol else 0.0 for t in tr])
+    if n_player:
+        def _mean(row):
+            cols = [pcol[p] for p in row if p in pcol]
+            return float(np.mean(rating[cols])) if cols else 0.0
+
+        sb = sb + np.array([_mean(blue_p[i]) for i in range(len(tb))])
+        sr = sr + np.array([_mean(red_p[i]) for i in range(len(tb))])
+    if verbose:
+        print("  bt: %d teams, %d players, %d train games, k %.1f, h %+.3f"
+              % (n_team, n_player, idx.size, k, float(h.detach())))
+    return np.stack([sb, sr], axis=1).astype(np.float32)
+
+
+def team_strength(table, train_idx, k=10.0, corpus="2022", verbose=False,
+                  mode="rate", half_life_days=0.0, kp=None):
+    """Per-row (blue, red) team-strength logits, fitted on **train rows only**.
+
+    Team identity is not a draft feature, so it lives outside the model's normal
+    input path and outside the draft-only line entirely: `team_check.py` shows
+    it is worth ~0.044 nats on pro against the draft's ~0.005, i.e. an order of
+    magnitude more. That is a fact about pro League, not about drafts, and
+    folding it into the draft model without saying so would turn "this draft is
+    good" into "this team is T1".
+
+    Implementation notes that matter for fairness:
+
+    * **Fitted on train rows only.** A team's rate never sees a val or test row,
+      and the split is series-grouped, so a team's test games are not in its own
+      history. `prior` is the train base rate, so a team with no train games
+      falls back to the null rather than to 0.5.
+    * **Shrunk toward that base rate** with weight `k` games (10 ≈ half a
+      split): a 2-0 team is not a 100 % winner. Without this the feature
+      overfits the long tail of teams with a handful of games.
+    * The rate counts a team's wins from *either* side, so the label is
+      converted per row (`y` for blue, `1-y` for red).
+    * Returns **logits**, not probabilities: the head consumes them linearly and
+      a logit keeps a 90 % team from dominating a 55 % one by 8x in raw scale.
+
+    Two knobs beyond `k`:
+
+    * `mode="bt"` swaps the marginal rate for **Bradley-Terry** ratings
+      (`_bt_ratings`), which condition on the opponent. The rate is the null
+      this has to beat, not the best available estimator. `mode="roster"` adds
+      a player block to the same fit, so "T1 is good" is separated from "T1
+      still has Faker" - a team tag is a roster that changes.
+    * `half_life_days` down-weights old games (0 = off). Rosters change, so a
+      team's 2022 record is weak evidence about its 2026 form; the weight is
+      relative to `CORPUS_MAX_DATE` so it does not move when the split does.
+    """
+    tb, tr = _team_pairs(table, corpus, verbose)
+    y = table.y.astype(np.float64)
+    idx = np.asarray(train_idx, dtype=np.int64)
+    base = float(y[idx].mean())
+
+    # Recency weight per *row*; 1.0 everywhere when the knob is off.
+    if half_life_days and half_life_days > 0:
+        age = _age_days(table.date)[idx]
+        weight = np.power(0.5, age / float(half_life_days))
+    else:
+        weight = np.ones(idx.size, dtype=np.float64)
+
+    if mode == "bt":
+        return _bt_ratings(tb, tr, y, idx, k, weight, verbose=verbose)
+
+    if mode == "roster":
+        roster = _roster_columns(table, corpus, verbose=verbose)
+        return _bt_ratings(tb, tr, y, idx, k, weight, verbose=verbose,
+                           roster=roster, kp=kp)
+
+    if mode == "player":
+        # Player ratings *instead of* team ratings. The two blocks are close to
+        # collinear (a roster is what a team tag is), so a joint fit is only
+        # identified by its prior and lands wherever LBFGS happens to stop;
+        # this is the version of the question that has one answer.
+        roster = _roster_columns(table, corpus, verbose=verbose)
+        return _bt_ratings(tb, tr, y, idx, k, weight, verbose=verbose,
+                           roster=roster, kp=kp, use_team=False)
+
+    wins, games = Counter(), Counter()
+    for n, i in enumerate(idx):
+        b, r = tb[i], tr[i]
+        w = weight[n]
+        games[b] += w
+        wins[b] += w * y[i]
+        games[r] += w
+        wins[r] += w * (1.0 - y[i])
+    rate = {t: (wins[t] + k * base) / (games[t] + k) for t in games}
+
+    def _logit(p):
+        p = np.clip(p, 1e-6, 1.0 - 1e-6)
+        return np.log(p / (1.0 - p))
+
+    sb = np.array([rate.get(t, base) for t in tb])
+    sr = np.array([rate.get(t, base) for t in tr])
+    return np.stack([_logit(sb), _logit(sr)], axis=1).astype(np.float32)
 
 
 # ------------------------------------------------------------- soloq loader
@@ -519,9 +829,16 @@ def make_splits(table, seed=SPLIT_SEED, fracs=SPLIT_FRACS,
 
 # ----------------------------------------------------------------- dataset
 class WinDataset(Dataset):
-    """One completed draft per example. No masking, no prefixes, no bans."""
+    """One completed draft per example. No masking, no prefixes, no bans.
 
-    def __init__(self, table, idx=None):
+    `team_feat` is an optional `[N,2]` array of (blue, red) team-strength
+    logits, already computed from **train rows only** by `team_strength`.
+    Optional because the draft-only line must stay exactly as it was: an
+    experiment that adds team identity answers a different question, and the two
+    must not be able to blur into each other.
+    """
+
+    def __init__(self, table, idx=None, team_feat=None):
         self.champ = table.champ if idx is None else table.champ[idx]
         self.role = table.role if idx is None else table.role[idx]
         self.y = table.y if idx is None else table.y[idx]
@@ -531,18 +848,24 @@ class WinDataset(Dataset):
                         else [table.game_id[i] for i in idx])
         self.patch = table.patch if idx is None else \
             [table.patch[i] for i in idx]
+        self.team_feat = None if team_feat is None else np.asarray(
+            team_feat if idx is None else team_feat[idx], dtype=np.float32)
 
     def __len__(self):
         return int(self.y.shape[0])
 
     def __getitem__(self, i):
-        return {
+        out = {
             "champ_ids": torch.as_tensor(self.champ[i], dtype=torch.long),
             "role_ids": torch.as_tensor(self.role[i], dtype=torch.long),
             "patch_id": torch.tensor(int(self.patch_id[i]), dtype=torch.long),
             "win_label": torch.tensor(float(self.y[i]), dtype=torch.float32),
             "meta": {"game_id": self.game_id[i], "patch": self.patch[i]},
         }
+        if self.team_feat is not None:
+            out["team_feat"] = torch.as_tensor(self.team_feat[i],
+                                               dtype=torch.float32)
+        return out
 
 
 def collate(samples):

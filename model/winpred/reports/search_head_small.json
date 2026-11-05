@@ -1,0 +1,135 @@
+{
+ "grid": "head_small",
+ "base": [
+  "--data",
+  "pro",
+  "--loss",
+  "ce",
+  "--seed",
+  "20261105",
+  "--epochs",
+  "20",
+  "--patience",
+  "4",
+  "--no-test",
+  "--no-wandb"
+ ],
+ "rows": [
+  {
+   "name": "h8",
+   "tokens": [
+    "--team-feat",
+    "--dropout",
+    "0.3",
+    "--team-mode",
+    "bt",
+    "--head-dim",
+    "8"
+   ],
+   "val_log_loss": 0.6424995158002836,
+   "val_auc": 0.6820417484125477,
+   "val_brier": 0.22598643583998984,
+   "epoch": 11,
+   "params": 2451247,
+   "corpus": "2022",
+   "seconds": 49.4
+  },
+  {
+   "name": "h16",
+   "tokens": [
+    "--team-feat",
+    "--dropout",
+    "0.3",
+    "--team-mode",
+    "bt",
+    "--head-dim",
+    "16"
+   ],
+   "val_log_loss": 0.635620546728608,
+   "val_auc": 0.6867835369069468,
+   "val_brier": 0.222904162983188,
+   "epoch": 5,
+   "params": 2457431,
+   "corpus": "2022",
+   "seconds": 30.4
+  },
+  {
+   "name": "h24",
+   "tokens": [
+    "--team-feat",
+    "--dropout",
+    "0.3",
+    "--team-mode",
+    "bt",
+    "--head-dim",
+    "24"
+   ],
+   "val_log_loss": 0.6346493532659281,
+   "val_auc": 0.6874156171550324,
+   "val_brier": 0.22251794997123112,
+   "epoch": 5,
+   "params": 2463615,
+   "corpus": "2022",
+   "seconds": 30.4
+  },
+  {
+   "name": "h32-drop2",
+   "tokens": [
+    "--team-feat",
+    "--dropout",
+    "0.2",
+    "--team-mode",
+    "bt",
+    "--head-dim",
+    "32"
+   ],
+   "val_log_loss": 0.6366237172695006,
+   "val_auc": 0.6854854474751949,
+   "val_brier": 0.22340619741753573,
+   "epoch": 6,
+   "params": 2469799,
+   "corpus": "2022",
+   "seconds": 33.4
+  },
+  {
+   "name": "h32-drop4",
+   "tokens": [
+    "--team-feat",
+    "--dropout",
+    "0.4",
+    "--team-mode",
+    "bt",
+    "--head-dim",
+    "32"
+   ],
+   "val_log_loss": 0.6368635220696126,
+   "val_auc": 0.6831368795223931,
+   "val_brier": 0.22361626529300932,
+   "epoch": 5,
+   "params": 2469799,
+   "corpus": "2022",
+   "seconds": 30.2
+  },
+  {
+   "name": "h32-lr5e4",
+   "tokens": [
+    "--team-feat",
+    "--dropout",
+    "0.3",
+    "--team-mode",
+    "bt",
+    "--head-dim",
+    "32",
+    "--lr",
+    "5e-4"
+   ],
+   "val_log_loss": 0.651737341027552,
+   "val_auc": 0.6847291662271727,
+   "val_brier": 0.22801366795278274,
+   "epoch": 6,
+   "params": 2469799,
+   "corpus": "2022",
+   "seconds": 32.3
+  }
+ ]
+}

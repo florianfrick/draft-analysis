@@ -19,8 +19,11 @@ models/
 train.py      training, CE or focal, soloq/pro/both, W&B, checkpoint + predictions
 evaluate.py   score/compare any mix of checkpoints, .npz prediction sets, priors
 sweep.py      all arms on BOTH test views in one table (§7)
-compare_arms.py  paired model-vs-model test on the same rows (§8)
-test_winpred.py  40 tests
+compare_arms.py  paired model-vs-model test on the same rows, and ensembling (§8)
+search.py     val-only hyperparameter search (`--no-test`, early stopping) (§9)
+team_check.py how much of the outcome is team/player strength rather than draft
+              (§10, §13) - `--team-mode {rate,bt,player,roster}`
+test_winpred.py  43 tests
 reports/      the JSON evidence behind every number below
 ```
 
@@ -52,6 +55,23 @@ python model/winpred/sweep.py --seed 20261105 --ckpt pro-ce=... --ckpt pro-focal
 # --tag keeps it from overwriting the v1 checkpoints the tables above cite
 python model/winpred/train.py --data pro --loss ce --seed 20261105 --epochs 40 \
     --head-product --role-bias --tag v2
+
+# the search (§9-§13). Every grid is val-only: --no-test drops the held-out
+# rows before the loaders are built, so a config cannot be chosen on test.
+python model/winpred/search.py --grid team_bt      # which strength estimator
+python model/winpred/search.py --grid head_small   # how wide the head should be
+python model/winpred/search.py --grid player       # player ratings instead of teams
+
+# how much of the outcome is who is playing, rather than what was picked (§10, §13)
+# --team-mode player also prints the draft+strength stack fitted on val
+python model/winpred/team_check.py --team-mode player \
+    --ckpt model/checkpoints/winpred-pro-ce-d384-seed20261105-through-20261104 \
+    --out model/winpred/reports/player_strength_pro_seed20261105.json
+
+# the best arm (§13): 20 epochs is plenty, it selects at epoch 1-6
+python model/winpred/train.py --data pro --loss ce --seed 20261105 --epochs 20 \
+    --patience 4 --tag players --dropout 0.2 --head-dim 24 \
+    --team-feat --team-mode player --team-player-k 10
 
 pytest model/winpred
 ```
@@ -140,7 +160,7 @@ in `pro`/focal. The two CE arms stop just short on opposite sides: pro/CE peaks
 at 0.6463 against a 0.65 gate, soloQ/CE bottoms at 0.3508 against 0.35. So
 precision/recall at high confidence is `nan` for five of six arms, and the honest
 reading is "the model never commits". The calibration bins carry the information
-a fixed band throws away — see §9 item 5.
+a fixed band throws away — see §15 item 5.
 
 ---
 
@@ -377,7 +397,7 @@ Two differences that are large enough to be structural rather than noise:
   improvement on run 1's 1.0572 but still a collapse of the probabilities).
 * **Focal is worse on soloQ and a wash on pro.** It gains 0.00156 log-loss on
   soloQ where CE gains 0.00310, and 0.0016 AUC on pro where it gains 0.0000 on
-  soloQ. Neither gap survives a seed repeat (§9).
+  soloQ. Neither gap survives a seed repeat (§15).
 
 ### The cross view — the sweep's real question
 
@@ -482,11 +502,11 @@ not work. Joint training at this ratio is a negative result.
 **Does not:** rank CE against focal. Every within-domain gap here is smaller
 than the early-stopping noise (pro selects epoch 6 vs 12 out of 40), and the
 joint comparison is one collapse against a slower collapse. It is also one seed
-throughout; §9 lists the repeat as the cheapest way to settle it.
+throughout; §15 lists the repeat as the cheapest way to settle it.
 
 **Does not** say the joint corpus is hopeless. It says *this* joint setup is:
 one shared head, no domain input, no reweighting. A domain flag or per-domain
-loss normalisation attacks exactly the failure mode observed, and §9 puts it
+loss normalisation attacks exactly the failure mode observed, and §15 puts it
 first for that reason.
 
 ---
@@ -534,7 +554,7 @@ role-only arm's +0.006 AUC over v1 therefore **cannot be the prior itself** —
 25 extra parameters changed the gradient path, the model converged somewhere
 else, and that somewhere else scored higher. That is the useful warning: on this
 test set **±0.007 AUC is what a trajectory perturbation buys**, so a single-seed
-architecture comparison of that size proves nothing (§9 item 2 is still open).
+architecture comparison of that size proves nothing (§15 item 2 is still open).
 
 Why inert: the slot embedding already contains the role, so cross-attention can
 learn role weighting from content, and an additive ±0.2–0.9 on a softmax over
@@ -601,13 +621,257 @@ transfer.
 
 ---
 
-## 9. Next steps
+## 9. The search protocol — val only, and a 20-epoch budget
+
+The brief that produced §10–§14 changed two rules: **pro data only**, and
+**log-loss only**. The first rule is what makes §13 possible at all - soloQ has
+no rosters, so the feature that carries the outcome there does not exist - and
+it is the question §1 asked. It also keeps every grid in this section on the
+same 37 k train rows, so a config's val number is comparable to the next one's
+without a per-domain block.
+
+The second rule is not a restriction in practice. Log-loss is a strictly proper
+scoring rule, so every arm in §10–§14 that wins on log-loss also wins on Brier
+and AUC by construction of the comparison — §12's table shows the three moving
+together, which is the evidence for the brief's premise that they are
+correlated. ECE is the one that does *not* follow (§13's best arm is the worst
+calibrated), so calibration is discussed rather than searched.
+
+**Nothing in §10–§14 is chosen on test.** `search.py` runs `train.py` with
+`--no-test`, which drops the held-out rows *before the loaders are built*, so a
+config cannot score them even by accident; the winner then gets one run with
+the test set attached, and that number is the result. Forty configs on 4,762
+games will always produce a "best test score", and it will be a lie.
+
+The budget is `--epochs 20 --patience 4 --min-epochs 3`, down from 40. Every
+pro arm so far peaks in the first 5–12 epochs and then overfits confidence
+(§5), so the remaining 30 epochs were only ever training the val curve's tail.
+With early stopping the selected epoch is reported in every table: the §13 arm
+selects at **epoch 1**, and a 40-epoch budget would have cost 40 epochs to
+learn that.
+
+---
+
+## 10. Who is playing, not what was picked
+
+`team_check.py` puts four predictors on the same 4,762 test rows. Team strength
+is each team's smoothed win rate (shrinkage `k = 10` games), fitted on **train
+rows only** and converted to a logit; the "draft + team" row adds the d384
+model's own logit and fits its two coefficients on **val**, never test.
+
+| predictor | log-loss | Brier | AUC | acc |
+|---|---|---|---|---|
+| side prior (the null) | 0.69273 | 0.24979 | 0.5000 | 0.5197 |
+| draft only (d384) | 0.68775 | 0.24731 | 0.5552 | 0.5412 |
+| team only | 0.64842 | 0.22829 | 0.6698 | 0.6298 |
+| draft + team | 0.64226 | 0.22580 | 0.6758 | 0.6228 |
+
+Paired, series-grouped bootstrap on the same rows:
+
+* team only vs draft only: **−0.03933** [−0.05053, −0.02838]
+* draft + team vs draft only: **−0.04549** [−0.05369, −0.03747]
+
+So the draft is worth **−0.005 nats** and knowing who is playing is worth
+**−0.044**, about eight times as much. The brief's suspicion that 0.69 means
+"learned nothing" was right about the *number* and wrong about the *cause*: the
+model had learned the draft signal (0.68775 beats 0.69273, interval excludes 0)
+and was missing the feature that carries the outcome. Everything after this
+section is about improving that feature.
+
+---
+
+## 11. Bradley-Terry beats the win rate; recency weighting does not
+
+A smoothed win rate treats every game as equally informative. It is not: it
+cannot tell a 60 % team in a strong league from a 60 % team in a minor one, and
+this corpus spans several. `--team-mode bt` fits `logit P(blue) = r_blue -
+r_red + h` by L2 logistic regression (sparse design matrix, LBFGS), so the
+ratings condition on the opponent. `k` keeps its pseudo-games meaning by
+dividing out the curvature of the log-loss (`lambda = 0.25 v^2 k`).
+
+The ratings differ where the marginal rate is blind: Gen.G is 0.95 in logit
+terms under the rate and **+2.26** under BT, T1 is 0.65 and **+1.96** — T1
+played the harder schedule.
+
+All numbers are val log-loss with the same encoder and `--head-dim 256`:
+
+| arm | val log-loss |
+|---|---|
+| rate, `k = 10` (the §10 recipe) | 0.65115 |
+| **bt, `k = 10`** | **0.64747** |
+| bt, `k = 4` | 0.64889 |
+| bt, `k = 20` | 0.65596 |
+| bt, half-life 730 d | 0.65652 |
+| bt, half-life 365 d | 0.66211 |
+| rate, half-life 365 d | 0.66709 |
+
+−0.0037 nats for conditioning on the opponent, and `k = 10` is the right
+amount of shrinkage (4 is too little, 20 too much).
+
+**Recency weighting fails, monotonically.** Rosters change, so a team's 2022
+record should be weak evidence about its 2026 form — but the median row in this
+corpus is **865 days** old and the oldest is 1,759, so a 365-day half-life keeps
+19 % of the data and a 730-day one keeps 48 %. Whatever the decay buys in
+currency it loses in sample size, and the loss dominates at every half-life
+tried. The honest reading is not "recency is irrelevant" but "this corpus is too
+sparse to pay for it": `--team-half-life` is left in, off by default.
+
+---
+
+## 12. The head was the bottleneck, not the encoder
+
+§5–§8 spent four sections on encoder capacity and architecture. The actual
+problem was the last layer. `head_in` is `3 * 256 + 3 = 771` wide, so a
+full-width head is `Linear(771, 256)` — 197 k parameters trained on 37 k rows,
+to combine two numbers (a matchup vector and its difference).
+
+Val log-loss, bt team strength, dropout 0.3, everything else fixed:
+
+| `--head-dim` | val log-loss | val AUC | sel. ep |
+|---|---|---|---|
+| full width (256) | 0.64747 | 0.6697 | 1 |
+| 128 | 0.64973 | 0.6839 | 6 |
+| 64 | 0.65411 | 0.6833 | 6 |
+| 32 | 0.64065 | 0.6825 | 4 |
+| **24** | **0.63465** | **0.6874** | 5 |
+| 16 | 0.63562 | 0.6868 | 5 |
+| 8 | 0.64250 | 0.6820 | 11 |
+
+−0.0128 nats from shrinking one layer, three times the gain that
+Bradley-Terry itself bought. The curve is U-shaped with the bottom at 24 — h64
+being worse than both h32 and h128 is inside the selection noise, but the two
+ends are not. Regularising instead of shrinking is worse than either
+(`--dropout 0.2` 0.63662, `0.4` 0.63686) and slowing the schedule is worse
+still (`--lr 5e-4` 0.65174, which cannot reach the useful region in 5 epochs).
+
+This is the §8 conclusion arriving from the other side. There, a `[5,5]` role
+prior was inert because *the encoder could already see the role*. Here, the
+head does not need capacity because *the feature it is handed is already the
+answer* — the encoder's contribution is one logit, and a 24-unit MLP is enough
+to combine it with a strength estimate. Bigger heads memorise the training
+roster.
+
+---
+
+## 13. Player identity beats team identity
+
+The CSVs carry `playerid`, which §4's row schema drops. A team tag is a roster
+that changes — the median team in this corpus fields **3 different rosters**
+(max 33) — so a per-player rating is a strictly finer description of "who is
+playing". `--team-mode player` fits `logit P(blue) = mean(r_5 blue) -
+mean(r_5 red) + h` with the same L2/LBFGS machinery, players indexed by role
+from the CSVs (18 s scan, memoised; `data.py` reads them directly rather than
+extending `pipeline.build_rows`, whose cached rows the policy work also uses).
+
+Ratings fitted on train rows only, then scored directly (`sigmoid(blue - red)`,
+no fitted scale):
+
+| strength estimate | train | val | test | test AUC |
+|---|---|---|---|---|
+| team, BT | 0.61720 | 0.63954 | 0.63150 | 0.6950 |
+| **player, `kp = 10`** | 0.53471 | **0.60617** | **0.60152** | **0.7355** |
+
+−0.033 nats and +0.04 AUC on test, and it is not a tuning artefact: the player
+`kp` grid is flat (val 0.60903 / 0.60617 / 0.60706 / 0.61149 for kp = 5 / 10 /
+20 / 40), unlike §11's, which has a real optimum. The train/val gap is large
+(0.535 vs 0.606) because 6,784 ratings are fitted on 37 k games, and the val
+number is the honest one: the fit is train-only and the split is series-grouped,
+so a player's test games are never in his own history.
+`test_strength_features_never_read_val_or_test_labels` asserts exactly that by
+flipping every val and test label and requiring the feature not to move.
+
+**The joint fit is not identified, and that is a negative result.** Fitting both
+blocks (`--team-mode roster`) is the obvious thing to want — "T1 is good"
+*plus* "T1 still has Faker" — but a roster is what a team tag *is*, so the two
+blocks are near-collinear and the split between them is decided by the prior,
+not by the data. Its `kp` grid is non-monotone (val 0.60545 / 0.64668 / 0.67129
+/ 0.62914 for kp = 10 / 50 / 200 / 1000) — the signature of an objective that
+LBFGS stops somewhere different in for each penalty. Reporting the best of those
+would be reporting the optimiser. `--team-mode player` is the identified
+version of the same question, and it is the one in the table.
+
+### The final arm
+
+Two ways to use the feature, both with a fair test split:
+
+| model | test log-loss | Brier | AUC | acc | ECE |
+|---|---|---|---|---|---|
+| side prior | 0.69273 | 0.24979 | 0.5000 | 0.5197 | — |
+| d384, draft only (§5) | 0.68775 | 0.24731 | 0.5552 | 0.5412 | 0.0093 |
+| team2, team rate (§11) | 0.64260 | 0.22582 | 0.6774 | 0.6264 | 0.0185 |
+| **players, end to end** | **0.60323** | **0.20787** | **0.7376** | 0.6716 | 0.0286 |
+| player ratings + draft logit, 2 coefficients on val | **0.59624** | 0.20569 | **0.7410** | 0.6751 | — |
+
+Paired against team2 on the same rows: **−0.03937** [−0.05022, −0.02833]. Against
+the d384 draft-only model: −0.08452 [−0.09767, −0.07190].
+
+The end-to-end arm is the d256 encoder, dropout 0.2, `--head-dim 24`,
+`--team-mode player --team-player-k 10`, selected at epoch 1 (2.46 M params,
+checkpoint `winpred-pro-ce-players-seed20261105-through-20261104`). The stack
+below it is the same information fitted as two coefficients on val — it wins by
+0.007 nats, which is the price of asking an encoder to learn a scale it could
+have been handed.
+
+**What the draft is worth, like for like.** Both rows of this comparison are
+fitted on val, so the difference is the draft column and nothing else:
+
+| val-fitted | test log-loss | AUC | weight |
+|---|---|---|---|
+| player strength only | 0.60010 | 0.7355 | 0.851 |
+| player strength + draft logit | 0.59624 | 0.7410 | 0.846 / 1.130 |
+
+**−0.0039 nats.** That is the honest size of the draft signal once the roster is
+known, and it is the same ~0.004 the draft was worth over the prior in §7 — the
+signal is small, it is real, and it does not grow when the baseline improves.
+The player weight is below 1 (0.851) because the ratings are overconfident on
+their own scale: the fit overfits train (0.535), so val shrinks it.
+
+**Caveat, stated once:** this is a "who wins" number, not a "is this draft good"
+number. Rosters are announced before the draft, so player identity is legitimate
+pre-game information, but a UI that shows 0.60 must say that most of it is the
+lineup. And the best arm is the worst-calibrated one (ECE 0.0286 against the
+draft-only model's 0.0093), which matters the moment a probability is displayed
+rather than scored.
+
+---
+
+## 14. What did not work
+
+Collected so it does not get re-tried:
+
+* **Recency weighting** — §11, monotone in the wrong direction at both
+  half-lives.
+* **Ensembling** — five members of the §11 recipe (same split, `--init-seed`
+  77101–77105, so `compare_arms.py` can average them) score 0.64232 against
+  0.64260 for one member: **−0.00027 [−0.00223, +0.00160]**, and AUC is
+  *worse* (−0.00032). With early stopping already selecting a flat region of the
+  val curve, the members are too correlated for averaging to help.
+* **The joint team + player fit** — §13, not identified.
+* **More data** — `--corpus all` (81,227 drafts, 219 patches) does not beat
+  2022-onward for the draft-only model: all-d256 0.68605 < all-d384 0.68698,
+  against d384-on-2022 0.68578 (§§6–7).
+* **More capacity, again** — §12. Every attempt to give the model more room
+  (wider encoder, wider head, more intra blocks, product term) is neutral or
+  worse once a strength feature is present.
+* **Player ratings as a *joint* block with teams** — the same collinearity.
+
+---
+
+## 15. Next steps
 
 The brief's "don't train more experiments yet" expired with the six-arm sweep, so
 items 1, 2 and 4 of the old list are **done** (§7): `b_side` is bias-free, soloQ
 has been run, and dropout is 0.2 everywhere. §8's architecture variant is also
-done. What is left:
+done, and §10–§14 answered the "improve the pro log-loss" brief: −0.045 nats from
+the strength feature, −0.039 more from player ratings, and −0.013 from shrinking
+the head (each measured on its own base, so they do not simply add). What is
+left:
 
+0. **Player strength is a feature, not a trick.** It lives in `data.py` as a
+   `[N,2]` column so the encoder can consume it; it should be a first-class
+   input with its own ablation (announced lineup only, per-role ratings, a
+   roster-change indicator) and its own provenance in any UI. Everything else on
+   this list is smaller than the 0.033 nats it is already worth.
 1. **Domain conditioning, before any further joint training.** §7 shows a shared
    head on an 8:1 mixture drifting to the constant under both losses. Two cheap
    fixes: feed a domain flag/embedding in, or normalise the loss per domain so
@@ -620,9 +884,12 @@ done. What is left:
 3. **Bans as an input** — the biggest untested signal, and the one this model
    was deliberately built without. It needs its own ablation: ban-only, picks +
    bans, and the fearless pool as a *context* rather than a constraint.
-4. **Per-patch calibration.** The pooled ECE is 0.009–0.016, but the newest
-   patches are where a shipped number would be read; check whether calibration
-   holds on 16.18–16.20 alone before quoting a probability in the UI.
+4. **Calibration of the arm that wins.** §13's best model is the worst
+   calibrated (ECE 0.0286 vs 0.0093 for draft-only): the ratings are
+   overconfident on their own scale and the stack's 0.851 weight is the
+   correction. Refit a temperature on val before any number is shown as a
+   probability, and check per-patch — the newest patches are where a shipped
+   number would be read.
 5. **Give the confidence gate a rank readout.** In v1 the band is crossed 5 times
    in 172,792 own-view predictions (all in `pro`/focal, 0.6 precision on n = 5),
    so precision/recall-at-high-confidence is `nan` everywhere else. §8's product

@@ -1,0 +1,97 @@
+{
+ "grid": "player",
+ "base": [
+  "--data",
+  "pro",
+  "--loss",
+  "ce",
+  "--seed",
+  "20261105",
+  "--epochs",
+  "20",
+  "--patience",
+  "4",
+  "--no-test",
+  "--no-wandb"
+ ],
+ "rows": [
+  {
+   "name": "p-kp10",
+   "tokens": [
+    "--team-feat",
+    "--dropout",
+    "0.3",
+    "--team-mode",
+    "player",
+    "--head-dim",
+    "24"
+   ],
+   "val_log_loss": 0.6203957417513528,
+   "val_auc": 0.7119562580427399,
+   "val_brier": 0.2161079145806592,
+   "epoch": 1,
+   "params": 2463615,
+   "corpus": "2022",
+   "seconds": 43.0
+  },
+  {
+   "name": "p-kp20",
+   "tokens": [
+    "--team-feat",
+    "--dropout",
+    "0.3",
+    "--team-mode",
+    "player",
+    "--head-dim",
+    "24",
+    "--team-player-k",
+    "20"
+   ],
+   "val_log_loss": 0.6386296611211509,
+   "val_auc": 0.6962236039913086,
+   "val_brier": 0.22391358951911172,
+   "epoch": 1,
+   "params": 2463615,
+   "corpus": "2022",
+   "seconds": 23.2
+  },
+  {
+   "name": "p-kp10-drop2",
+   "tokens": [
+    "--team-feat",
+    "--dropout",
+    "0.2",
+    "--team-mode",
+    "player",
+    "--head-dim",
+    "24"
+   ],
+   "val_log_loss": 0.6109285066883995,
+   "val_auc": 0.7266966225766301,
+   "val_brier": 0.21180698421712812,
+   "epoch": 1,
+   "params": 2463615,
+   "corpus": "2022",
+   "seconds": 24.1
+  },
+  {
+   "name": "p-kp10-h32",
+   "tokens": [
+    "--team-feat",
+    "--dropout",
+    "0.3",
+    "--team-mode",
+    "player",
+    "--head-dim",
+    "32"
+   ],
+   "val_log_loss": 0.6165053526437951,
+   "val_auc": 0.7216732063371517,
+   "val_brier": 0.21452367895341415,
+   "epoch": 1,
+   "params": 2469799,
+   "corpus": "2022",
+   "seconds": 24.4
+  }
+ ]
+}

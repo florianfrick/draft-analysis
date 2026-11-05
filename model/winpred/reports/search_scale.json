@@ -1,0 +1,109 @@
+{
+ "grid": "scale",
+ "base": [
+  "--data",
+  "pro",
+  "--loss",
+  "ce",
+  "--seed",
+  "20261105",
+  "--epochs",
+  "20",
+  "--patience",
+  "4",
+  "--no-test",
+  "--no-wandb"
+ ],
+ "rows": [
+  {
+   "name": "d384",
+   "tokens": [
+    "--embed-dim",
+    "384"
+   ],
+   "val_log_loss": 0.6857842800895897,
+   "val_auc": 0.5663324754410761,
+   "val_brier": 0.24634410012699878,
+   "epoch": 6,
+   "params": 5880193,
+   "corpus": "2022",
+   "seconds": 34.3
+  },
+  {
+   "name": "d512",
+   "tokens": [
+    "--embed-dim",
+    "512"
+   ],
+   "val_log_loss": 0.6865329775447765,
+   "val_auc": 0.5623038098854503,
+   "val_brier": 0.24671440960593904,
+   "epoch": 5,
+   "params": 10396161,
+   "corpus": "2022",
+   "seconds": 36.9
+  },
+  {
+   "name": "d256-i3",
+   "tokens": [
+    "--num-intra",
+    "3"
+   ],
+   "val_log_loss": 0.6879289640450105,
+   "val_auc": 0.5561790217215506,
+   "val_brier": 0.24739166847049435,
+   "epoch": 6,
+   "params": 3431937,
+   "corpus": "2022",
+   "seconds": 33.8
+  },
+  {
+   "name": "d384-i3",
+   "tokens": [
+    "--embed-dim",
+    "384",
+    "--num-intra",
+    "3"
+   ],
+   "val_log_loss": 0.6887789346353621,
+   "val_auc": 0.548262856078026,
+   "val_brier": 0.24782550048471694,
+   "epoch": 3,
+   "params": 7654657,
+   "corpus": "2022",
+   "seconds": 28.8
+  },
+  {
+   "name": "d512-drop3",
+   "tokens": [
+    "--embed-dim",
+    "512",
+    "--dropout",
+    "0.3"
+   ],
+   "val_log_loss": 0.6869488967319128,
+   "val_auc": 0.5615882257803655,
+   "val_brier": 0.24691022606824614,
+   "epoch": 6,
+   "params": 10396161,
+   "corpus": "2022",
+   "seconds": 40.6
+  },
+  {
+   "name": "d384-wd1",
+   "tokens": [
+    "--embed-dim",
+    "384",
+    "--weight-decay",
+    "0.1"
+   ],
+   "val_log_loss": 0.688003532347291,
+   "val_auc": 0.5629657757244619,
+   "val_brier": 0.24743496826781752,
+   "epoch": 6,
+   "params": 5880193,
+   "corpus": "2022",
+   "seconds": 33.7
+  }
+ ]
+}

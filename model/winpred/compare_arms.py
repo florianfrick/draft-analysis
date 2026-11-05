@@ -58,6 +58,34 @@ def parse_named(items):
     return out
 
 
+def load_arm(spec):
+    """`NAME=PATH[,PATH...]` -> (name, preds, n_members). Several paths averaged.
+
+    Averaging happens here rather than in a new tool because it is the same
+    problem: align every member onto the first member's rows, then reduce. The
+    members must have been scored on identical rows - that is the contract
+    `align_predictions` enforces - which is exactly why an ensemble needs
+    `--init-seed` (same split) rather than `--seed` (different splits).
+
+    The member count is returned *beside* the prediction dict, never inside it:
+    every value in that dict is a per-row array that `align_predictions` will
+    index by the row order, so an int in there raises "'int' object is not
+    subscriptable" at the first alignment.
+    """
+    name, path = parse_named([spec])[0]
+    paths = [Path(p) for p in str(path).split(",")]
+    base = D.load_predictions(paths[0])
+    if len(paths) == 1:
+        return name, base, 1
+    ps = [np.asarray(base["p"], dtype=np.float64)]
+    for extra in paths[1:]:
+        other = D.align_predictions(D.load_predictions(extra), base["game_id"])
+        ps.append(np.asarray(other["p"], dtype=np.float64))
+    out = dict(base)
+    out["p"] = np.mean(ps, axis=0)
+    return name, out, len(ps)
+
+
 def groups_of(pred):
     """Resample whole series where the file has them, else whole games.
 
@@ -146,18 +174,19 @@ def main(argv=None):
     ap.add_argument("--out", default="")
     args = ap.parse_args(argv)
 
-    ref_name, ref_path = parse_named([args.ref])[0]
-    ref = D.load_predictions(ref_path)
+    ref_name, ref, _ = load_arm(args.ref)
     results = {}
-    for new_name, new_path in parse_named(args.new):
-        r = compare(ref_name, ref, new_name, D.load_predictions(new_path),
-                    args.n_boot, args.seed)
+    for spec in args.new:
+        new_name, new, members = load_arm(spec)
+        r = compare(ref_name, ref, new_name, new, args.n_boot, args.seed)
+        if members > 1:
+            r["members"] = members
         results[new_name] = r
         print(format_result(r))
         print()
 
     if args.out:
-        D.write_json(args.out, {"ref": ref_name, "ref_path": str(ref_path),
+        D.write_json(args.out, {"ref": ref_name, "ref_spec": args.ref,
                                 "n_boot": args.n_boot, "seed": args.seed,
                                 "results": results})
         print("wrote %s" % args.out)

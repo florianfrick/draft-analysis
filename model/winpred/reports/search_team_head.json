@@ -1,0 +1,137 @@
+{
+ "grid": "team_head",
+ "base": [
+  "--data",
+  "pro",
+  "--loss",
+  "ce",
+  "--seed",
+  "20261105",
+  "--epochs",
+  "20",
+  "--patience",
+  "4",
+  "--no-test",
+  "--no-wandb"
+ ],
+ "rows": [
+  {
+   "name": "h32",
+   "tokens": [
+    "--team-feat",
+    "--dropout",
+    "0.3",
+    "--team-mode",
+    "bt",
+    "--head-dim",
+    "32"
+   ],
+   "val_log_loss": 0.6406499240313448,
+   "val_auc": 0.6825155229275222,
+   "val_brier": 0.22512267685369736,
+   "epoch": 4,
+   "params": 2469799,
+   "corpus": "2022",
+   "seconds": 28.9
+  },
+  {
+   "name": "h64",
+   "tokens": [
+    "--team-feat",
+    "--dropout",
+    "0.3",
+    "--team-mode",
+    "bt",
+    "--head-dim",
+    "64"
+   ],
+   "val_log_loss": 0.6541118913337576,
+   "val_auc": 0.6832941304699421,
+   "val_brier": 0.22903218389376706,
+   "epoch": 6,
+   "params": 2494535,
+   "corpus": "2022",
+   "seconds": 32.4
+  },
+  {
+   "name": "h128",
+   "tokens": [
+    "--team-feat",
+    "--dropout",
+    "0.3",
+    "--team-mode",
+    "bt",
+    "--head-dim",
+    "128"
+   ],
+   "val_log_loss": 0.6497299433296763,
+   "val_auc": 0.6838968525198827,
+   "val_brier": 0.22785549923047788,
+   "epoch": 6,
+   "params": 2544007,
+   "corpus": "2022",
+   "seconds": 32.6
+  },
+  {
+   "name": "h64-lr5e4",
+   "tokens": [
+    "--team-feat",
+    "--dropout",
+    "0.3",
+    "--team-mode",
+    "bt",
+    "--head-dim",
+    "64",
+    "--lr",
+    "5e-4"
+   ],
+   "val_log_loss": 0.6709435496514434,
+   "val_auc": 0.6835719785667573,
+   "val_brier": 0.23379050944670915,
+   "epoch": 6,
+   "params": 2494535,
+   "corpus": "2022",
+   "seconds": 32.6
+  },
+  {
+   "name": "lr5e4",
+   "tokens": [
+    "--team-feat",
+    "--dropout",
+    "0.3",
+    "--team-mode",
+    "bt",
+    "--lr",
+    "5e-4"
+   ],
+   "val_log_loss": 0.6546995732513751,
+   "val_auc": 0.6814152057886632,
+   "val_brier": 0.2297042543254988,
+   "epoch": 6,
+   "params": 2642951,
+   "corpus": "2022",
+   "seconds": 32.6
+  },
+  {
+   "name": "h64-wd1",
+   "tokens": [
+    "--team-feat",
+    "--dropout",
+    "0.3",
+    "--team-mode",
+    "bt",
+    "--head-dim",
+    "64",
+    "--weight-decay",
+    "0.1"
+   ],
+   "val_log_loss": 0.6693508969410698,
+   "val_auc": 0.6368162352593718,
+   "val_brier": 0.2382553915447169,
+   "epoch": 1,
+   "params": 2494535,
+   "corpus": "2022",
+   "seconds": 18.2
+  }
+ ]
+}

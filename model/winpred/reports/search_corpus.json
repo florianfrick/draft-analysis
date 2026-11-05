@@ -1,0 +1,81 @@
+{
+ "grid": "corpus",
+ "base": [
+  "--data",
+  "pro",
+  "--loss",
+  "ce",
+  "--seed",
+  "20261105",
+  "--epochs",
+  "20",
+  "--patience",
+  "4",
+  "--no-test",
+  "--no-wandb"
+ ],
+ "rows": [
+  {
+   "name": "all-d256",
+   "tokens": [
+    "--corpus",
+    "all"
+   ],
+   "val_log_loss": 0.6860486055588724,
+   "val_auc": 0.562801143455565,
+   "val_brier": 0.24647215536169803,
+   "epoch": 10,
+   "params": 2671105,
+   "corpus": "all",
+   "seconds": 70.3
+  },
+  {
+   "name": "all-d384",
+   "tokens": [
+    "--corpus",
+    "all",
+    "--embed-dim",
+    "384"
+   ],
+   "val_log_loss": 0.6869785336630158,
+   "val_auc": 0.5583368265734614,
+   "val_brier": 0.24692886086952953,
+   "epoch": 16,
+   "params": 5923585,
+   "corpus": "all",
+   "seconds": 111.7
+  },
+  {
+   "name": "all-d512",
+   "tokens": [
+    "--corpus",
+    "all",
+    "--embed-dim",
+    "512"
+   ],
+   "val_log_loss": 0.689163667972421,
+   "val_auc": 0.5471534028656792,
+   "val_brier": 0.24801409366476562,
+   "epoch": 3,
+   "params": 10454017,
+   "corpus": "all",
+   "seconds": 50.4
+  },
+  {
+   "name": "all-d256-drop3",
+   "tokens": [
+    "--corpus",
+    "all",
+    "--dropout",
+    "0.3"
+   ],
+   "val_log_loss": 0.6875629184288775,
+   "val_auc": 0.5572260495487633,
+   "val_brier": 0.24721882908039142,
+   "epoch": 3,
+   "params": 2671105,
+   "corpus": "all",
+   "seconds": 35.4
+  }
+ ]
+}

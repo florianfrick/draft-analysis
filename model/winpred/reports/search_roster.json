@@ -1,0 +1,101 @@
+{
+ "grid": "roster",
+ "base": [
+  "--data",
+  "pro",
+  "--loss",
+  "ce",
+  "--seed",
+  "20261105",
+  "--epochs",
+  "20",
+  "--patience",
+  "4",
+  "--no-test",
+  "--no-wandb"
+ ],
+ "rows": [
+  {
+   "name": "r-kp10",
+   "tokens": [
+    "--team-feat",
+    "--dropout",
+    "0.3",
+    "--team-mode",
+    "roster",
+    "--head-dim",
+    "24"
+   ],
+   "val_log_loss": 0.6139469814753987,
+   "val_auc": 0.7192086998713162,
+   "val_brier": 0.21332646889342344,
+   "epoch": 1,
+   "params": 2463615,
+   "corpus": "2022",
+   "seconds": 45.0
+  },
+  {
+   "name": "r-kp50",
+   "tokens": [
+    "--team-feat",
+    "--dropout",
+    "0.3",
+    "--team-mode",
+    "roster",
+    "--head-dim",
+    "24",
+    "--team-player-k",
+    "50"
+   ],
+   "val_log_loss": 0.6466825214869317,
+   "val_auc": 0.6836190044230674,
+   "val_brier": 0.2274548948543429,
+   "epoch": 1,
+   "params": 2463615,
+   "corpus": "2022",
+   "seconds": 23.5
+  },
+  {
+   "name": "r-kp200",
+   "tokens": [
+    "--team-feat",
+    "--dropout",
+    "0.3",
+    "--team-mode",
+    "roster",
+    "--head-dim",
+    "24",
+    "--team-player-k",
+    "200"
+   ],
+   "val_log_loss": 0.6712896928057844,
+   "val_auc": 0.6343850424375391,
+   "val_brier": 0.23922661244803836,
+   "epoch": 1,
+   "params": 2463615,
+   "corpus": "2022",
+   "seconds": 21.7
+  },
+  {
+   "name": "r-kp1000",
+   "tokens": [
+    "--team-feat",
+    "--dropout",
+    "0.3",
+    "--team-mode",
+    "roster",
+    "--head-dim",
+    "24",
+    "--team-player-k",
+    "1000"
+   ],
+   "val_log_loss": 0.6291412926314837,
+   "val_auc": 0.6959095415901947,
+   "val_brier": 0.22003642625244563,
+   "epoch": 8,
+   "params": 2463615,
+   "corpus": "2022",
+   "seconds": 41.1
+  }
+ ]
+}

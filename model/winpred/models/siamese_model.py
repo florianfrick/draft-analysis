@@ -173,7 +173,7 @@ class WinPredictor(nn.Module):
     def __init__(self, num_champs=NUM_REAL_CHAMPS, embed_dim=256,
                  num_intra=2, num_cross=1, num_heads=8, dropout=0.1,
                  n_patches=0, attr_matrix=None, pool="mean", head_dim=None,
-                 head_product=False, role_bias=False):
+                 head_product=False, role_bias=False, team_feat=False):
         super().__init__()
         if pool not in ("mean", "pma"):
             raise ValueError("pool must be 'mean' or 'pma', got %r" % (pool,))
@@ -186,7 +186,12 @@ class WinPredictor(nn.Module):
         # be rebuilt, and `load_checkpoint` is strict on purpose.
         self.head_product = bool(head_product)
         self.use_role_bias = bool(role_bias)
-        self.head_in = self.embed_dim * (4 if self.head_product else 3)
+        # Team strength is NOT a draft input. It is off by default and, when on,
+        # it changes the question from "is this draft good" to "who wins this
+        # game" - README §10 measures the difference (0.044 nats vs 0.005).
+        self.team_feat = bool(team_feat)
+        self.head_in = (self.embed_dim * (4 if self.head_product else 3)
+                        + (3 if self.team_feat else 0))
 
         self.embed = DraftSlotEmbedding(num_champs=self.num_champs,
                                         embed_dim=self.embed_dim,
@@ -290,17 +295,27 @@ class WinPredictor(nn.Module):
         return vb, vr
 
     # ------------------------------------------------------------- forward
-    def head_input(self, vb, vr):
-        """The head's view of the matchup: both vectors, their difference, and
-        (opt-in) their elementwise product."""
+    def head_input(self, vb, vr, team_feat=None):
+        """The head's view of the matchup: both vectors, their difference,
+        (opt-in) their elementwise product, and (opt-in) the team term."""
         parts = [vb, vr, vb - vr]
         if self.head_product:
             parts.append(vb * vr)
-        return torch.cat(parts, dim=1)               # [B, 3D or 4D]
+        if self.team_feat:
+            if team_feat is None:
+                raise ValueError("model built with team_feat=True but the batch "
+                                 "has no 'team_feat'")
+            # [logit(sb), logit(sr), logit(sb)-logit(sr)]: the same
+            # absolute/difference recipe the draft vectors get, so the head does
+            # not have to invent the comparison for this one input.
+            parts.append(torch.cat([team_feat, team_feat[:, :1] - team_feat[:, 1:]],
+                                   dim=1))
+        return torch.cat(parts, dim=1)               # [B, 3D..4D+3]
 
     def forward(self, batch):
         vb, vr = self.team_vectors(batch)
-        logit = self.head(self.head_input(vb, vr)).squeeze(-1) + self.side_bias
+        z = self.head_input(vb, vr, batch.get("team_feat"))
+        logit = self.head(z).squeeze(-1) + self.side_bias
         return {"logit": logit, "h_blue": vb, "h_red": vr}
 
     @torch.no_grad()
@@ -323,7 +338,8 @@ def config_of(model, **extra):
            # a checkpoint that cannot say how it was built is a checkpoint
            # `load_checkpoint` (strict) will refuse.
            "head_product": model.head_product,
-           "role_bias": model.use_role_bias}
+           "role_bias": model.use_role_bias,
+           "team_feat": model.team_feat}
     cfg.update(extra)
     return cfg
 
@@ -353,7 +369,8 @@ def build_from_config(cfg, attr_matrix=None):
                         pool=cfg.get("pool", "mean"),
                         head_dim=cfg.get("head_dim"),
                         head_product=cfg.get("head_product", False),
-                        role_bias=cfg.get("role_bias", False))
+                        role_bias=cfg.get("role_bias", False),
+                        team_feat=cfg.get("team_feat", False))
 
 
 def load_checkpoint(path, device="cpu"):

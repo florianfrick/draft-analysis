@@ -81,6 +81,31 @@ def parse_args(argv=None):
     ap.add_argument("--role-bias", action="store_true", default=False,
                     help="add the [5,5] additive role x role prior to the "
                          "cross attention")
+    ap.add_argument("--team-feat", action="store_true", default=False,
+                    help="add each side's smoothed team win rate (fitted on "
+                         "train rows only) to the head. This answers 'who wins "
+                         "this game', not 'is this draft good': team identity "
+                         "is worth ~0.044 nats on pro and the draft ~0.005, so "
+                         "never quote a team-feat run as a draft result.")
+    ap.add_argument("--team-k", type=float, default=10.0,
+                    help="shrinkage for the team strength (only with "
+                         "--team-feat): pseudo-games for the win rate, L2 "
+                         "strength / 4 for --team-mode bt. 10 ~ half a split")
+    ap.add_argument("--team-mode", default="rate",
+                    choices=("rate", "bt", "roster", "player"),
+                    help="'rate' = smoothed marginal win rate, 'bt' = "
+                         "Bradley-Terry ratings that condition on the opponent "
+                         "(and therefore separate a 60%% team in a strong "
+                         "league from one in a minor league), 'roster' = bt "
+                         "plus a per-player block, 'player' = player ratings "
+                         "only (the two blocks are collinear, so this is the "
+                         "identified version of the same question)")
+    ap.add_argument("--team-player-k", type=float, default=None,
+                    help="shrinkage in games for the player block (--team-mode "
+                         "roster); defaults to --team-k")
+    ap.add_argument("--team-half-life", type=float, default=0.0,
+                    help="days; down-weight old games when fitting team "
+                         "strength (0 = no decay, every game counts equally)")
     ap.add_argument("--tag", default="",
                     help="appended to the default checkpoint dir name, e.g. "
                          "v2 -> winpred-pro-ce-v2-seed...-through-...; use it "
@@ -100,6 +125,13 @@ def parse_args(argv=None):
                          "(gamma=0 + alpha=0.5 is exactly 0.5 * CE)")
     # optimisation
     ap.add_argument("--epochs", type=int, default=40)
+    ap.add_argument("--patience", type=int, default=0,
+                    help="stop after this many epochs without a val log-loss "
+                         "improvement (0 = off). Every pro arm peaks in the "
+                         "first 5-12 epochs of 40 and then overfits, so a "
+                         "search does not need the tail.")
+    ap.add_argument("--min-epochs", type=int, default=3,
+                    help="never early-stop before this epoch")
     ap.add_argument("--batch-size", type=int, default=512)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--weight-decay", type=float, default=0.01)
@@ -110,11 +142,19 @@ def parse_args(argv=None):
                     help="one seed for the split AND the init (default: the "
                          "data module's SPLIT_SEED, so the baseline and every "
                          "model see the same rows)")
+    ap.add_argument("--init-seed", type=int, default=None,
+                    help="seed only the init and the shuffle order, keeping "
+                         "--seed's split. Needed to ensemble: members must "
+                         "share the train rows or the average is meaningless.")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available()
                     else "cpu")
     ap.add_argument("--num-workers", type=int, default=0)
     # bookkeeping
     ap.add_argument("--no-wandb", action="store_true")
+    ap.add_argument("--no-test", action="store_true",
+                    help="train/val only: never score the held-out split. This "
+                         "is the search mode - a hyperparameter chosen on test "
+                         "is not a held-out number.")
     ap.add_argument("--wandb-project", default="lol-draft-winpred")
     ap.add_argument("--run-name", default="")
     ap.add_argument("--out-dir", default="",
@@ -147,8 +187,9 @@ def compute_loss(out, batch, args):
 
 
 # ------------------------------------------------------------------ helpers
-def make_loader(table, idx, batch_size, shuffle, seed, num_workers=0):
-    ds = D.WinDataset(table, idx)
+def make_loader(table, idx, batch_size, shuffle, seed, num_workers=0,
+                team_feat=None):
+    ds = D.WinDataset(table, idx, team_feat=team_feat)
     gen = torch.Generator().manual_seed(seed)
     return DataLoader(ds, batch_size=batch_size, shuffle=shuffle,
                       collate_fn=D.collate, num_workers=num_workers,
@@ -286,8 +327,12 @@ def save_ckpt(path, model, cfg, metrics, step, epoch, patch_vocab):
 
 # --------------------------------------------------------------------- main
 def train(args):
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed % (2 ** 32))
+    # Init and shuffle order come from `--init-seed` when given, so an ensemble
+    # can hold the split fixed and vary only the randomness that is not the
+    # data. The split below still uses `--seed`, deliberately.
+    init_seed = args.seed if args.init_seed is None else args.init_seed
+    torch.manual_seed(init_seed)
+    np.random.seed(init_seed % (2 ** 32))
     device = torch.device(args.device)
     amp = device.type == "cuda"
 
@@ -306,17 +351,38 @@ def train(args):
         table = table.subset(keep)
         print("limited run: %d drafts (stride %d)" % (len(table), stride))
     splits, split_rep = D.make_splits(table, seed=args.seed)
+    if args.no_test:
+        # Drop the held-out rows before anything is built from them, so a
+        # search run cannot even accidentally score them.
+        splits = dict(splits, test=np.zeros(0, dtype=np.int64))
 
     n_patches = (meta["n_patches"] if args.patch_emb else 0)
     patch_vocab = meta["patch_vocab"] if args.patch_emb else []
     attr_matrix = W.attr_matrix_or_none(D.NUM_REAL_CHAMPS, args.attr)
 
+    # Team strength is computed once for every row, from the TRAIN rows only,
+    # then sliced by the loaders - so val and test rows carry a feature that
+    # never saw them. Doing it after the split is the whole point.
+    team_feat = None
+    if args.team_feat:
+        if args.data != "pro":
+            raise SystemExit("--team-feat needs pro data (it reads team names)")
+        team_feat = D.team_strength(table, splits["train"],
+                                    k=args.team_k, corpus=args.corpus,
+                                    mode=args.team_mode,
+                                    half_life_days=args.team_half_life,
+                                    kp=args.team_player_k)
+        print("team feature: %d columns, fitted on %d train rows, "
+              "mode=%s k=%.1f half-life=%s"
+              % (team_feat.shape[1], len(splits["train"]), args.team_mode,
+                 args.team_k, args.team_half_life or "off"))
+
     tr_loader = make_loader(table, splits["train"], args.batch_size, True,
-                            args.seed, args.num_workers)
+                            init_seed, args.num_workers, team_feat)
     va_loader = make_loader(table, splits["val"], args.batch_size, False,
-                            args.seed, args.num_workers)
+                            init_seed, args.num_workers, team_feat)
     te_loader = (make_loader(table, splits["test"], args.batch_size, False,
-                             args.seed, args.num_workers)
+                             init_seed, args.num_workers, team_feat)
                  if len(splits["test"]) else None)
 
     # ---- model
@@ -329,7 +395,8 @@ def train(args):
                            pool=args.pool,
                            head_dim=args.head_dim or None,
                            head_product=args.head_product,
-                           role_bias=args.role_bias).to(device)
+                           role_bias=args.role_bias,
+                           team_feat=args.team_feat).to(device)
     cfg = W.config_of(model, data=args.data, loss=args.loss,
                       focal_gamma=args.focal_gamma,
                       focal_alpha=args.focal_alpha, seed=args.seed,
@@ -369,6 +436,7 @@ def train(args):
         "n_test": len(splits["test"]), "data": args.data}))
 
     best = float("inf")
+    best_epoch = 0
     global_step = 0
     t0 = time.time()
     history = []
@@ -415,11 +483,18 @@ def train(args):
                                "ece")}}, step=global_step)
             if vm["log_loss"] < best:
                 best = vm["log_loss"]
+                best_epoch = epoch
                 save_ckpt(out_dir / "best.pt", model, cfg,
                           dict(vm, epoch=epoch), global_step, epoch,
                           patch_vocab)
         save_ckpt(out_dir / "latest.pt", model, cfg, {"epoch": epoch},
                   global_step, epoch, patch_vocab)
+        if (args.patience and epoch >= args.min_epochs
+                and epoch - best_epoch >= args.patience):
+            print("early stop at epoch %d: no val improvement for %d epochs "
+                  "(best %.5f at ep %d)" % (epoch, args.patience, best,
+                                            best_epoch))
+            break
 
     # ---- final scoring of the selected checkpoint
     blob = torch.load(str(out_dir / "best.pt"), map_location=device,
@@ -468,7 +543,8 @@ def train(args):
     report = {
         "protocol": {
             "data": args.data, "corpus": meta.get("corpus"),
-            "seed": args.seed, "loss": args.loss,
+            "seed": args.seed,
+            "init_seed": init_seed, "loss": args.loss,
             "focal": ({"gamma": args.focal_gamma, "alpha": args.focal_alpha}
                       if args.loss == "focal" else None),
             "selection": "val log_loss",
@@ -490,6 +566,13 @@ def train(args):
                 # indistinguishable from a v1 run except by `params`.
                 "head_product": bool(args.head_product),
                 "role_bias": bool(args.role_bias),
+                "team_feat": bool(args.team_feat),
+                "team_k": args.team_k if args.team_feat else None,
+                "team_mode": args.team_mode if args.team_feat else None,
+                "team_half_life": (args.team_half_life if args.team_feat
+                                   else None),
+                "team_player_k": (args.team_player_k if args.team_feat
+                                  else None),
                 "batch_size": args.batch_size, "lr": args.lr,
                 "weight_decay": args.weight_decay,
                 "warmup_frac": args.warmup_frac, "epochs": args.epochs,
