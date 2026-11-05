@@ -35,11 +35,16 @@ cannot pass for a fresh one:
 
   masking-proonly-through-wlds-ig-tes    all 46,879 drafts, no test split
   nextpick-proonly-through-wlds-ig-tes   the same data, next-move head
+  masking-proonly-randomvalsplit-through-wlds-ig-tes    same data, val drawn
+  nextpick-proonly-randomvalsplit-through-wlds-ig-tes   at random per patch
 
-The two `-through-` checkpoints are the shipped defaults: they see ~4,700 more
-drafts than the originals and validate on patch 16.20 only, but they hold no
-held-out number (the run trains with `--no-test`), so `STATUS.md` §7 — the
-pinned-test scores — still belongs to the originals.
+The `-randomvalsplit-` pair is the shipped default: same corpus and frontier as
+the other `-through-` pair, but val is a seeded random 10% of *every* patch
+instead of each patch's tail, so 90% of every patch - including its end - is
+trained on. Neither pair holds a held-out number (both train with `--no-test`),
+so `STATUS.md` §7 - the pinned-test scores - still belongs to the originals; the
+only honest comparison for these is `compare.py --split shared --other old`
+against an original, which is in §7 too.
 
 `_ckpt_roles` reads that prefix, so the dropdown never offers a policy
 checkpoint to the role board. Select via --ckpt / --policy-ckpt (CLI), the
@@ -92,12 +97,14 @@ CKPT_PATTERNS = (                 # what the dropdown offers (no torch.load)
 # "which role / what is this team still missing" is not the model that ranks
 # the next pick.
 #
-# Both point at the `-through-wlds-ig-tes` refresh: same architecture, ~4,700
-# more drafts (46,827 train vs 42,100) and val on patch 16.20 only. They were
-# trained with `--no-test`, so they have no pinned-test score - §7 of STATUS.md
-# is the originals' number, not theirs. Override with --ckpt / --policy-ckpt.
-MASKED_DEFAULT = CKPT_DIR / "masking-proonly-through-wlds-ig-tes" / "best.pt"
-POLICY_DEFAULT = CKPT_DIR / "nextpick-proonly-through-wlds-ig-tes" / "best.pt"
+# Both point at the `-randomvalsplit-` refresh: same architecture and corpus as
+# the earlier `-through-` pair (42,121 train), but val is a seeded random 10% of
+# every patch rather than each patch's tail, so the end of every patch is
+# trained on and the selection signal is 4,758 games instead of 52. Trained with
+# `--no-test`, so they have no pinned-test score - §7 of STATUS.md is the
+# originals' number, not theirs. Override with --ckpt / --policy-ckpt.
+MASKED_DEFAULT = CKPT_DIR / "masking-proonly-randomvalsplit-through-wlds-ig-tes" / "best.pt"
+POLICY_DEFAULT = CKPT_DIR / "nextpick-proonly-randomvalsplit-through-wlds-ig-tes" / "best.pt"
 UPLOAD_DIR = ROOT / "model" / "uploaded"
 MAX_UPLOAD_BYTES = 512 * 1024 * 1024      # generous; ckpts are 20-150 MB
 LOAD_LOCK = threading.Lock()              # serialize runtime model swaps
@@ -477,7 +484,14 @@ def load_champ_data():
 
 
 def find_best_ckpt():
-    """Best = highest val champ_top5, tie -> newest; retry partial writes."""
+    """Best = highest val champ_top5, tie -> newest; retry partial writes.
+
+    A fallback only (MASKED_DEFAULT is tried first). The scores it compares were
+    measured on different val sets - the originals on the every-patch split, the
+    `-randomvalsplit-` pair on a random 10% of every patch, the `-through-` pair
+    on 16.20's tail - and a larger, more predictable val has a higher ceiling, so
+    this is a preference order, not a ranking.
+    """
     paths = sorted(glob.glob(CKPT_GLOB))
     if not paths:
         raise FileNotFoundError("no checkpoint under %s" % CKPT_GLOB)
@@ -1420,13 +1434,15 @@ def main():
     ap.add_argument("--ckpt", default="",
                     help="role-model checkpoint (a masking-* checkpoint) - "
                          "drives the role board and the per-role targets "
-                         "(default: model/checkpoints/masking-proonly-through-wlds-ig-tes"
+                         "(default: model/checkpoints/"
+                         "masking-proonly-randomvalsplit-through-wlds-ig-tes"
                          "/best.pt, "
                          "else the best masking checkpoint by val champ_top5)")
     ap.add_argument("--policy-ckpt", default="",
                     help="next-move checkpoint (a nextpick-* checkpoint) - "
                          "loaded alongside the role model, not instead of it "
-                         "(default: model/checkpoints/nextpick-proonly-through-wlds-ig-tes"
+                         "(default: model/checkpoints/"
+                         "nextpick-proonly-randomvalsplit-through-wlds-ig-tes"
                          "/best.pt)")
     ap.add_argument("--no-policy", action="store_true",
                     help="run the role board only, without a next-move model")

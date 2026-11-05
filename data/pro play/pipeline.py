@@ -52,6 +52,7 @@ context; global move order is reconstructed, not observed.
 import argparse
 import csv
 import json
+import random
 from collections import Counter, defaultdict
 from datetime import datetime
 from glob import glob
@@ -132,6 +133,14 @@ TEST_SERIES = (
     "WLDs|Karmine Corp|Movistar KOI|2026-10-31|s1",             # 2 games
     "WLDs|LYON|LØS|2026-10-31|s1",                              # 3 games
 )
+
+# Seed for `split_within_patch(val_random=True)`. A module constant, not a CLI
+# flag, for the same reason `TEST_SERIES` is a constant: the masked stage and
+# the policy stage must draw the *same* val series, and a flag is a way for two
+# invocations to disagree. Per-patch draws derive from it
+# (`Random("%s|%s" % (seed, patch))`), so a patch's draw does not depend on
+# which other patches exist or on iteration order.
+VAL_SPLIT_SEED = 20261104
 
 # Fearless Draft era (re-picks forbidden across a series): 2025 season on.
 # Real data: later-series-game re-pick rate ~95% (2022), ~97% (2023),
@@ -660,7 +669,8 @@ def split_series_by_date(rows, val_frac=0.05, test_frac=0.05):
 
 def split_within_patch(rows, val_frac=0.10, test_frac=0.10,
                        min_patch_rows=40, pinned_test=TEST_SERIES,
-                       strict_pin=True, verbose=False, val_patches=None):
+                       strict_pin=True, verbose=False, val_patches=None,
+                       val_random=False, seed=VAL_SPLIT_SEED):
     """Train/val/test by SERIES *inside* each patch: head -> train, tail -> val/test.
 
     Why this split exists, next to `split_series_by_date`. The global date
@@ -714,6 +724,19 @@ def split_within_patch(rows, val_frac=0.10, test_frac=0.10,
     training rows. With `"latest"` the newest patch *above `min_patch_rows`*
     is the one validated on - a patch too small to have a tail stays in train
     and the next-newest takes over, so val is never silently empty.
+
+    `val_random`: draw the val series at random from each patch instead of
+    taking its newest ones. The tail split teaches the head of a patch and
+    tests its end, which is the right question for "does a patch's prior
+    transfer forward" - but it also means the *newest* series of every patch
+    is never trained on, and the newest series are the ones that carry the
+    meta as it currently stands. A random draw puts 90% of every patch's
+    timeline, including its end, into train, and leaves a val that is spread
+    over the patch instead of concentrated on its frontier. Draws are over
+    whole series (never rows), seeded from `seed` per patch, so the split is
+    reproducible and identical across stages. It composes with `val_patches`
+    and with a fractional `test` tail: test still takes the newest series,
+    val is drawn from what remains.
     """
     series = defaultdict(list)
     for i, row in enumerate(rows):
@@ -781,7 +804,7 @@ def split_within_patch(rows, val_frac=0.10, test_frac=0.10,
         n_val = max(1, int(round(n * val_frac))) if val_frac > 0 else 0
         if val_keys is not None and patch not in val_keys:
             n_val = 0
-        test_series, val_series, acc = [], [], 0
+        test_series, acc = [], 0
         cut = len(ordered)
         for j in range(len(ordered) - 1, -1, -1):
             if acc >= n_test:
@@ -789,15 +812,31 @@ def split_within_patch(rows, val_frac=0.10, test_frac=0.10,
             test_series.insert(0, ordered[j])
             acc += len(ordered[j])
             cut = j
-        acc = 0
-        cut_val = cut
-        for j in range(cut - 1, -1, -1):
-            if acc >= n_val:
-                break
-            val_series.insert(0, ordered[j])
-            acc += len(ordered[j])
-            cut_val = j
-        train_series = ordered[:cut_val]
+        pool = ordered[:cut]          # every series not in the test tail
+        if val_random:
+            draw = list(range(len(pool)))
+            random.Random("%s|%s" % (seed, patch)).shuffle(draw)
+            picked, acc = [], 0
+            for j in draw:
+                if acc >= n_val:
+                    break
+                picked.append(j)
+                acc += len(pool[j])
+            chosen = set(picked)
+            val_series = [pool[j] for j in sorted(chosen)]
+            train_series = [pool[j] for j in range(len(pool))
+                            if j not in chosen]
+        else:
+            acc = 0
+            cut_val = len(pool)
+            val_series = []
+            for j in range(len(pool) - 1, -1, -1):
+                if acc >= n_val:
+                    break
+                val_series.insert(0, pool[j])
+                acc += len(pool[j])
+                cut_val = j
+            train_series = pool[:cut_val]
         tr = [i for s in train_series for i in s]
         va = [i for s in val_series for i in s]
         te = [i for s in test_series for i in s]
@@ -817,8 +856,11 @@ def split_within_patch(rows, val_frac=0.10, test_frac=0.10,
                                 ", ".join(p.split("|")[1] + " vs "
                                           + p.split("|")[2] for p in pinned)))
         if val_keys is not None:
-            print("  val is the tail of %s only; every other patch is "
+            print("  val is drawn from %s only; every other patch is "
                   "100%% train" % ", ".join(sorted(val_keys)))
+        if val_random:
+            print("  val series are a random draw per patch (seed %s), not "
+                  "each patch's tail" % seed)
         if moved:
             print("  %d rows follow their series into an earlier patch "
                   "(series spanning a patch boundary)" % moved)

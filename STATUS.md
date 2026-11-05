@@ -31,10 +31,10 @@ they are here so nobody re-runs them.
 
 ## 1. Where it stands
 
-Five checkpoints, one per model class, all under `model/checkpoints/`. The
-directory name states the inference the checkpoint serves and the stage that
-produced it, and `frontend/server._ckpt_roles` reads that prefix to decide which
-of the two UI slots may load it.
+Nine checkpoints, all under `model/checkpoints/`. The directory name states the
+inference the checkpoint serves and the stage that produced it, and
+`frontend/server._ckpt_roles` reads that prefix to decide which of the two UI
+slots may load it.
 
 | class | checkpoint | inference |
 |---|---|---|
@@ -43,15 +43,30 @@ of the two UI slots may load it.
 | pro-only, from scratch | `masking-proonly/best.pt` | masked completion, role board |
 | policy (soloQ encoder) | `nextpick-policy/best_policy.pt` | next-move ranking |
 | policy (pro-only) | `nextpick-proonly/best.pt` | next-move ranking |
-| pro-only, all data | `masking-proonly-through-wlds-ig-tes/best.pt` | masked completion, role board — **the shipped default** |
-| pro-only, all data | `nextpick-proonly-through-wlds-ig-tes/best.pt` | next-move ranking — **the shipped default** |
+| pro-only, all data, 16.20 val | `masking-proonly-through-wlds-ig-tes/best.pt` | masked completion, role board |
+| pro-only, all data, 16.20 val | `nextpick-proonly-through-wlds-ig-tes/best.pt` | next-move ranking |
+| pro-only, all data, random val | `masking-proonly-randomvalsplit-through-wlds-ig-tes/best.pt` | masked completion, role board — **the shipped default** |
+| pro-only, all data, random val | `nextpick-proonly-randomvalsplit-through-wlds-ig-tes/best.pt` | next-move ranking — **the shipped default** |
 
-The two `-through-` checkpoints were added on 2026-11-04: same architecture and
-seed, retrained on the whole corpus with no test split (§7). The suffix states
-which series the training data ends on, so a retrain cannot quietly land in an
-old directory name. They are the defaults because they see 4,727 more drafts;
-they are *not* the ones §7 scores, because a run with `--no-test` has no
-held-out number by construction.
+The `-through-` checkpoints were added on 2026-11-04: same architecture and seed,
+retrained on the whole corpus with no test split (§7). The suffix states which
+series the training data ends on, so a retrain cannot quietly land in an old
+directory name. None of them is the one §7 scores, because a run with `--no-test`
+has no held-out number by construction.
+
+The `-randomvalsplit-` pair (2026-11-04, later that day) is the same corpus and
+frontier as the `-through-` pair and differs only in the val split: 10% of *every*
+patch drawn at random per patch, instead of each patch's tail (§3). That trains on
+90% of every patch including its end — 42,121 train / 4,758 val, against
+42,100 / 4,768 / 7 for the originals and 46,827 / 52 for the `-through-` pair —
+so it gives back 4,706 rows of the earlier refresh and buys a val 90x larger than
+the 16.20-only one. It is the default because it is the better model on the honest
+rows: on the 458 games that are val for both it and the original, masked top-5 is
++0.005 (p 0.47, i.e. tied) and next-move top-1 is +0.007 (p 0.024, bootstrap CI
+[+0.001, +0.013]) with top-10 +0.009 (p 0.004). The `-through-` pair cannot be
+compared to anything this way — it trained on nearly every row, so no honest
+common set exists with it — which is why it is kept as a recorded experiment
+rather than as a candidate.
 
 Weights are git-ignored. 18 older checkpoints (1.9 GB) were deleted on
 2026-11-03; their numbers live in `model/proonly/reports/` and §4/§6 here, but
@@ -165,9 +180,9 @@ default) puts the whole patch on one side, so at test time the patch id is `UNK`
 and any patch-conditioned input can only memorise — which is why the earlier
 `policy-2` run measured patch conditioning as *harmful* (0.2029 vs 0.2558 top-5).
 `split_within_patch` asks the deployment question instead: **you always know
-today's patch and you have its first 80%.** Series are grouped first (a series
-belongs to the patch of its first game, so it can never straddle), sorted by
-`(date, gameid)`, and the tail windows are filled backwards so test is newest.
+today's patch and you have most of its games.** Series are grouped first (a
+series belongs to the patch of its first game, so it can never straddle), sorted
+by `(date, gameid)`, and the tail windows are filled backwards so test is newest.
 
 The test split is then **pinned**: `pipeline.TEST_SERIES` names three
 `series_id` strings, and `split_within_patch(pinned_test=...)` holds them out of
@@ -175,6 +190,24 @@ train and val *by id*, so the set cannot move when the corpus is rebuilt. While
 the pin is non-empty `test_frac` is forced to 0; a pinned id missing from the
 corpus raises rather than quietly shrinking the test set. `strict_pin=False`
 exists only for `--limit-drafts` smoke runs, which subsample.
+
+**Val is drawn, not tailed, in the shipped protocol.** The tail split holds out
+the *newest* series of every patch — the rows that carry the meta as it currently
+stands — so every patch's frontier is never trained on, and selection happens on
+the one slice the model cannot interpolate from. `--val-split random` (the
+default is still `tail`) draws whole series per patch instead: 90% of every
+patch's timeline *including its end* is trained on, and val is spread across the
+patch rather than sitting on its edge. The draw is seeded per patch
+(`Random("%s|%s" % (VAL_SPLIT_SEED, patch))`) so one patch's val does not depend
+on which other patches exist or on iteration order, and `VAL_SPLIT_SEED` is a
+module constant rather than a flag for the same reason `TEST_SERIES` is: the
+masked stage and the policy stage must draw the *same* val series. On 46,879
+drafts that is **42,121 train / 4,758 val / 0 test**, 99 patches contributing
+val, patch 16.20 at 236 of its 262 rows in train. The trade is explicit — the
+draw costs 4,758 val rows against the 52 of the 16.20-only scope, and buys a
+selection signal large enough to be stable (8,053 masked slots instead of 78,
+where the difference between the chosen epoch and the plateau was inside the
+noise).
 
 ---
 
@@ -476,6 +509,9 @@ comparison is paired and symmetric.
 Reproducing §7 exactly first (0.714 masked top-5 and 0.564 next-move top-5 for
 the originals) is what makes the harness trustworthy; `--mask-mode slot` hides
 each pick in turn, so a number here is the same protocol as the tables above.
+`compare.py`'s defaults (`--new-scope latest --val-split tail`) are this
+subsection's arm; the random-val arm below is always named explicitly, and the
+harness prints which protocol it built.
 
 | comparison | set | task | top-1 | top-5 | top-10 |
 |---|---|---|---|---|---|
@@ -509,6 +545,56 @@ Evidence: `model/proonly/reports/compare_{shared,pinned,allval}_{policy,masked}.
 and `compare_epoch9_vs_40_masked.json`. The all-patch-val weights were deleted
 after losing the comparison; reproduce with the two `--val-scope all --no-test`
 commands in §10.
+
+### The random-per-patch val (2026-11-04, later that day)
+
+The 16.20-only val was then dropped by decision, not by a measurement: it holds
+out the *newest* series of the one patch that matters, so 52 games — and the end
+of 16.20, the games closest to what the product is asked about — are never
+trained on. `--val-split random` draws 10% of *every* patch's series at random
+instead (§3), which trains on 236 of 16.20's 262 rows and spreads val across each
+patch rather than sitting on its edge. Split: **42,121 train / 4,758 val / 0
+test**, 99 patches contributing val.
+
+| | selected epoch | val top-5 | val rel | val n |
+|---|---|---|---|---|
+| `masking-proonly-randomvalsplit-through-wlds-ig-tes` | 6 | 0.560 | 1.39x | 4,758 games / 8,053 slots |
+| `nextpick-proonly-randomvalsplit-through-wlds-ig-tes` | 40 | 0.500 | 3.28x | 4,758 games / 95,160 states |
+
+**These val columns are not comparable to the table above** — a different val set,
+with a much stronger frequency baseline (masked `base_champ_top5` 0.403 against
+0.295 on 16.20 only, because the older patches are more predictable). The rel
+column drops from 2.17x to 1.39x for that reason alone, not because the model got
+worse. What the larger val does buy is a selection signal that is not noise: the
+masked stage still peaks early (rel 1.39x at epoch 6, 1.24x at 40) but the chosen
+epoch is now picked out of 8,053 slots instead of 78.
+
+**The honest check is against the originals**, on rows that are val in both the
+random-per-patch split and the original every-patch split — 458 games across all
+five years, 4,580 masked slots, 9,160 next-move states, trained by neither model:
+
+| comparison | set | task | top-1 | top-5 | top-10 |
+|---|---|---|---|---|---|
+| random val vs original | shared 458 | next move | **+0.007** (p .024) | +0.003 (p .49) | **+0.009** (p .004) |
+| random val vs original | shared 458 | masked | −0.005 (p .51) | +0.005 (p .47) | −0.005 (p .34) |
+
+So the policy model is slightly but consistently ahead (top-1's game bootstrap CI
+is [+0.001, +0.013], the only interval here that excludes zero) and the masked
+model is tied to within 0.5 pp. The masked per-year split is the more interesting
+number, because it is monotone in recency — 2022 −0.002, 2023 −0.008, 2024 +0.003,
+2025 +0.011, 2026 **+0.018** — which is what training on each patch's *end*
+instead of only its beginning should do, and it is the effect the change was made
+for. It is not significant per year, and it is not offered as a win: the claim is
+that the split is no longer holding out the frontier, and the frontier is where
+the gain is.
+
+The `-through-` pair is **not** a usable baseline for this: it trained on 46,827
+of 46,879 rows, so it has no honest common set with anything. That is why the
+comparison above is against the originals, and why the `-through-` pair stays in
+the record as a measured experiment rather than a candidate. Per instruction, the
+three-arm control of the previous subsection was not repeated.
+
+Evidence: `model/proonly/reports/compare_shared_random_{masked,policy}.json`.
 
 ---
 
@@ -598,6 +684,35 @@ first pick, switching back to a closed game with no board error, and a real
 G4 walkthrough seeding its 30 real fearless champions with no illegal pick
 across 12 replayed moves.
 
+### Two models, one board — an open observation
+
+**Not acted on, and no conclusion drawn yet.** Stepping through IG vs TES game 2
+(2026-11-03) in the UI, the role board and the next-move panel disagreed in a way
+that looks systematic: the `masking-*` board assigned Lulu to UTILITY at 100%
+confidence, and at move 12 the `nextpick-*` panel still put Thresh — a champion
+that is a support in any draft — at the top of its suggestion. Utility was
+already occupied by Lulu, so the two panels cannot both be right about the board
+they are describing.
+
+The two slots are independent by construction (§8), and the asymmetry is
+structural, not a bug in either loader: the role board is *role-conditioned* —
+it is asked "who fills UTILITY?" and answers per slot — while the next-move model
+is asked "what does a pro do next?" over 173 champions and has to recover roles
+from the encoder's role head, which is a soft input, not a constraint. So the
+masking model can be confident about a role the policy model never conditions on.
+That is also why the observation is worth recording rather than patching: the
+cheap version of a fix (feeds the board's role assignment into the policy's
+legality mask) would make the policy model inherit the masking model's errors,
+and it would be scored by no existing number — the test split measures each model
+separately (§7), never the pair.
+
+What is known: one game, one move, one side. What is not: whether this repeats,
+whether it is worse in the pick phases than the ban phases, and whether the
+policy's own inferred roles agree with the board's on the same board. The
+`/breakdown` page scores both checkpoints on one game and is the place to check
+the third question without writing anything new. No change was made on the
+strength of this.
+
 ---
 
 ## 9. Plan
@@ -656,6 +771,43 @@ not comparable across protocols (this window's baseline is 0.412 vs 0.373
 patch-honest, so pro-only 1.38x and finetune 1.51x cannot be read as "finetune is
 better"); the wider corpus and the scratch control are seed 0 only.
 
+### Blocked on an LLM key: the post-draft verdict
+
+**Wanted, not built — there is no LLM API key yet**, so this is a note rather than
+work in progress. After a draft is finished in the UI, a button that records who
+won ("red won" / "blue won") should hand the completed 20-move board to an LLM,
+which then explains two things:
+
+1. **Was there a final team-comp advantage?** — did the composition that came out
+   of the draft decide the game, and in which direction: a lane-by-lane and
+   win-condition read of the two finished comps, not a restatement of the score.
+2. **Which step of the draft should have changed to improve?** — name the move
+   (ban or pick, phase and side, and which side it was on) and say what should
+   have gone there instead. The interesting case is the losing side's earliest
+   *reachable* mistake, not the last move before the loss.
+
+The button is the only new UI input: a game loaded from the corpus already carries
+`blue_win`, and for a hypothetical board the click is what supplies it — so the
+outcome is data, not a model output. What the LLM adds is the reasoning, and the
+risk is hindsight — with the result known, any explanation is unfalsifiable, and a
+plausible one is not a correct one. `/api/explain` (§8) already sets the discipline
+this should reuse: retrieve the k most similar pro drafts *at the query move* plus
+patch bullets, and mechanically check every citation before returning it, with a
+clean `ok: false` rather than unchecked prose. The same should hold here — the
+verdict cites real games or says nothing — and the `reasoning` field stays the
+model's own account, out of `evidence`.
+
+**Why it might matter beyond the UI.** If the verdicts hold up, they are a weak
+supervision source for the two things this project is missing: an **advantage /
+value target** (the plan's item 5) and a **counterfactual preference** between a
+real move and a plausible alternative, which is exactly what the policy head
+cannot learn from imitation alone. That is the second-order use, and it is
+downstream of the same gate as item 5: a verdict has to be scored against
+something before it can be a label, or the model learns the LLM's taste. The
+cheapest honest version is a small hand-labelled set of drafts — the reviewer says
+which step actually mattered — and then the LLM is only used where it agrees with
+that set, which also gives the calibration the "what not to do" list demands.
+
 ---
 
 ## 10. Reproduce
@@ -673,7 +825,17 @@ docker compose run --rm dev python model/policy/train.py \
     --out-dir model/checkpoints/nextpick-policy
 # the pretrain is kept, not retrained: model/checkpoints/masking-soloqueue/
 
-# the all-data refresh (no test split, val on 16.20 only) - the shipped defaults
+# the shipped defaults: all the data, no test split, val = a random 10% of every
+# patch (stage 1 ~7 min, stage 2 ~14 min)
+docker compose run --rm dev python model/proonly/train_masked.py \
+    --no-test --val-split random --seed 0 \
+    --out-dir model/checkpoints/masking-proonly-randomvalsplit-through-wlds-ig-tes
+docker compose run --rm dev python model/proonly/train_policy.py \
+    --no-test --val-split random --seed 0 \
+    --init-ckpt model/checkpoints/masking-proonly-randomvalsplit-through-wlds-ig-tes/best.pt \
+    --out-dir model/checkpoints/nextpick-proonly-randomvalsplit-through-wlds-ig-tes
+
+# the earlier refresh, kept as a recorded experiment: same data, val on 16.20 only
 docker compose run --rm dev python model/proonly/train_masked.py \
     --no-test --val-scope latest --val-frac 0.20 \
     --out-dir model/checkpoints/masking-proonly-through-wlds-ig-tes
@@ -681,6 +843,16 @@ docker compose run --rm dev python model/proonly/train_policy.py \
     --no-test --val-scope latest --val-frac 0.20 \
     --init-ckpt model/checkpoints/masking-proonly-through-wlds-ig-tes/best.pt \
     --out-dir model/checkpoints/nextpick-proonly-through-wlds-ig-tes
+
+# the honest comparison for a no-test run: rows val for BOTH protocols
+docker compose run --rm dev python model/proonly/compare.py --task policy \
+    --split shared --other old --new-scope all --val-split random \
+    --a model/checkpoints/nextpick-proonly/best.pt \
+    --b model/checkpoints/nextpick-proonly-randomvalsplit-through-wlds-ig-tes/best.pt
+docker compose run --rm dev python model/proonly/compare.py --task masked \
+    --split shared --other old --new-scope all --val-split random --mask-mode slot \
+    --a model/checkpoints/masking-proonly/best.pt \
+    --b model/checkpoints/masking-proonly-randomvalsplit-through-wlds-ig-tes/best.pt
 
 # the comparison
 docker compose run --rm dev python model/test_split/eval_test_split.py
@@ -718,7 +890,7 @@ those two must be separate invocations. `model/policy` must go in as a
 *directory*: `model/policy/model.py` shadows the `model` package when that folder
 is first on `sys.path`, which is what `pytest model/policy/test_infer.py` does.
 Green today: `pytest model/policy model/proonly model/pretraining model/tests
-model/test_split` (143 passed, 1 skipped), `pytest model/finetune` (25),
+model/test_split` (147 passed, 1 skipped), `pytest model/finetune` (25),
 `pytest "data/pro play" frontend` (114 passed). `soloq data
 analysis/explorer/test_explorer.py` is excluded: it opens an HTTP connection at
 import time and errors during collection when no server is running.

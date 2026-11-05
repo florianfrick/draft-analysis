@@ -215,17 +215,20 @@ def masked_ranks_slot(ckpt, rows, splits, args, device):
 def _build_splits(rows, args):
     """Both protocols' splits, plus the rows that are honest for both.
 
-    `shared` is the intersection of the refresh's val and the *other*
-    protocol's val (`--other`): val for both, so neither model trained on those
-    rows, which is the only property that makes a cross-protocol comparison
-    mean anything. `--other old` is the original every-patch split with the
-    pinned test held out; `--other all` is the every-patch split with no test
-    holdout, which is what a `--val-scope all --no-test` run trains against.
+    `shared` is the intersection of the protocol under test (`--new-scope`,
+    `--val-split`) and the *other* protocol's val (`--other`): val for both, so
+    neither model trained on those rows, which is the only property that makes a
+    cross-protocol comparison mean anything. `--other old` is the original
+    every-patch split with the pinned test held out; `--other all` is the
+    every-patch split with no test holdout, which is what a `--val-scope all
+    --no-test` run trains against.
     """
+    latest = args.new_scope == "latest"
     new = C.PRO_PIPE.split_within_patch(
-        rows, val_frac=args.val_frac_latest, test_frac=0.0,
-        min_patch_rows=args.min_patch_rows, pinned_test=(),
-        val_patches="latest")
+        rows, val_frac=args.val_frac_latest if latest else args.val_frac,
+        test_frac=0.0, min_patch_rows=args.min_patch_rows, pinned_test=(),
+        val_patches="latest" if latest else None,
+        val_random=args.val_split == "random")
     if args.other == "old":
         other = C.PRO_PIPE.split_within_patch(
             rows, val_frac=args.val_frac, test_frac=args.test_frac,
@@ -234,7 +237,8 @@ def _build_splits(rows, args):
     else:
         other = C.PRO_PIPE.split_within_patch(
             rows, val_frac=args.val_frac, test_frac=0.0,
-            min_patch_rows=args.min_patch_rows, pinned_test=())
+            min_patch_rows=args.min_patch_rows, pinned_test=(),
+            val_random=args.other_random)
     return {"val": other["val"], "test": other["test"],
             "latest-val": new["val"],
             "shared": sorted(set(other["val"]) & set(new["val"]))}
@@ -294,13 +298,24 @@ def main():
                     help="val/test = the old every-patch protocol; shared = "
                          "rows that are val in BOTH protocols (the only "
                          "cross-protocol set neither model trained on); "
-                         "latest-val = the refresh's newest-patch val")
+                         "latest-val = the protocol under test's own val, i.e. "
+                         "whatever --new-scope/--val-split describe")
     ap.add_argument("--corpus", choices=sorted(C.CORPORA), default="2022")
+    ap.add_argument("--new-scope", choices=("latest", "all"), default="latest",
+                    help="the protocol under test: latest = val only from the "
+                         "newest patch (the 2026-11-04 16.20-only arm); all = "
+                         "every patch contributes val (the shipped protocol)")
+    ap.add_argument("--val-split", choices=("tail", "random"), default="tail",
+                    help="the protocol under test: tail = each patch's newest "
+                         "series are val; random = a seeded per-patch draw. "
+                         "Must match the --val-split the checkpoint trained "
+                         "with, or `--split latest-val` scores the wrong rows")
     ap.add_argument("--val-frac", type=float, default=0.10,
-                    help="the old split's val share, per patch")
+                    help="val share per patch, for --new-scope all and for the "
+                         "old split")
     ap.add_argument("--val-frac-latest", type=float, default=0.20,
-                    help="the refresh split's val share, newest patch only - "
-                         "must match the --val-frac the refresh trained with")
+                    help="--new-scope latest only: that arm's val share, which "
+                         "must match the --val-frac it trained with")
     ap.add_argument("--test-frac", type=float, default=0.10)
     ap.add_argument("--min-patch-rows", type=int, default=40)
     ap.add_argument("--other", choices=("old", "all"), default="old",
@@ -308,6 +323,10 @@ def main():
                          "every-patch val + pinned test (the original model), "
                          "all = every-patch val, no test (a --val-scope all "
                          "--no-test run)")
+    ap.add_argument("--other-random", action="store_true",
+                    help="--other all only: that run drew its val series at "
+                         "random per patch (--val-split random) instead of "
+                         "taking each patch's tail")
     ap.add_argument("--mask-mode", choices=("random", "slot"), default="random",
                     help="masked task only: random = the training objective's "
                          "15%% masking; slot = hide each pick in turn, 10 per "
@@ -337,8 +356,11 @@ def main():
     assert games == games_b, "the two models must score the same examples"
     assert len(ra) == len(rb)
 
-    print("%s, split=%s, n=%d examples, %d games"
-          % (args.task, args.split, len(ra), len(set(games))))
+    print("%s, split=%s (%s | other=%s%s), n=%d examples, %d games"
+          % (args.task, args.split,
+             "%s/%s" % (args.new_scope, args.val_split),
+             args.other, "+random" if args.other_random else "",
+             len(ra), len(set(games))))
     out = {}
     for k in (1, 5, 10):
         ha = [r < k for r in ra]
@@ -382,6 +404,13 @@ def main():
         import json
         payload = dict(out, task=args.task, split=args.split,
                        corpus=args.corpus, a=args.a, b=args.b,
+                       protocol={"new_scope": args.new_scope,
+                                 "val_split": args.val_split,
+                                 "other": args.other,
+                                 "other_random": bool(args.other_random),
+                                 "val_frac": args.val_frac,
+                                 "val_frac_latest": args.val_frac_latest,
+                                 "mask_mode": args.mask_mode},
                        n=len(ra), n_games=len(set(games)))
         path = Path(args.json)
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -60,10 +60,11 @@ PolicyValueModel = POLICY_MODEL.PolicyValueModel
 
 def add_corpus_args(ap):
     ap.add_argument("--corpus", choices=sorted(CORPORA), default="2022",
-                    help="2022 = the documented 46,813-draft corpus (default); "
+                    help="2022 = the documented 46,879-draft corpus (default); "
                          "all = 2017-2026, 81,161 drafts")
     ap.add_argument("--val-frac", type=float, default=0.10,
-                    help="share of each patch's tail held out for val")
+                    help="share of each patch held out for val (the tail, or a "
+                         "random draw of the same size - see --val-split)")
     ap.add_argument("--test-frac", type=float, default=0.10,
                     help="share of each patch's tail held out for test. "
                          "IGNORED while the pinned test split is active "
@@ -71,17 +72,24 @@ def add_corpus_args(ap):
                          "--limit-drafts smoke runs, which cannot hold the "
                          "pinned series out")
     ap.add_argument("--no-test", dest="no_test", action="store_true",
-                    help="hold no test split out at all: every patch's tail "
-                         "goes to val (or to train, see --val-scope) and the "
-                         "pinned TEST_SERIES are ordinary rows. For a "
-                         "production refresh, not a measurement run - the "
-                         "resulting checkpoint has no held-out score")
+                    help="hold no test split out at all: what would have been "
+                         "the test tail goes to val (or to train, see "
+                         "--val-scope) and the pinned TEST_SERIES are ordinary "
+                         "rows. For a production refresh, not a measurement "
+                         "run - the resulting checkpoint has no held-out score")
     ap.add_argument("--val-scope", choices=("all", "latest"), default="all",
-                    help="all (default) = every patch's tail is val, the "
+                    help="all (default) = every patch contributes val, the "
                          "protocol every recorded number uses. latest = only "
-                         "the newest patch's tail is val and every other "
+                         "the newest patch contributes val and every other "
                          "patch is 100%% train, for a model that will only be "
                          "asked about the current patch")
+    ap.add_argument("--val-split", choices=("tail", "random"), default="tail",
+                    help="tail (default) = val is each patch's newest "
+                         "series, so the frontier of every patch is never "
+                         "trained on. random = a seeded random draw of whole "
+                         "series per patch, so 90%% of every patch's timeline "
+                         "- including its end - is trained on and val is "
+                         "spread across the patch instead of sitting on it")
     ap.add_argument("--min-patch-rows", type=int, default=40,
                     help="patches smaller than this stay entirely in train "
                          "(their tail would be 1-2 games)")
@@ -109,6 +117,7 @@ def load_split(args, verbose=True):
     # usually gone; relax the pin rather than abort, and fall back to the
     # fractional tail. Never true for a measured run.
     no_test = bool(getattr(args, "no_test", False))
+    val_random = getattr(args, "val_split", "tail") == "random"
     splits = PRO_PIPE.split_within_patch(
         rows, val_frac=args.val_frac,
         test_frac=0.0 if no_test else args.test_frac,
@@ -116,7 +125,8 @@ def load_split(args, verbose=True):
         pinned_test=() if no_test else PRO_PIPE.TEST_SERIES,
         strict_pin=not args.limit_drafts, verbose=verbose,
         val_patches=("latest" if getattr(args, "val_scope", "all") == "latest"
-                     else None))
+                     else None),
+        val_random=val_random)
     patch_vocab, patch_index = PRO_DATA.build_patch_vocab(rows)
     if verbose:
         print("corpus %s: %d drafts, %d patches (%s..%s)"
@@ -129,6 +139,20 @@ def load_split(args, verbose=True):
               % (corpus_frontier(rows)["series_id"],
                  newest_train_series(rows, splits["train"])["series_id"]))
     return rows, splits, patch_vocab, patch_index
+
+
+def split_description(val_split, has_test):
+    """One line naming the split, for the report's own `protocol` block.
+
+    A checkpoint records which rows selected it, because `best.pt` is chosen on
+    val and two runs that differ only in `--val-split` are different
+    experiments - the same reason `--epochs` is written down.
+    """
+    train_how, val_how = (("head", "tail") if val_split == "tail"
+                          else ("the rest", "random draw per patch"))
+    return ("within-patch (train=%s, val=%s); " % (train_how, val_how)
+            + ("test = the pinned TEST_SERIES" if has_test
+               else "no test split (--no-test)"))
 
 
 # ---------------------------------------------------------------- naming ----

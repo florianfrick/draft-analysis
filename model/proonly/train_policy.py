@@ -369,10 +369,9 @@ def train(args):
     report = {"protocol": {
         "corpus": args.corpus, "patch_emb": bool(args.patch_emb),
         "n_patches": n_patches, "init_ckpt": args.init_ckpt,
-        "split": ("within-patch (train=head, val=tail); "
-                  + ("test = the pinned TEST_SERIES"
-                     if splits["test"] else "no test split (--no-test)")),
+        "split": C.split_description(args.val_split, bool(splits["test"])),
         "val_scope": args.val_scope,
+        "val_split": args.val_split,
         "prefix_mode": args.prefix_mode, "swap_aug": args.swap_aug,
         "seed": args.seed, "n_train": len(splits["train"]),
         "n_val": len(splits["val"]), "n_test": len(splits["test"]),

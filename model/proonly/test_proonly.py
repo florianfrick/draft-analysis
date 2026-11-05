@@ -272,6 +272,52 @@ def test_val_scope_latest_skips_a_patch_below_min_patch_rows():
     assert sum(1 for i in sp["train"] if rows[i]["patch"] == "16.21") == 10
 
 
+def test_random_val_draw_is_deterministic_and_seeded():
+    """Same seed -> same split; a different seed -> a different one.
+
+    Both trainers rebuild the split independently, so a draw that moved between
+    invocations would silently give the policy stage a different val than the
+    masked stage selected on.
+    """
+    rows = _patch_rows()
+    a = C.PRO_PIPE.split_within_patch(rows, val_frac=0.10, pinned_test=(),
+                                      test_frac=0.0, val_random=True)
+    b = C.PRO_PIPE.split_within_patch(rows, val_frac=0.10, pinned_test=(),
+                                      test_frac=0.0, val_random=True)
+    assert a["val"] == b["val"] and a["train"] == b["train"]
+    c = C.PRO_PIPE.split_within_patch(rows, val_frac=0.10, pinned_test=(),
+                                      test_frac=0.0, val_random=True,
+                                      seed=1)
+    assert c["val"] != a["val"]
+
+
+def test_random_val_draws_whole_series_and_keeps_the_size():
+    """No series may straddle train/val, and the draw must hit val_frac."""
+    rows = _patch_rows()
+    sp = C.PRO_PIPE.split_within_patch(rows, val_frac=0.10, pinned_test=(),
+                                       test_frac=0.0, val_random=True)
+    tr = {rows[i]["series_id"] for i in sp["train"]}
+    va = {rows[i]["series_id"] for i in sp["val"]}
+    assert not tr & va, "a series was split across train and val"
+    # 3 patches x 60 rows, 10% each -> 6 per patch
+    assert len(sp["val"]) == 18
+    assert sum(len(sp[k]) for k in ("train", "val", "test")) == len(rows)
+
+
+def test_random_val_trains_on_each_patch_frontier():
+    """The point of the random draw: the newest series of a patch is usually
+    trained on, where the tail split always held it out."""
+    rows = _patch_rows()
+    tail = C.PRO_PIPE.split_within_patch(rows, val_frac=0.10, pinned_test=(),
+                                         test_frac=0.0)
+    rnd = C.PRO_PIPE.split_within_patch(rows, val_frac=0.10, pinned_test=(),
+                                        test_frac=0.0, val_random=True)
+    newest = max(range(len(rows)),
+                 key=lambda i: (rows[i]["date_ordinal"], rows[i]["gameid"]))
+    assert newest in tail["val"], "the tail split should hold the frontier out"
+    assert newest in rnd["train"], "the random draw should train on it"
+
+
 def test_no_test_keeps_every_pinned_series_row_in_the_split():
     """--no-test must not drop rows: the pinned series become train/val."""
     rows = _patch_rows()
@@ -294,7 +340,8 @@ def _compare_args(**kw):
     """The subset of compare.py's namespace `_build_splits` reads."""
     import argparse
     ns = argparse.Namespace(val_frac=0.10, val_frac_latest=0.20, test_frac=0.10,
-                            min_patch_rows=40, other="old")
+                            min_patch_rows=40, other="old", other_random=False,
+                            new_scope="latest", val_split="tail")
     for k, v in kw.items():
         setattr(ns, k, v)
     return ns
@@ -340,6 +387,25 @@ def test_shared_split_against_the_all_patch_protocol(monkeypatch):
     assert shared <= set(other["val"])
     assert not shared & set(other["train"])
     assert not splits["test"], "--other all has no test split"
+
+
+def test_harness_matches_the_trained_protocol():
+    """`--new-scope all --val-split random` must rebuild the shipped split.
+
+    compare.py re-derives the split from flags instead of reading it out of the
+    checkpoint, so a default that drifts from the trainer's silently scores the
+    wrong rows - `--split latest-val` would report a number for a set the
+    checkpoint trained on.
+    """
+    import compare
+    rows = _patch_rows()
+    splits = compare._build_splits(
+        rows, _compare_args(new_scope="all", val_split="random", other="all"))
+    trained = C.PRO_PIPE.split_within_patch(rows, val_frac=0.10, test_frac=0.0,
+                                            pinned_test=(), val_random=True)
+    assert splits["latest-val"] == trained["val"]
+    assert {rows[i]["patch"] for i in splits["latest-val"]} == \
+        {"16.18", "16.19", "16.20"}, "every patch must contribute val"
 
 
 def test_mcnemar_separates_a_only_from_b_only():
