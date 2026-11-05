@@ -10,6 +10,8 @@ reuses the encoder blocks, and changes nothing outside `model/winpred/`
 stage). If it works, the folder moves to `main` as a whole.
 
 ```
+REPORT.md     the handoff to main: best arm, why it failed, and the 19 things
+              not to try again - read this first
 data.py       full-draft tables, the 80/10/10 split, prediction-set I/O
 metrics.py    log-loss, Brier, ECE, ROC-AUC, precision/recall at high confidence
 models/
