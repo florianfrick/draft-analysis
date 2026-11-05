@@ -340,8 +340,8 @@ this section come from one run of `sweep.py` (`reports/sweep_seed20261105.json`,
 
 Every arm improves on its prior on **all three** decomposable metrics, with the
 log-loss interval excluding zero in every case, and every arm ranks above 0.5
-AUC — the draft is worth about **0.3–0.4 % of a nat** and about **+0.05 AUC**, on
-both corpora, with no bans and no partial drafts. (Accuracy is the exception to
+AUC — the draft is worth about **0.3–0.4 % of a nat** and **+0.044 to +0.052
+AUC**, on both corpora, with no bans and no partial drafts. (Accuracy is the exception to
 the interval claim: pro/CE's is +0.018 [−0.002, +0.037], so it does not
 distinguish anything.) The four arms are within 0.0021 log-loss of each other,
 which is the first thing to notice: **the loss function is not the lever.**
@@ -451,10 +451,10 @@ quotes `sweep.py`.
 ### What the sweep does and does not say
 
 **Does:** within a domain, the finished draft carries a small but real signal,
-~0.004 nats and +0.05 AUC over the side prior, on both corpora, with intervals
-excluding zero. Across domains it carries **nothing** (0.5002 / 0.5070 AUC), so
-"train on soloQ, deploy on pro" is measured and does not work. Joint training at
-this ratio is a negative result.
+0.003–0.004 nats and +0.044 to +0.052 AUC over the side prior, on both corpora,
+with log-loss intervals excluding zero. Across domains it carries **nothing**
+(0.5002 / 0.5070 AUC), so "train on soloQ, deploy on pro" is measured and does
+not work. Joint training at this ratio is a negative result.
 
 **Does not:** rank CE against focal. Every within-domain gap here is smaller
 than the early-stopping noise (pro selects epoch 6 vs 12 out of 40), and the
