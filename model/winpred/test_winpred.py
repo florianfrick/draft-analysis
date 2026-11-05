@@ -1,0 +1,331 @@
+"""Tests for the win-prediction experiment (run: `pytest model/winpred`).
+
+Deliberately cheap on data: the pro and soloQ caches are loaded once per
+session and every test slices them. The point of the suite is the contract -
+that a metric cannot be quietly wrong, that the split cannot leak a series,
+that the model cannot see a ban, and that a checkpoint round-trips.
+"""
+import importlib.util
+import math
+import sys
+from pathlib import Path
+
+import numpy as np
+import pytest
+import torch
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from model.winpred import data as D              # noqa: E402
+from model.winpred import metrics as M           # noqa: E402
+from model.winpred import model as W             # noqa: E402
+from model.winpred.baseline import BlueWinRateBaseline  # noqa: E402
+from model.winpred.train import focal_loss        # noqa: E402
+
+EP = D._load("winpred_test_eval_protocol", D.PRO_DIR / "eval_protocol.py")
+
+
+# ---------------------------------------------------------------- fixtures
+@pytest.fixture(scope="session")
+def pro_table():
+    table, meta = D.load_pro(corpus="2022", verbose=False)
+    return table, meta
+
+
+@pytest.fixture(scope="session")
+def soloq_table():
+    table, meta = D.load_soloq(verbose=False)
+    return table, meta
+
+
+def _batch(n=4, seed=0, patch_id=1):
+    g = torch.Generator().manual_seed(seed)
+    champ = torch.stack([torch.randperm(173, generator=g)[:10]
+                         for _ in range(n)])
+    role = torch.arange(10).remainder(5).repeat(n, 1)
+    return {"champ_ids": champ, "role_ids": role,
+            "patch_id": torch.full((n,), patch_id, dtype=torch.long)}
+
+
+# ----------------------------------------------------------------- metrics
+def test_perfect_predictions_score_perfectly():
+    y = np.array([1, 0, 1, 0, 1], dtype=float)
+    p = np.where(y == 1, 1.0, 0.0)
+    rep = M.full_report(y, p)
+    assert rep["log_loss"] < 1e-5
+    assert rep["brier"] < 1e-10
+    assert rep["roc_auc"] == 1.0
+    assert rep["accuracy"] == 1.0
+    assert rep["ece"] < 1e-5
+
+
+def test_constant_half_is_the_reference_point():
+    y = np.array([1, 0, 1, 0, 1, 0], dtype=float)
+    p = np.full(6, 0.5)
+    assert M.log_loss(y, p) == pytest.approx(math.log(2), abs=1e-9)
+    assert M.brier(y, p) == pytest.approx(0.25, abs=1e-12)
+    assert M.roc_auc(y, p) == 0.5          # all ties
+    assert M.accuracy(y, p) == 0.5
+
+
+def test_auc_matches_the_repo_protocol():
+    rng = np.random.default_rng(0)
+    y = rng.integers(0, 2, 500).astype(float)
+    p = np.clip(0.35 * y + rng.random(500), 1e-4, 1 - 1e-4)
+    assert M.roc_auc(y, p) == pytest.approx(
+        EP.auc(p.tolist(), y.tolist()), abs=1e-9)
+
+
+def test_auc_ignores_a_constant_shift():
+    """The whole point of AUC here: a side prior cannot move it."""
+    rng = np.random.default_rng(1)
+    y = rng.integers(0, 2, 400).astype(float)
+    p = np.clip(0.3 + 0.4 * y + 0.2 * rng.random(400), 1e-4, 1 - 1e-4)
+    shifted = np.clip(p + 0.05, 1e-4, 1 - 1e-4)
+    assert M.roc_auc(y, p) == pytest.approx(M.roc_auc(y, shifted), abs=1e-9)
+
+
+def test_ece_is_zero_for_a_calibrated_bin():
+    # 60 games at p=0.6, 36 win -> the single occupied bin is exactly calibrated
+    y = np.array([1] * 36 + [0] * 24, dtype=float)
+    p = np.full(60, 0.6)
+    cal = M.ece(y, p, n_bins=15)
+    assert cal["ece"] == pytest.approx(0.0, abs=1e-12)
+    # ... and 0.1 when the bin is 10 points off (42/60 = 0.70 against p=0.60)
+    y2 = np.array([1] * 42 + [0] * 18, dtype=float)
+    assert M.ece(y2, p, n_bins=15)["ece"] == pytest.approx(0.1, abs=1e-12)
+
+
+def test_confident_buckets_are_side_specific():
+    y = np.array([1, 1, 0, 0, 1, 0], dtype=float)
+    p = np.array([0.9, 0.8, 0.1, 0.7, 0.5, 0.4])
+    c = M.confident_metrics(y, p, lo=0.35, hi=0.65)
+    # blue calls: p>0.65 at idx 0,1,3 -> y = 1,1,0 -> 2/3 correct
+    assert c["n_blue_calls"] == 3
+    assert c["precision_blue"] == pytest.approx(2 / 3)
+    # recall over the 3 real blue wins: idx 0,1 are covered -> 2/3
+    assert c["recall_blue"] == pytest.approx(2 / 3)
+    # red call: only idx 2 (0.1) -> red won -> precision 1, recall 1 of 3 reds
+    assert c["n_red_calls"] == 1
+    assert c["precision_red"] == pytest.approx(1.0)
+    assert c["recall_red"] == pytest.approx(1 / 3)
+    # 0.5 and 0.4 are abstentions
+    assert c["n_confident"] == 4
+    assert c["coverage"] == pytest.approx(4 / 6)
+
+
+def test_skill_scores_are_zero_at_the_base_rate():
+    y = np.array([1, 0, 1, 1, 0], dtype=float)
+    p = np.full(5, y.mean())
+    s = M.skill_scores(y, p)
+    assert s["brier_skill"] == pytest.approx(0.0, abs=1e-12)
+    assert s["log_loss_skill"] == pytest.approx(0.0, abs=1e-12)
+
+
+def test_metrics_reject_bad_input():
+    with pytest.raises(ValueError):
+        M.log_loss([1, 0], [0.5])
+    with pytest.raises(ValueError):
+        M.log_loss([1, 2], [0.5, 0.5])
+    with pytest.raises(ValueError):
+        M.log_loss([1, 0], [0.5, float("nan")])
+
+
+def test_bootstrap_is_zero_for_identical_predictions():
+    rng = np.random.default_rng(3)
+    y = rng.integers(0, 2, 300).astype(float)
+    p = np.clip(0.3 + 0.4 * y + 0.2 * rng.random(300), 1e-4, 1 - 1e-4)
+    groups = ["s%d" % (i // 3) for i in range(300)]
+    out = M.bootstrap_delta(y, p, p.copy(), groups, metric="log_loss",
+                            n_boot=200)
+    assert out["delta"] == pytest.approx(0.0, abs=1e-12)
+    assert out["lo"] <= 0 <= out["hi"]
+    assert not out["excludes_zero"]
+
+
+def test_bootstrap_rejects_auc():
+    with pytest.raises(ValueError):
+        M.bootstrap_delta([1, 0], [0.5, 0.5], [0.4, 0.6], ["a", "b"],
+                          metric="roc_auc")
+
+
+# -------------------------------------------------------------------- loss
+def test_focal_with_gamma_zero_is_scaled_bce():
+    torch.manual_seed(0)
+    logit = torch.randn(64)
+    y = torch.randint(0, 2, (64,)).float()
+    bce = torch.nn.functional.binary_cross_entropy_with_logits(logit, y)
+    assert float(focal_loss(logit, y, gamma=0.0, alpha=0.5)) == \
+        pytest.approx(0.5 * float(bce), abs=1e-6)
+
+
+def test_focal_downweights_easy_examples():
+    logit = torch.tensor([4.0, 0.1])       # confident-correct, uncertain
+    y = torch.tensor([1.0, 1.0])
+    ce = float(torch.nn.functional.binary_cross_entropy_with_logits(logit, y))
+    fl = float(focal_loss(logit, y, gamma=2.0, alpha=1.0))
+    assert fl < ce
+
+
+# -------------------------------------------------------------------- data
+def test_pro_table_is_full_drafts_with_labels(pro_table):
+    table, meta = pro_table
+    assert table.champ.shape[1] == 10 and table.role.shape[1] == 10
+    assert set(np.unique(table.y).tolist()) <= {0, 1}
+    assert table.champ.min() >= 0 and table.champ.max() < D.NUM_REAL_CHAMPS
+    assert set(np.unique(table.role).tolist()) == {0, 1, 2, 3, 4}
+    # no duplicate champion within a draft
+    for i in range(0, len(table), 997):
+        assert len(set(table.champ[i].tolist())) == 10
+    assert meta["n_patches"] == len(meta["patch_vocab"]) + 1
+
+
+def test_soloq_table_is_full_drafts_with_labels(soloq_table):
+    table, meta = soloq_table
+    assert len(table) > 100000
+    assert set(np.unique(table.y).tolist()) == {0, 1}
+    assert meta["patch_vocab"] == ["16.20"]
+    assert set(table.patch_id.tolist()) == {1}
+
+
+def test_dataset_has_no_bans_and_no_padding(pro_table):
+    table, _ = pro_table
+    sample = D.WinDataset(table, np.arange(8))[0]
+    assert "ban_ids" not in sample and "unavailable_mask" not in sample
+    assert sample["champ_ids"].shape == (10,)
+    assert sample["win_label"].ndim == 0
+    batch = D.collate([D.WinDataset(table, np.arange(8))[i] for i in range(4)])
+    assert batch["champ_ids"].shape == (4, 10)
+    assert "pad_mask" not in batch        # full drafts: nothing to pad
+
+
+def test_soloq_split_is_seeded_and_disjoint():
+    a = D.split_soloq(1000, seed=7)
+    b = D.split_soloq(1000, seed=7)
+    c = D.split_soloq(1000, seed=8)
+    for k in ("train", "val", "test"):
+        assert np.array_equal(a[k], b[k])
+    assert not np.array_equal(a["train"], c["train"])
+    allidx = np.concatenate([a["train"], a["val"], a["test"]])
+    assert len(allidx) == 1000 and len(set(allidx.tolist())) == 1000
+    assert len(a["test"]) == 100 and len(a["val"]) == 100
+
+
+def test_pro_split_keeps_series_whole_and_covers_every_patch(pro_table):
+    table, _ = pro_table
+    splits, rep = D.make_splits(table, verbose=False)
+    assert rep["n_series_straddling"] == 0
+    total = sum(rep["counts"].values())
+    assert total == len(table)
+    # 80/10/10 of games, allowing for whole-series rounding
+    assert 0.78 <= rep["shares"]["train"] <= 0.82
+    assert 0.08 <= rep["shares"]["val"] <= 0.12
+    assert 0.08 <= rep["shares"]["test"] <= 0.12
+    # every patch above min_patch_rows appears in all three splits
+    for patch, v in rep["by_patch"].items():
+        if v["held_out"]:
+            continue
+        assert v["train"] > 0 and v["val"] > 0 and v["test"] > 0, patch
+
+
+def test_split_is_reproducible_across_calls(pro_table):
+    table, _ = pro_table
+    a, _ = D.make_splits(table, verbose=False)
+    b, _ = D.make_splits(table, verbose=False)
+    for k in ("train", "val", "test"):
+        assert np.array_equal(a[k], b[k])
+
+
+def test_prediction_roundtrip_and_alignment(tmp_path, pro_table):
+    table, _ = pro_table
+    idx = np.arange(50)
+    y = table.y[idx].astype(np.float64)
+    p = np.linspace(0.05, 0.95, 50)
+    path = D.save_predictions(tmp_path / "p.npz", y, p, table, idx)
+    pred = D.load_predictions(path)
+    aligned = D.align_predictions(pred, [table.game_id[i] for i in idx])
+    assert np.allclose(aligned["p"], p, atol=1e-6)
+    # a different row set is an error, not an intersection
+    with pytest.raises(ValueError):
+        D.align_predictions(pred, [table.game_id[i] for i in idx[1:]])
+
+
+# ---------------------------------------------------------------- baseline
+def test_baseline_is_the_train_blue_win_rate(pro_table):
+    table, _ = pro_table
+    splits, _ = D.make_splits(table, verbose=False)
+    base = BlueWinRateBaseline().fit(table.y[splits["train"]])
+    assert base.prior == pytest.approx(float(table.y[splits["train"]].mean()))
+    p = base.predict_proba(10)
+    assert np.all(p == base.prior)
+    d = base.describe()
+    assert d["expected_accuracy"] == pytest.approx(max(base.prior, 1 - base.prior))
+    assert d["predicted_side"] == ("blue" if base.prior > 0.5 else "red")
+
+
+def test_baseline_auc_is_exactly_half(pro_table):
+    table, _ = pro_table
+    splits, _ = D.make_splits(table, verbose=False)
+    base = BlueWinRateBaseline().fit(table.y[splits["train"]])
+    idx = splits["test"]
+    p = base.predict_proba(len(idx))
+    assert M.roc_auc(table.y[idx], p) == 0.5
+
+
+# ------------------------------------------------------------------- model
+def test_model_shapes_and_parameter_contract():
+    m = W.WinPredictor(embed_dim=32, num_intra=1, num_cross=1, num_heads=4,
+                       n_patches=4)
+    out = m(_batch(4))
+    assert out["logit"].shape == (4,)
+    assert out["h_blue"].shape == (4, 32)
+    assert torch.isfinite(out["logit"]).all()
+    assert m.side_bias.numel() == 1
+    assert float(m.side_bias.detach()) == 0.0
+    # no value/aux heads: logit, two team vectors, nothing else
+    assert set(out) == {"logit", "h_blue", "h_red"}
+
+
+def test_model_is_permutation_invariant_within_a_team():
+    m = W.WinPredictor(embed_dim=32, num_intra=1, num_cross=1, num_heads=4,
+                       dropout=0.0).eval()
+    batch = _batch(3, seed=1)
+    perm = torch.tensor([3, 0, 4, 1, 2])
+    shuffled = dict(batch)
+    shuffled["champ_ids"] = batch["champ_ids"].clone()
+    shuffled["role_ids"] = batch["role_ids"].clone()
+    for half in (slice(0, 5), slice(5, 10)):
+        shuffled["champ_ids"][:, half] = batch["champ_ids"][:, half][:, perm]
+        shuffled["role_ids"][:, half] = batch["role_ids"][:, half][:, perm]
+    with torch.no_grad():
+        a = m(batch)["logit"]
+        b = m(shuffled)["logit"]
+    assert torch.allclose(a, b, atol=1e-5)
+
+
+def test_side_bias_is_the_only_path_to_the_prior():
+    m = W.WinPredictor(embed_dim=32, num_intra=1, num_cross=1, num_heads=4)
+    with torch.no_grad():
+        m.head[-1].weight.zero_()
+        m.head[-1].bias.zero_()
+        m.side_bias.fill_(0.7)
+    out = m(_batch(2))
+    assert torch.allclose(out["logit"], torch.full((2,), 0.7), atol=1e-6)
+
+
+def test_config_roundtrips_into_a_loadable_model(tmp_path):
+    m = W.WinPredictor(embed_dim=32, num_intra=2, num_cross=1, num_heads=4,
+                       dropout=0.1, n_patches=5, pool="pma")
+    cfg = W.config_of(m, data="pro", seed=1)
+    rebuilt = W.build_from_config(cfg)
+    rebuilt.load_state_dict(m.state_dict())
+    assert W.param_count(rebuilt) == W.param_count(m)
+    path = tmp_path / "ck.pt"
+    torch.save({"model": m.state_dict(), "config": cfg,
+                "patch_vocab": ["16.01", "16.02"]}, str(path))
+    loaded, payload = W.load_checkpoint(path)
+    assert loaded.num_champs == m.num_champs
+    assert payload["config"]["seed"] == 1

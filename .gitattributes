@@ -10,3 +10,4 @@ model/test_split/REPORT_*.html   text eol=lf
 model/test_split/REPORT_*.md     text eol=lf
 model/proonly/reports/*.json  text eol=lf
 model/proonly/reports/*.txt   text eol=lf
+model/winpred/reports/*.json  text eol=lf

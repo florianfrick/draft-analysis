@@ -36,6 +36,9 @@ model/pretraining/ckpt/
 # kept lives in model/proonly/reports/ (test reports + paired comparisons).
 model/proonly/logs/
 model/proonly/last_*.json
+# winpred (branch exp/win-prediction): per-run console logs stay local, the
+# evidence that is kept lives in model/winpred/reports/
+model/winpred/logs/
 
 # ============================================================
 # Data (GBs of match records, derived caches, player ids)
