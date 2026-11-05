@@ -527,8 +527,9 @@ checkpoint changes nothing:
 | zero it at inference → Δ AUC | −0.00004 | −0.00007 |
 | max change to any single prediction | 0.0017 | — |
 
-So the prior contributes nothing to the served model: 25 parameters that moved
-1–2 % of their own scale and can be removed without a measurable effect. The
+So the prior contributes nothing to the served model: 25 parameters whose entries
+moved by ~0.01 on a scale of 0.2–0.9 (about 5 % of the matrix's mean magnitude),
+removable without a measurable effect. The
 role-only arm's +0.006 AUC over v1 therefore **cannot be the prior itself** —
 25 extra parameters changed the gradient path, the model converged somewhere
 else, and that somewhere else scored higher. That is the useful warning: on this
