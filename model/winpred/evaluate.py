@@ -45,7 +45,7 @@ from model.winpred.baseline import BlueWinRateBaseline  # noqa: E402
 
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(description="Compare win-probability sources")
-    ap.add_argument("--data", choices=("soloq", "pro"), default="pro")
+    ap.add_argument("--data", choices=("soloq", "pro", "both"), default="pro")
     ap.add_argument("--corpus", choices=sorted(D.CORPORA), default="2022")
     ap.add_argument("--soloq-patch", default="16.20")
     ap.add_argument("--soloq-cache", default="")
@@ -74,8 +74,8 @@ def parse_args(argv=None):
     ap.add_argument("--by-patch", action="store_true",
                     help="print the per-patch table")
     ap.add_argument("--allow-vocab-mismatch", action="store_true",
-                    help="score a checkpoint whose patch vocabulary differs "
-                         "from the data's (ids then mean different patches)")
+                    help="score a checkpoint that shares NO patch label with "
+                         "this data (every row then scores on its UNK row)")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available()
                     else "cpu")
     ap.add_argument("--batch-size", type=int, default=512)
@@ -93,27 +93,52 @@ def _kv(items, flag):
     return out
 
 
+def patch_remap(ck_vocab, data_vocab):
+    """Data patch id -> checkpoint patch id, by patch *label* (0 = UNK).
+
+    Patch ids are vocabulary positions, so the same integer means a different
+    patch on each side. Translating by label is what lets a soloQ-only model
+    (one-row patch table) be scored on pro data and vice versa: a label the
+    checkpoint never saw maps to its UNK row, which is exactly what that model
+    would do at inference. Index 0 stays 0 (UNK -> UNK).
+    """
+    remap = np.zeros(len(data_vocab) + 2, dtype=np.int64)
+    pos = {label: i + 1 for i, label in enumerate(ck_vocab)}
+    for i, label in enumerate(data_vocab):
+        remap[i + 1] = pos.get(label, 0)
+    return remap
+
+
 @torch.no_grad()
 def _predict_ckpt(path, table, idx, meta, args):
     model, payload = W.load_checkpoint(path, args.device)
     ck_vocab = list(payload.get("patch_vocab") or [])
     data_vocab = list(meta.get("patch_vocab") or [])
-    if ck_vocab != data_vocab and not args.allow_vocab_mismatch:
-        raise SystemExit(
-            "patch vocabulary mismatch for %s:\n  checkpoint: %s\n  data:       "
-            "%s\nPatch ids are vocabulary positions, so the same integer means "
-            "a different patch. Re-run with the corpus/patch the checkpoint "
-            "was trained on, or pass --allow-vocab-mismatch to score it anyway."
-            % (path, ck_vocab[:5], data_vocab[:5]))
+    remap = None
+    if ck_vocab and ck_vocab != data_vocab:
+        remap = patch_remap(ck_vocab, data_vocab)
+        mapped = remap[table.patch_id[np.asarray(idx)]]
+        n_unk = int((mapped == 0).sum())
+        if n_unk == len(idx) and not args.allow_vocab_mismatch:
+            raise SystemExit(
+                "%s shares no patch label with this data (%s vs %s): every "
+                "row would score on the UNK row, which measures nothing. "
+                "Pass --allow-vocab-mismatch to do it anyway."
+                % (path, ck_vocab[:4], data_vocab[:4]))
+        print("  %s: %d of %d rows fall on the UNK patch row (vocabulary "
+              "differs)" % (Path(path).name, n_unk, len(idx)))
     cfg_data = (payload.get("config") or {}).get("data")
     if cfg_data and cfg_data != args.data:
-        print("WARNING: checkpoint was trained on %r data, scoring %r data"
-              % (cfg_data, args.data))
+        print("  %s was trained on %r data, scoring %r"
+              % (Path(path).name, cfg_data, args.data))
     ds = D.WinDataset(table, idx)
     loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False,
                         collate_fn=D.collate)
     ys, ps = [], []
     for batch in loader:
+        if remap is not None:
+            batch["patch_id"] = torch.from_numpy(
+                remap[batch["patch_id"].numpy()])
         batch = {k: (v.to(args.device) if torch.is_tensor(v) else v)
                  for k, v in batch.items()}
         ps.append(torch.sigmoid(model(batch)["logit"]).float().cpu().numpy())
@@ -159,6 +184,9 @@ def main(argv=None):
     args = parse_args(argv)
     if args.data == "pro":
         table, meta = D.load_pro(corpus=args.corpus)
+    elif args.data == "both":
+        table, meta = D.load_both(corpus=args.corpus,
+                                  patch=args.soloq_patch)
     else:
         table, meta = D.load_soloq(patch=args.soloq_patch,
                                    cache_path=args.soloq_cache or None)
@@ -196,6 +224,20 @@ def main(argv=None):
                 "accuracy": M.accuracy(y[m], p[m]),
             }
         rep["by_patch"] = by_patch
+        # per-domain slice: only meaningful for a joint corpus, where the pooled
+        # number is 89% a soloQ number.
+        dom = table.domain[np.asarray(idx)]
+        if len(set(dom.tolist())) > 1:
+            rep["by_domain"] = {}
+            for d in sorted(set(dom.tolist())):
+                m = dom == d
+                rep["by_domain"][d] = {
+                    "n": int(m.sum()),
+                    "log_loss": M.log_loss(y[m], p[m]),
+                    "brier": M.brier(y[m], p[m]),
+                    "roc_auc": M.roc_auc(y[m], p[m]),
+                    "accuracy": M.accuracy(y[m], p[m]),
+                }
         reports[name] = rep
 
     # ---- printed table

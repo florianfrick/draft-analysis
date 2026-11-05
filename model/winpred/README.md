@@ -14,9 +14,10 @@ data.py       full-draft tables, the 80/10/10 split, prediction-set I/O
 metrics.py    log-loss, Brier, ECE, ROC-AUC, precision/recall at high confidence
 baseline.py   the blue-side win-rate prior (one scalar)
 model.py      Siamese draft encoder -> MLP(h_blue, h_red, h_blue - h_red) + side bias
-train.py      training, CE or focal, W&B, checkpoint + saved test predictions
+train.py      training, CE or focal, soloq/pro/both, W&B, checkpoint + predictions
 evaluate.py   score/compare any mix of checkpoints, .npz prediction sets, priors
-test_winpred.py  25 tests
+sweep.py      all arms on BOTH test views in one table (§7)
+test_winpred.py  31 tests
 reports/      the JSON evidence behind every number below
 ```
 
@@ -27,14 +28,22 @@ python model/winpred/evaluate.py --data pro   --split test --baseline prior \
 python model/winpred/evaluate.py --data soloq --split test --baseline prior \
     --out model/winpred/reports/baseline_soloq_seed20261105.json
 
-# the experiment (step 8)
+# the experiment (step 8), and the six-arm sweep (§7)
 python model/winpred/train.py --data pro --loss ce --seed 20261105 --epochs 40
+for d in soloq pro both; do for l in ce focal; do
+  python model/winpred/train.py --data $d --loss $l --seed 20261105 --epochs 40
+done; done
 
 # compare it to the baseline on the same rows (step 2's script)
 python model/winpred/evaluate.py --data pro --split test --seed 20261105 \
     --baseline prior \
     --ckpt winpred-ce=model/checkpoints/winpred-pro-ce-seed20261105-through-20261104/best.pt \
     --by-patch --out model/winpred/reports/compare_pro_ce_vs_baseline_seed20261105.json
+
+# all six arms on both test views (the §7 tables)
+python model/winpred/sweep.py --seed 20261105 --ckpt pro-ce=... --ckpt pro-focal=... \
+    --ckpt soloq-ce=... --ckpt soloq-focal=... --ckpt both-ce=... --ckpt both-focal=... \
+    --out model/winpred/reports/sweep_seed20261105.json
 
 pytest model/winpred
 ```
@@ -116,6 +125,15 @@ bootstrap (whole series resampled, 2,000 draws) — only for log-loss / Brier /
 accuracy, because AUC is not a per-row sum and an interval on it would be
 wrong rather than merely noisy.
 
+**The confidence row turns out to be almost empty**, and that is a result rather
+than a bug in the metric: across all six arms of §7 and **172,792** test
+predictions, the model leaves the 0.35/0.65 band **5 times** — every one of them
+in `pro`/focal. The two CE arms stop just short on opposite sides: pro/CE peaks
+at 0.6463 against a 0.65 gate, soloQ/CE bottoms at 0.3508 against 0.35. So
+precision/recall at high confidence is `nan` for five of six arms, and the honest
+reading is "the model never commits". The calibration bins carry the information
+a fixed band throws away — see §8 item 5.
+
 ---
 
 ## 3. Baseline (step 5) — `p = mean(blue_win | train)`
@@ -162,8 +180,18 @@ slot = LayerNorm(champ[173] + role[5] + patch[106+UNK] [+ attrs])
   much does the difference matter", not "compare two vectors".
 * **The patch vector is a segment embedding** (zero-initialised, added to every
   slot), so patch-on and patch-off are bit-identical at step 0.
-* **`b_side` is one scalar**, initialised at 0 — the baseline's whole degree of
-  freedom, available to the network.
+* **`b_side` is one scalar and the head's last layer has `bias=False`**, so it
+  is the only *constant* the logit can contain — the baseline's whole degree of
+  freedom, available to the network and nothing else. Run 1 had both, and
+  measured the consequence: `b_side` ended at +0.004 while the prior's logit is
+  +0.133, because the head's bias had absorbed the prior and the split between
+  two redundant constants is arbitrary. `test_only_one_constant_parameter_exists`
+  pins this down: zero every parameter and the logit is exactly `b_side`.
+* **Dropout 0.2** (was 0.1 in run 1), on the transformer layers, the cross
+  block and the head. Run 1's problem was not capacity — it overfitted
+  *confidence*, with val AUC moving −0.013 while ECE went 0.01 → 0.26 — so
+  dropout is the right lever and the same value is used for every arm of the
+  sweep, otherwise the loss and data comparisons would be confounded by it.
 * **No blue/red swap augmentation**, and this is a design constraint rather
   than an omission: mirroring makes the task exactly symmetric
   (`p(mirror) = 1 - p(orig)`), which forces `b_side = 0` and deletes the
@@ -175,6 +203,13 @@ slot = LayerNorm(champ[173] + role[5] + patch[106+UNK] [+ attrs])
 ---
 
 ## 5. Run 1 — pro, cross-entropy, seed 20261105
+
+> **Superseded.** This was the first run, with dropout **0.1** and a head bias.
+> The §7 sweep re-ran the same arm at dropout 0.2 with `bias=False` and wrote to
+> the **same checkpoint path**, so `best.pt` no longer holds these weights. The
+> numbers below survive in `reports/compare_pro_ce_vs_baseline_seed20261105.json`
+> and are not re-runnable from disk — the same convention STATUS.md §4/§6 uses
+> for the deleted pro-only checkpoints. Read §7 for the arm that is on disk.
 
 `model/checkpoints/winpred-pro-ce-seed20261105-through-20261104/best.pt`
 
@@ -246,42 +281,224 @@ consistent with "the trunk never had to know which comp wins" being the
 bottleneck rather than capacity.
 
 **Do not** compare the per-patch table to a pooled number. On the newest 12
-patches with n ≥ 10 the model is better on 6 and worse on 6 (16.20: 0.6978 →
-0.6953). The pooled gain is not coming from the newest patch.
+patches with n ≥ 10, run 1 was better on 6 and worse on 6 (16.20: 0.6978 →
+0.6953). The pooled gain is not coming from the newest patch. (Those are run-1
+numbers, from the weights that were overwritten; the §7 arm's `--by-patch` puts
+16.20 at 0.7156 on **n = 27**, which is too small to read either way.)
 
-### One issue to fix before the next run
+### The `b_side` issue — fixed, and only half fixed
 
-The learned `b_side` ended at **+0.0040**, while the prior's logit is +0.1331 —
-the side prior was absorbed by the **last layer's bias inside the head**, which
-is a second, redundant constant. So `b_side` is currently unidentifiable: the
-model has the right degree of freedom, twice, and the split between them is
-arbitrary. The comparison against the baseline is unaffected (the model has the
-same one degree of freedom available, wherever it lives), but the parameter the
-architecture claims to expose is not doing the work. Next run: drop the head's
-final bias so `b_side` is the only path.
+Run 1's `b_side` ended at **+0.0040** while the prior's logit is +0.1331: the
+head's own bias was a second, redundant constant, so the split between the two
+was arbitrary. The sweep drops it (`nn.Linear(hidden, 1, bias=False)`), and the
+result splits cleanly **by domain**:
+
+| arm | learned `b_side` | prior logit | learned it? |
+|---|---|---|---|
+| soloq / CE | **−0.0824** | −0.0936 | essentially yes |
+| soloq / focal | −0.0374 | −0.0936 | partly |
+| pro / CE | **+0.0037** | +0.1331 | no |
+| pro / focal | +0.0112 | +0.1331 | no |
+
+So `bias=False` removed the *explicit* duplicate but not the *implicit* one.
+`LayerNorm → GELU → Linear` can still synthesise a constant: the layer-normed
+features have zero mean *across features*, not across samples, so a fixed weight
+vector still carries a sample-independent component. On soloQ the optimiser puts
+the side prior in `b_side`; on pro it puts it in the features and leaves
+`b_side` at zero. The comparison against the baseline is unaffected either way —
+the model has the same degree of freedom, wherever it lives — but the parameter
+the architecture claims to expose still cannot be *read* as "the learned side
+advantage", which is what §7's joint arms would need it to be.
 
 ---
 
-## 7. Next steps (not run — the brief says stop here)
+## 7. The six-arm sweep — CE vs focal × soloQ / pro / both
 
-1. **Fix `b_side` identifiability** (above), then re-run the same seed. This is
-   a correctness fix, not a new experiment.
-2. **SoloQ, same seed, same model** — the 384 k-game set is 8× the pro corpus
-   and the prior points the other way, so it is the cheapest test of whether
-   the +0.06 AUC is a pro-specific effect or just "more data".
+Six runs: `--loss {ce,focal}` × `--data {soloq,pro,both}`, seed 20261105, one
+split, one architecture, one optimiser. `protocol.hyperparameters` is identical
+in all six (checked, not assumed); the parameter count moves only with the patch
+vocabulary — **2,615,297** for soloQ's one-row table, **2,642,177** for pro's
+107 — so the sweep varies exactly two things. Selection is val log-loss
+everywhere, so no arm gets a better stopping rule than another. Focal is
+`alpha = 0.5, gamma = 2.0`, which is a reweighting of BCE by `(1 - p_t)^2`, not
+a rescaling.
+
+### Own-domain test
+
+Each arm on its own test view, against **that view's** prior. All intervals in
+this section come from one run of `sweep.py` (`reports/sweep_seed20261105.json`,
+1,000 grouped bootstraps), so they are comparable with each other:
+
+| arm | n | log-loss | Brier | ECE | AUC | acc | Δ log-loss vs prior [95 % CI] | sel. epoch |
+|---|---|---|---|---|---|---|---|---|
+| prior (pro) | 4,762 | 0.6927 | 0.2498 | 0.0135 | 0.5000 | 0.5197 | — | — |
+| **pro / CE** | 4,762 | 0.6883 | 0.2476 | 0.0156 | **0.5521** | 0.5378 | **−0.00440** [−0.00726, −0.00149] | 6 |
+| **pro / focal** | 4,762 | 0.6885 | 0.2477 | 0.0116 | **0.5537** | 0.5447 | **−0.00422** [−0.00702, −0.00152] | 12 |
+| prior (soloQ) | 38,436 | 0.6919 | 0.2494 | 0.0012 | 0.5000 | 0.5246 | — | — |
+| **soloQ / CE** | 38,436 | 0.6888 | 0.2479 | 0.0049 | **0.5438** | 0.5371 | **−0.00310** [−0.00394, −0.00232] | 31 |
+| **soloQ / focal** | 38,436 | 0.6904 | 0.2486 | 0.0136 | **0.5417** | 0.5362 | **−0.00156** [−0.00198, −0.00116] | 27 |
+
+Every arm improves on its prior on **all three** decomposable metrics, with the
+log-loss interval excluding zero in every case, and every arm ranks above 0.5
+AUC — the draft is worth about **0.3–0.4 % of a nat** and about **+0.05 AUC**, on
+both corpora, with no bans and no partial drafts. (Accuracy is the exception to
+the interval claim: pro/CE's is +0.018 [−0.002, +0.037], so it does not
+distinguish anything.) The four arms are within 0.0021 log-loss of each other,
+which is the first thing to notice: **the loss function is not the lever.**
+
+Two differences that are large enough to be structural rather than noise:
+
+* **soloQ needs 27–31 epochs to peak; pro needs 6–12.** 307 k training rows at
+  one patch barely overfit at all (val log-loss 0.6896 → 0.6885 across 40
+  epochs), while 37 k pro rows overfit hard (0.6957 → 0.8592 at dropout 0.2, an
+  improvement on run 1's 1.0572 but still a collapse of the probabilities).
+* **Focal is worse on soloQ and a wash on pro.** It gains 0.00156 log-loss on
+  soloQ where CE gains 0.00310, and 0.0016 AUC on pro where it gains 0.0000 on
+  soloQ. Neither gap survives a seed repeat (§8).
+
+### The cross view — the sweep's real question
+
+The same six checkpoints, scored on **both** test views. Patch ids are
+translated by patch *label* (`evaluate.patch_remap`), so a pro-trained arm scores
+soloQ rows on the 16.20 row it actually learned. Bold = the arm's own view.
+
+| arm | soloQ (n = 38,436) log-loss / AUC / Δ | pro (n = 4,762) log-loss / AUC / Δ |
+|---|---|---|
+| prior | 0.6919 / 0.5000 / — | 0.6927 / 0.5000 / — |
+| **pro / CE** | 0.6976 / **0.5002** / **+0.00569** [+0.00465, +0.00684] | **0.6883** / **0.5521** / **−0.00440** [−0.00726, −0.00149] |
+| **pro / focal** | 0.7013 / **0.4999** / **+0.00940** [+0.00809, +0.01083] | **0.6885** / **0.5537** / **−0.00422** [−0.00702, −0.00152] |
+| **soloQ / CE** | **0.6888** / **0.5438** / **−0.00310** [−0.00394, −0.00232] | 0.6999 / **0.5070** / **+0.00720** [+0.00312, +0.01159] |
+| **soloQ / focal** | **0.6904** / **0.5417** / **−0.00156** [−0.00198, −0.00116] | 0.6944 / **0.5085** / +0.00170 [−0.00100, +0.00442] |
+| `both` / CE | 0.6900 / 0.5363 / −0.00194 [−0.00274, −0.00117] | 0.6964 / 0.5180 / +0.00369 [−0.00010, +0.00742] |
+| `both` / focal | 0.6908 / 0.5389 / −0.00111 [−0.00153, −0.00069] | 0.6916 / 0.5356 / −0.00118 [−0.00322, +0.00080] |
+
+Every arm improves on the prior on its **own** view and fails to on the other,
+and the cross-view AUCs sit on 0.500. The pro → soloQ direction is the clean one:
+**0 of 38,436 rows** fall on the checkpoint's UNK patch row, so the model sees a
+patch embedding it was trained on (pro's table contains 16.20) and still ranks at
+**0.5002** — chance, to four decimals, on 38 k games. The soloQ → pro direction
+is a lower bound rather than a measurement, because 4,735 of 4,762 rows hit the
+UNK patch row, so it is "never seen those patches" as much as "never seen pro";
+it points the same way and is even worse.
+
+So the draft's win information is **domain-specific**: the ordering a pro draft
+induces does not order soloQ games, and vice versa, even though both are clearly
+above chance at home. That is the sweep's most useful result and it was not the
+expected one — it says the two corpora do not share the thing the encoder is
+learning, so joint training has nothing to pool.
+
+### The `both` arms: a shared head on an 8:1 mixture collapses
+
+The joint corpus is 46,879 pro + 384,356 soloQ = 431,235 drafts, **89.1 %
+soloQ**, split 344,827 / 43,210 / 43,198. Neither joint arm produces a usable
+model, and the way they fail is informative:
+
+| | `both` / CE | `both` / focal |
+|---|---|---|
+| best val log-loss | 0.69049 (ep **2**) | 0.69091 (ep **5**) |
+| train loss, minimum → end | 0.69037 (ep 3) → **0.69255** | 0.08627 (ep 4) → 0.08658 |
+| first epoch with val AUC exactly 0.5000 | **9** | **16** |
+| epochs at exactly 0.5000 AUC | 31 of 40 | 25 of 40 |
+
+The model does not overfit — **train loss rises** from 0.69037 (ep 3) to 0.69255
+(ep 5) and stays there, so the optimiser left a strictly better solution for the
+constant and never came back. Overfitting would show train ↓ / val ↑. This is a
+representational collapse: with 89 % of the rows in a domain where the draft
+barely helps and whose base rate points the *other* way (soloQ blue 47.6 %, pro
+53.1 %), the shared optimum is very close to the constant, so nothing punishes
+the champion embeddings for collapsing and the model cannot climb back out.
+Focal only delays it — 7 epochs, then the same constant — which fits: it
+down-weights the examples the model already handles, so the majority mass
+dominates the gradient a little later.
+
+Early stopping catches it (`best.pt` is epoch 2 and 5 respectively), which is why
+the joint arms still report numbers rather than NaNs. Scored per domain against
+**that domain's own** prior (`sweep.py`, not `test_by_domain`, which used the
+pooled prior before the fix):
+
+| joint arm | view | n | log-loss | AUC | Δ vs that domain's prior [95 % CI] |
+|---|---|---|---|---|---|
+| `both` / CE | soloQ | 38,436 | 0.6900 | 0.5363 | **−0.00194** [−0.00274, −0.00117] |
+| `both` / CE | pro | 4,762 | 0.6964 | 0.5180 | **+0.00369** [−0.00010, +0.00742] |
+| `both` / focal | soloQ | 38,436 | 0.6908 | 0.5389 | **−0.00111** [−0.00153, −0.00069] |
+| `both` / focal | pro | 4,762 | 0.6916 | 0.5356 | −0.00118 [−0.00322, +0.00080] |
+
+Focal's joint arm is the better of the two, and it is the only **joint** arm
+whose pro number is not worse than the prior — but it is still 0.003 log-loss
+behind pro/CE on pro and 0.002 behind soloQ/CE on soloQ, i.e. the joint corpus
+buys nothing on either half while costing the majority half real accuracy.
+`both`/CE's pro number is the one clear failure: **+0.0037 against pro's own
+prior** (interval touching zero from above).
+
+Adding pro data also makes the **soloQ** number worse, and that is measurable on
+the identical rows: `both`/CE vs `soloQ`/CE on the same 38,436 soloQ test games
+is **+0.00117 log-loss [+0.00063, +0.00171]**, and `both`/focal vs `soloQ`/focal
+is **+0.00044 [+0.00022, +0.00066]** — smaller under focal, but the same sign and
+also excluding zero. The pro half is not merely unhelpful to the soloQ half; it
+is harmful, because it drags the shared model toward a different base rate and
+toward the collapse. Under both losses, the honest summary of `--data both` at
+this ratio is: **it costs the majority half and does not pay for it.**
+
+Note the accuracy trap this exposed. The first version of `test_by_domain`
+compared every block against the **pooled** prior, so `both`/CE's pro subset read
+accuracy **+0.019** — while the model was actually 0.021 *below* pro's own prior
+(0.4990 vs 0.5197). Accuracy moved only because the pooled prior predicts red and
+pro's rate is above 0.5. `domain_deltas(..., train_idx=...)` now fits each
+domain's own rate, and `test_domain_deltas_reference_is_the_domains_own_rate`
+pins it; the joint reports on disk predate the fix, which is why the table above
+quotes `sweep.py`.
+
+### What the sweep does and does not say
+
+**Does:** within a domain, the finished draft carries a small but real signal,
+~0.004 nats and +0.05 AUC over the side prior, on both corpora, with intervals
+excluding zero. Across domains it carries **nothing** (0.5002 / 0.5070 AUC), so
+"train on soloQ, deploy on pro" is measured and does not work. Joint training at
+this ratio is a negative result.
+
+**Does not:** rank CE against focal. Every within-domain gap here is smaller
+than the early-stopping noise (pro selects epoch 6 vs 12 out of 40), and the
+joint comparison is one collapse against a slower collapse. It is also one seed
+throughout; §8 lists the repeat as the cheapest way to settle it.
+
+**Does not** say the joint corpus is hopeless. It says *this* joint setup is:
+one shared head, no domain input, no reweighting. A domain flag or per-domain
+loss normalisation attacks exactly the failure mode observed, and §8 puts it
+first for that reason.
+
+---
+
+## 8. Next steps
+
+The brief's "don't train more experiments yet" expired with the six-arm sweep, so
+items 1, 2 and 4 of the old list are **done** (§7): `b_side` is bias-free, soloQ
+has been run, and dropout is 0.2 everywhere. What is left:
+
+1. **Domain conditioning, before any further joint training.** §7 shows a shared
+   head on an 8:1 mixture drifting to the constant under both losses. Two cheap
+   fixes: feed a domain flag/embedding in, or normalise the loss per domain so
+   each half contributes equally. Until one of those exists, `--data both` is a
+   negative result to reproduce, not a training recipe.
+2. **Repeat the sweep on ≥3 seeds before quoting CE-vs-focal.** Both pro arms
+   select an epoch out of 40 (6 and 12), so their 0.0016 AUC gap is well inside
+   early-stopping noise; the only robust statements in §7 are the within-arm
+   ones against the prior and the cross-view collapse to ≈0.50 AUC.
 3. **Bans as an input** — the biggest untested signal, and the one this model
    was deliberately built without. It needs its own ablation: ban-only, picks +
    bans, and the fearless pool as a *context* rather than a constraint.
-4. **Regularise before scaling.** Val log-loss turns up after 5 epochs on 37 k
-   rows with 2.6 M parameters. Dropout 0.2–0.3 or D=128 first (STATUS.md §9.2
-   says the same for the encoder), otherwise every later comparison is a
-   comparison of early-stopping luck.
-5. **Per-patch calibration.** The pooled ECE is 0.009, but the newest patches
-   are where a shipped number would be read; check whether the calibration
+4. **Per-patch calibration.** The pooled ECE is 0.009–0.016, but the newest
+   patches are where a shipped number would be read; check whether calibration
    holds on 16.18–16.20 alone before quoting a probability in the UI.
+5. **Give the confidence gate a rank readout.** The band is crossed 5 times in
+   172,792 own-view predictions (all in `pro`/focal, 0.6 precision on n = 5), so
+   precision/recall-at-high-confidence is `nan` everywhere else. The calibration
+   bins already carry the alternative: the top 107 pro games are predicted 0.613
+   and won by blue 67.3 %, i.e. the model is *under*-confident at the extremes.
+   Report the top decile of confidence instead of a fixed band.
 
 **What not to do:** don't quote accuracy as the headline (the prior alone gets
-52 %, and a model can win accuracy by drifting to the majority side). Don't
-compare a focal-loss run to this one without re-running the baseline on the same
-rows. Don't add a blue/red swap augmentation while `b_side` exists — it zeroes
-it by construction.
+52 %, and a model can win accuracy by drifting to the majority side — §7's
+`both/ce` pro subset does exactly that: accuracy +0.019 with log-loss *worse*
+than the prior). Don't read a joint-corpus number without the per-domain block.
+Don't add a blue/red swap augmentation while `b_side` exists — it zeroes it by
+construction.

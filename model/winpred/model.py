@@ -99,7 +99,20 @@ class WinPredictor(nn.Module):
             nn.Linear(self.embed_dim * 3, hidden),
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(hidden, 1),
+            # bias=False on purpose: a bias here is a second constant added to
+            # the logit, i.e. a second, redundant side prior. With both, the
+            # learned split between them is arbitrary - measured on the first
+            # run, `side_bias` ended at +0.004 while the prior's logit is
+            # +0.133, because the head's bias had absorbed the rest.
+            #
+            # Dropping it removes the EXPLICIT duplicate, and that is all: on
+            # the six-arm sweep (README §6) soloQ learns the prior into
+            # `side_bias` (-0.082 vs a -0.094 target) while pro still does not
+            # (+0.004 vs +0.133), because LayerNorm -> GELU -> Linear can
+            # synthesise a constant of its own along the features' mean
+            # direction. So read `side_bias` as "the side prior, if the model
+            # chose to put it here" - never as "the learned side advantage".
+            nn.Linear(hidden, 1, bias=False),
         )
         # The entire blue-side prior, in one parameter. Init 0 = no prior.
         self.side_bias = nn.Parameter(torch.zeros(1))

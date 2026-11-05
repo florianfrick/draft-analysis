@@ -111,13 +111,20 @@ class DraftTable:
     Deliberately not a torch dataset: the split is computed once over arrays,
     and the dataset below only slices. That keeps "which rows are test" a
     property of the data, not of a loader's iteration order.
+
+    `domain` is the per-row origin ("soloq" / "pro"). It equals `source` for a
+    single-dataset table and is what makes a `--data both` table splittable:
+    each domain is split by its own rule, so the soloQ test rows of the joint
+    run are the *same rows* as the soloQ-only run's test set. Without that,
+    every cross-arm comparison would be a comparison of two different test
+    sets.
     """
 
     __slots__ = ("champ", "role", "y", "patch_id", "game_id", "series_id",
-                 "patch", "date", "source")
+                 "patch", "date", "source", "domain")
 
     def __init__(self, champ, role, y, patch_id, game_id, series_id, patch,
-                 date, source):
+                 date, source, domain=None):
         self.champ = champ            # [N,10] int16
         self.role = role              # [N,10] int8
         self.y = y                    # [N] int8, 1 = blue won
@@ -126,7 +133,9 @@ class DraftTable:
         self.series_id = series_id    # list[str]
         self.patch = patch            # list[str] normalised
         self.date = date              # list[str]
-        self.source = source          # "soloq" | "pro"
+        self.source = source          # "soloq" | "pro" | "both"
+        self.domain = (np.asarray(domain if domain is not None
+                                  else [source] * len(y), dtype=object))
 
     def __len__(self):
         return int(self.y.shape[0])
@@ -138,15 +147,41 @@ class DraftTable:
                           [self.game_id[i] for i in idx],
                           [self.series_id[i] for i in idx],
                           [self.patch[i] for i in idx],
-                          [self.date[i] for i in idx], self.source)
+                          [self.date[i] for i in idx], self.source,
+                          self.domain[idx])
+
+    @classmethod
+    def concat(cls, tables, source="both"):
+        """Concatenate tables in order. They must share a patch vocabulary."""
+        return cls(
+            np.concatenate([t.champ for t in tables]),
+            np.concatenate([t.role for t in tables]),
+            np.concatenate([t.y for t in tables]),
+            np.concatenate([t.patch_id for t in tables]),
+            [g for t in tables for g in t.game_id],
+            [s for t in tables for s in t.series_id],
+            [p for t in tables for p in t.patch],
+            [d for t in tables for d in t.date],
+            source,
+            np.concatenate([t.domain for t in tables]))
+
+    def domains(self):
+        """The distinct domains present, in a stable order."""
+        return sorted(set(self.domain.tolist()))
 
     def info(self):
         """Provenance block, written into every report."""
-        return {"source": self.source, "n": len(self),
-                "blue_win_rate": float(self.y.mean()),
-                "patches": len({p for p in self.patch}),
-                "date_min": min(self.date) if self.date else "",
-                "date_max": max(self.date) if self.date else ""}
+        out = {"source": self.source, "n": len(self),
+               "blue_win_rate": float(self.y.mean()),
+               "patches": len({p for p in self.patch}),
+               "date_min": min(self.date) if self.date else "",
+               "date_max": max(self.date) if self.date else ""}
+        if len(self.domains()) > 1:
+            out["by_domain"] = {
+                d: {"n": int((self.domain == d).sum()),
+                    "blue_win_rate": float(self.y[self.domain == d].mean())}
+                for d in self.domains()}
+        return out
 
 
 # --------------------------------------------------------------- pro loader
@@ -219,7 +254,7 @@ def _soloq_cache(patch):
     return SOLOQ_DIR / ("drafts_%s.pt" % patch)
 
 
-def load_soloq(patch="16.20", cache_path=None, verbose=True):
+def load_soloq(patch="16.20", cache_path=None, patch_vocab=None, verbose=True):
     """Completed soloQ drafts -> (DraftTable, meta).
 
     Reads the cache `model/pretraining` already builds (`drafts_<patch>.pt`,
@@ -229,6 +264,12 @@ def load_soloq(patch="16.20", cache_path=None, verbose=True):
 
     The rows are `(champ[10], role[10])` tuples - one completed draft each, no
     order and no bans, which is exactly the input this model wants.
+
+    `patch_vocab` lets a joint run index this table with the *pro* vocabulary
+    (16.20 is the newest pro patch too, so it has a row there). SoloQ alone
+    gets the one-entry vocabulary `["16.20"]`, which means the patch embedding
+    is a constant for every row - honest, and the reason a soloQ-only model
+    cannot be said to use the patch as a feature.
     """
     path = Path(cache_path) if cache_path else _soloq_cache(patch)
     if not path.exists():
@@ -264,13 +305,18 @@ def load_soloq(patch="16.20", cache_path=None, verbose=True):
         gid.append("sq_%d" % i)
 
     patch_key = PRO_PIPE.patch_key(patch)
+    vocab = list(patch_vocab) if patch_vocab is not None else [patch_key]
+    if patch_key not in vocab:
+        raise ValueError("patch %r is not in the supplied vocabulary %s"
+                         % (patch_key, vocab[:5]))
+    pid = vocab.index(patch_key) + 1
     table = DraftTable(
         np.asarray(champ, dtype=np.int16), np.asarray(role, dtype=np.int8),
         np.asarray(y, dtype=np.int8),
-        np.full(len(y), 1, dtype=np.int16),      # vocab = [patch] -> id 1
+        np.full(len(y), pid, dtype=np.int16),    # every row is the same patch
         gid, gid, [patch_key] * len(y), [""] * len(y), "soloq")
     meta = {"corpus": "soloq", "patch": patch_key,
-            "patch_vocab": [patch_key], "n_patches": 2,
+            "patch_vocab": vocab, "n_patches": len(vocab) + 1,
             "dropped": dict(dropped),
             "cache": path.name, "cache_kept": payload.get("kept"),
             "cache_skipped_no_win": payload.get("skipped_no_win"),
@@ -281,6 +327,41 @@ def load_soloq(patch="16.20", cache_path=None, verbose=True):
               % (patch_key, len(table), path.name,
                  SQ_PIPE.MIN_DURATION_S))
         print("  dropped %s" % dict(dropped))
+    return table, meta
+
+
+def load_both(corpus="2022", patch="16.20", verbose=True):
+    """Pro + soloQ in one table, pro first.
+
+    The patch vocabulary is the pro one, and soloQ's 16.20 rows are indexed
+    with it, so the two halves live in one embedding space and a joint model
+    sees a real patch id for both. `--data both` therefore differs from the
+    single-dataset arms in exactly one way - the rows it trains on - which is
+    the point of the comparison.
+
+    The two halves are NOT re-weighted: the joint corpus is 46,879 pro +
+    384,356 soloQ drafts, i.e. 89% soloQ. That is deliberate for the first
+    sweep (it measures "add pro to soloQ" as a data addition, not as a
+    curriculum), and the per-domain test blocks are what show whether the
+    minority half was learned at all.
+    """
+    pro, pro_meta = load_pro(corpus=corpus, verbose=verbose)
+    sq, sq_meta = load_soloq(patch=patch,
+                             patch_vocab=pro_meta["patch_vocab"],
+                             verbose=verbose)
+    table = DraftTable.concat([pro, sq], source="both")
+    meta = {"corpus": "%s+soloq" % corpus,
+            "patch_vocab": pro_meta["patch_vocab"],
+            "n_patches": pro_meta["n_patches"],
+            "corpus_max_date": pro_meta.get("corpus_max_date", ""),
+            "newest_row_date": pro_meta.get("newest_row_date", ""),
+            "dropped": {"pro": pro_meta.get("dropped", {}),
+                        "soloq": sq_meta.get("dropped", {})},
+            "parts": {"pro": len(pro), "soloq": len(sq)},
+            "patch": sq_meta["patch"]}
+    if verbose:
+        print("joint corpus: %d pro + %d soloQ = %d drafts (%.1f%% soloQ)"
+              % (len(pro), len(sq), len(table), 100.0 * len(sq) / len(table)))
     return table, meta
 
 
@@ -371,14 +452,25 @@ def split_report(table, splits, seed=SPLIT_SEED, fracs=SPLIT_FRACS,
         len(series_sets["train"] & series_sets["val"]) + \
         len(series_sets["val"] & series_sets["test"])
     counts = {name: int(len(splits[name])) for name in ("train", "val", "test")}
+    unit = {"pro": "series", "soloq": "game"}.get(table.source,
+                                                  "series (pro) / game (soloq)")
+    by_domain = {}
+    if len(table.domains()) > 1:
+        for dom in table.domains():
+            m = table.domain == dom
+            by_domain[dom] = {
+                "n": int(m.sum()),
+                **{name: int(m[splits[name]].sum())
+                   for name in ("train", "val", "test")}}
     return {
         "seed": seed,
         "fracs": list(fracs),
-        "unit": "series" if table.source == "pro" else "game",
+        "unit": unit,
         "counts": counts,
         "shares": {k: v / n for k, v in counts.items()},
         "min_patch_rows": min_patch_rows,
         "n_series_straddling": straddle,
+        "by_domain": by_domain,
         "patches_all_train": [p for p, v in per_patch.items()
                               if v["held_out"]],
         "by_patch": per_patch,
@@ -387,8 +479,26 @@ def split_report(table, splits, seed=SPLIT_SEED, fracs=SPLIT_FRACS,
 
 def make_splits(table, seed=SPLIT_SEED, fracs=SPLIT_FRACS,
                 min_patch_rows=MIN_PATCH_ROWS, verbose=True):
-    """Dispatch to the right splitter and attach the report."""
-    if table.source == "pro":
+    """Dispatch to the right splitter and attach the report.
+
+    A joint table is split **per domain**, each by its own rule, so the soloQ
+    test rows of `--data both` are literally the same rows as the soloQ-only
+    run's test set (and likewise for pro). Every cross-arm comparison in this
+    experiment depends on that: two arms measured on two different test sets
+    would not be a comparison.
+    """
+    if table.source == "both":
+        out = {"train": [], "val": [], "test": []}
+        for dom in table.domains():
+            idxs = np.flatnonzero(table.domain == dom)
+            sub = table.subset(idxs)
+            s = (split_soloq(len(sub), seed, fracs) if dom == "soloq"
+                 else split_pro(sub, seed, fracs, min_patch_rows))
+            for k in out:
+                out[k].extend(idxs[s[k]].tolist())
+        splits = {k: np.asarray(sorted(v), dtype=np.int64)
+                  for k, v in out.items()}
+    elif table.source == "pro":
         splits = split_pro(table, seed, fracs, min_patch_rows)
     else:
         splits = split_soloq(len(table), seed, fracs)
@@ -447,7 +557,7 @@ def collate(samples):
 
 
 # -------------------------------------------------- prediction-set I/O
-PRED_KEYS = ("y", "p", "game_id", "series_id", "patch", "date")
+PRED_KEYS = ("y", "p", "game_id", "series_id", "patch", "date", "domain")
 
 
 def save_predictions(path, y, p, table, idx):
@@ -455,7 +565,9 @@ def save_predictions(path, y, p, table, idx):
 
     The ids are the contract. Two prediction files can only be compared if they
     were scored on the same games, and storing the ids is what lets
-    `evaluate.py` prove that instead of assuming it.
+    `evaluate.py` prove that instead of assuming it. `domain` is stored too so
+    a joint run's predictions can be broken down into soloQ and pro after the
+    fact, without re-running anything.
     """
     idx = np.asarray(idx, dtype=np.int64)
     path = Path(path)
@@ -467,7 +579,8 @@ def save_predictions(path, y, p, table, idx):
         game_id=np.asarray([table.game_id[i] for i in idx], dtype=str),
         series_id=np.asarray([table.series_id[i] for i in idx], dtype=str),
         patch=np.asarray([table.patch[i] for i in idx], dtype=str),
-        date=np.asarray([table.date[i] for i in idx], dtype=str))
+        date=np.asarray([table.date[i] for i in idx], dtype=str),
+        domain=np.asarray(table.domain[idx], dtype=str))
     return path
 
 

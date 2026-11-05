@@ -41,6 +41,12 @@ def soloq_table():
     return table, meta
 
 
+@pytest.fixture(scope="session")
+def both_table():
+    table, meta = D.load_both(verbose=False)
+    return table, meta
+
+
 def _batch(n=4, seed=0, patch_id=1):
     g = torch.Generator().manual_seed(seed)
     champ = torch.stack([torch.randperm(173, generator=g)[:10]
@@ -239,6 +245,119 @@ def test_split_is_reproducible_across_calls(pro_table):
         assert np.array_equal(a[k], b[k])
 
 
+def test_both_table_reproduces_each_single_dataset_split(pro_table,
+                                                         soloq_table,
+                                                         both_table):
+    """The joint corpus must not move the test rows of either half.
+
+    Every cross-arm comparison in the sweep depends on this: a `both` arm and a
+    `soloq` arm have to be scored on the same soloQ games.
+    """
+    pro, pro_meta = pro_table
+    sq, _ = soloq_table
+    both, meta = both_table
+    assert both.source == "both"
+    assert len(both) == len(pro) + len(sq)
+    assert both.domains() == ["pro", "soloq"]
+    # one patch space: 16.20 is indexed with the PRO vocabulary on both halves
+    assert meta["patch_vocab"] == pro_meta["patch_vocab"]
+    pid = meta["patch_vocab"].index("16.20") + 1
+    assert set(both.patch_id[both.domain == "soloq"].tolist()) == {pid}
+
+    splits, rep = D.make_splits(both, verbose=False)
+    sq_splits, _ = D.make_splits(sq, verbose=False)
+    pro_splits, _ = D.make_splits(pro, verbose=False)
+    off = len(pro)
+    for name in ("train", "val", "test"):
+        joint_pro = splits[name][splits[name] < off]
+        joint_sq = splits[name][splits[name] >= off] - off
+        # the joint table's indices are sorted (it concatenates per domain);
+        # the invariant is the row *set*, not the order
+        assert np.array_equal(np.sort(joint_pro), np.sort(pro_splits[name])), name
+        assert np.array_equal(np.sort(joint_sq), np.sort(sq_splits[name])), name
+    assert set(rep["by_domain"]) == {"pro", "soloq"}
+    assert rep["by_domain"]["pro"]["test"] == len(pro_splits["test"])
+
+
+def test_patch_remap_translates_by_label():
+    from model.winpred.evaluate import patch_remap
+    remap = patch_remap(["16.01", "16.02", "16.20"], ["16.20", "16.05"])
+    assert remap[0] == 0                  # UNK stays UNK
+    assert remap[1] == 3                  # "16.20" is id 3 in the checkpoint
+    assert remap[2] == 0                  # "16.05" was never seen -> UNK row
+
+
+def test_domain_deltas_is_empty_for_a_single_domain(pro_table):
+    """A single-dataset run must not crash its report on the domain block.
+
+    This used to raise KeyError *after* training finished, which cost a whole
+    run; the pooled number already is the only domain's number.
+    """
+    from model.winpred.train import domain_deltas
+    table, _ = pro_table
+    splits, _ = D.make_splits(table, verbose=False)
+    idx = splits["test"][:200]
+    y = table.y[idx].astype(float)
+    p = np.full(len(idx), 0.55)
+    base = np.full(len(idx), 0.53)
+    groups = [table.series_id[i] for i in idx]
+    assert domain_deltas(table, idx, y, p, groups, base) == {}
+
+
+def test_domain_deltas_breaks_out_a_joint_table(both_table):
+    from model.winpred.train import domain_deltas
+    table, _ = both_table
+    splits, _ = D.make_splits(table, verbose=False)
+    idx = splits["test"]
+    # 120 rows from each domain, so the bootstrap has groups to resample
+    pro_idx = idx[table.domain[idx] == "pro"][:120]
+    sq_idx = idx[table.domain[idx] == "soloq"][:120]
+    idx = np.concatenate([pro_idx, sq_idx])
+    y = table.y[idx].astype(float)
+    p = np.full(len(idx), 0.55)
+    base = np.full(len(idx), 0.53)
+    groups = [table.series_id[i] for i in idx]
+    out = domain_deltas(table, idx, y, p, groups, base)
+    assert set(out) == {"pro", "soloq"}
+    assert out["pro"]["n"] == 120 and out["soloq"]["n"] == 120
+
+
+def test_domain_deltas_reference_is_the_domains_own_rate(both_table):
+    """The per-domain block must beat the domain's own prior, not the pooled one.
+
+    The joint corpus's pooled prior is ~0.48 while pro's own rate is above 0.5,
+    so a pooled reference credited the pro block with accuracy the model did not
+    have (`both/ce` read +0.019 accuracy on pro while sitting 0.021 *below*
+    pro's prior). Pinned on log-loss, which is reference-sensitive even when
+    both references predict the same class.
+    """
+    from model.winpred.train import domain_deltas
+    table, _ = both_table
+    splits, _ = D.make_splits(table, verbose=False)
+    idx = splits["test"]
+    idx = np.concatenate([idx[table.domain[idx] == "pro"][:120],
+                          idx[table.domain[idx] == "soloq"][:120]])
+    y = table.y[idx].astype(float)
+    p = np.full(len(idx), 0.55)
+    groups = [table.series_id[i] for i in idx]
+    pooled = np.full(len(idx), table.y[splits["train"]].mean())
+
+    out = domain_deltas(table, idx, y, p, groups, pooled,
+                        train_idx=splits["train"])
+
+    pro = table.domain[idx] == "pro"
+    train_dom = table.domain[splits["train"]]
+    rate = table.y[splits["train"]][train_dom == "pro"].mean()
+    expected = (M.log_loss(y[pro], p[pro])
+                - M.log_loss(y[pro], np.full(int(pro.sum()), rate)))
+    assert out["pro"]["vs_baseline"]["log_loss"]["delta"] == pytest.approx(
+        expected)
+    assert "domain train rate" in out["pro"]["reference"]
+    # and without train rows the old pooled behaviour is still available
+    assert domain_deltas(table, idx, y, p, groups, pooled)["pro"]["reference"] \
+        == "pooled prior"
+
+
 def test_prediction_roundtrip_and_alignment(tmp_path, pro_table):
     table, _ = pro_table
     idx = np.arange(50)
@@ -308,12 +427,25 @@ def test_model_is_permutation_invariant_within_a_team():
 
 def test_side_bias_is_the_only_path_to_the_prior():
     m = W.WinPredictor(embed_dim=32, num_intra=1, num_cross=1, num_heads=4)
+    # The head's last layer has NO bias: otherwise it is a second constant and
+    # the learned split between it and `side_bias` is arbitrary.
+    assert m.head[-1].bias is None
     with torch.no_grad():
         m.head[-1].weight.zero_()
-        m.head[-1].bias.zero_()
         m.side_bias.fill_(0.7)
     out = m(_batch(2))
     assert torch.allclose(out["logit"], torch.full((2,), 0.7), atol=1e-6)
+
+
+def test_only_one_constant_parameter_exists():
+    """`side_bias` must be the only bias-free path to a constant logit."""
+    m = W.WinPredictor(embed_dim=32, num_intra=1, num_cross=1, num_heads=4)
+    with torch.no_grad():
+        for p in m.parameters():
+            p.zero_()
+        m.side_bias.fill_(-1.3)
+    out = m(_batch(3))
+    assert torch.allclose(out["logit"], torch.full((3,), -1.3), atol=1e-6)
 
 
 def test_config_roundtrips_into_a_loadable_model(tmp_path):

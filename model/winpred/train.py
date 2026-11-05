@@ -48,7 +48,9 @@ from model.winpred.baseline import BlueWinRateBaseline  # noqa: E402
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(description="Win prediction from a draft")
     # data
-    ap.add_argument("--data", choices=("soloq", "pro"), default="pro")
+    ap.add_argument("--data", choices=("soloq", "pro", "both"), default="pro",
+                    help="both = pro + soloQ in one corpus (89%% soloQ, "
+                         "unweighted); each half keeps its own split rule")
     ap.add_argument("--corpus", choices=sorted(D.CORPORA), default="2022",
                     help="pro only: 2022 = the documented 46,879-draft corpus; "
                          "all = 2017-2026 (81,161)")
@@ -61,7 +63,14 @@ def parse_args(argv=None):
     ap.add_argument("--num-intra", type=int, default=2)
     ap.add_argument("--num-cross", type=int, default=1)
     ap.add_argument("--num-heads", type=int, default=8)
-    ap.add_argument("--dropout", type=float, default=0.1)
+    ap.add_argument("--dropout", type=float, default=0.2,
+                    help="0.2 (was 0.1 in run 1). The pro run overfitted "
+                         "*confidence*: by epoch 40 val AUC had moved -0.013 "
+                         "while log-loss went 0.688 -> 1.057 and ECE 0.01 -> "
+                         "0.26, i.e. capacity is not the constraint. Dropout "
+                         "is the cheapest lever on that, and the same value "
+                         "is used for every arm of the sweep so the loss and "
+                         "data comparisons are not confounded by it.")
     ap.add_argument("--head-dim", type=int, default=0, help="0 = embed_dim")
     ap.add_argument("--pool", choices=("mean", "pma"), default="mean")
     ap.add_argument("--patch-emb", dest="patch_emb", action="store_true",
@@ -157,6 +166,72 @@ def summarise(y, p):
     return M.full_report(y, p, with_bins=False)
 
 
+def _dom_masks(table, idx):
+    """{domain: boolean mask over the split's rows}, in `idx` order."""
+    dom = table.domain[np.asarray(idx)]
+    return {d: (dom == d) for d in table.domains()}
+
+
+def summarise_by_domain(table, idx, y, p):
+    """Metrics per domain; empty for a single-dataset table.
+
+    `idx` and `y`/`p` are in the same order (the loader preserves it), which is
+    what makes the mask line up with the predictions.
+    """
+    if len(table.domains()) < 2:
+        return {}
+    return {d: summarise(y[m], p[m])
+            for d, m in _dom_masks(table, idx).items() if m.any()}
+
+
+def domain_deltas(table, idx, y, p, groups, base_p, seed=0, train_idx=None):
+    """Per-domain model-vs-baseline deltas; `{}` for a single-dataset table.
+
+    Kept as a function rather than inlined in `train()` because the "no
+    domains" case is the common one and used to crash the whole run *after*
+    training finished: a single-dataset table has one domain mask but no
+    per-domain report, so the loop indexed an empty dict. Losing 14 minutes of
+    training to a reporting KeyError is exactly the kind of thing a test should
+    catch, and this is the smallest unit that can be tested.
+
+    `train_idx` makes the per-domain reference the domain's **own** base rate.
+    Without it the block was compared against the pooled prior, which is wrong
+    whenever the domains disagree: on the joint corpus the pooled prior is
+    0.4825 while pro's own rate is 0.5332, so the pro block read +0.019
+    accuracy for a model that was 0.021 *below* pro's prior. Passing the train
+    rows fixes the reference; `None` keeps the pooled behaviour for callers
+    that have no split at hand.
+    """
+    rep = summarise_by_domain(table, idx, y, p)
+    out = {}
+    dom_train = table.domain[np.asarray(train_idx)] if train_idx is not None \
+        else None
+    y_train = np.asarray(table.y)[np.asarray(train_idx)] \
+        if train_idx is not None else None
+    for dom, mask in _dom_masks(table, idx).items() if rep else ():
+        if not mask.any():
+            continue
+        ref, label = base_p[mask], "pooled prior"
+        if dom_train is not None:
+            tm = dom_train == dom
+            if tm.any():
+                rate = float(y_train[tm].mean())
+                ref, label = np.full(int(mask.sum()), rate), \
+                    "domain train rate (%.5f)" % rate
+        base_dom = summarise(y[mask], ref)
+        out[dom] = {
+            "n": int(mask.sum()),
+            "reference": label,
+            "auc_delta": rep[dom]["roc_auc"] - base_dom["roc_auc"],
+            "vs_baseline": {
+                m: M.bootstrap_delta(y[mask], ref, p[mask],
+                                     [g for g, k in zip(groups, mask) if k],
+                                     metric=m, seed=seed)
+                for m in ("log_loss", "brier", "accuracy")},
+        }
+    return out
+
+
 def setup_wandb(args, cfg):
     if args.no_wandb:
         return None
@@ -176,7 +251,7 @@ def setup_wandb(args, cfg):
 
 def default_out_dir(args, table, meta):
     tag = "winpred-%s-%s-seed%d" % (args.data, args.loss, args.seed)
-    if table.source == "pro":
+    if table.source in ("pro", "both"):
         newest = meta.get("newest_row_date") or meta.get("corpus_max_date", "")
         return ROOT / "model" / "checkpoints" / (
             tag + "-through-" + newest[:10].replace("-", ""))
@@ -205,6 +280,9 @@ def train(args):
     # ---- data
     if args.data == "pro":
         table, meta = D.load_pro(corpus=args.corpus)
+    elif args.data == "both":
+        table, meta = D.load_both(corpus=args.corpus,
+                                  patch=args.soloq_patch)
     else:
         table, meta = D.load_soloq(patch=args.soloq_patch,
                                    cache_path=args.soloq_cache or None)
@@ -292,7 +370,7 @@ def train(args):
             scaler.update()
             sched.step()
             global_step += 1
-            agg += float(loss)
+            agg += float(loss.detach())
             nb += 1
 
         if epoch % args.eval_every == 0 or epoch == args.epochs:
@@ -341,6 +419,13 @@ def train(args):
         D.save_predictions(out_dir / "val_preds.npz", yv, pv, table,
                            splits["val"])
 
+    # A joint run pools 38,436 soloQ and 4,762 pro test games, so the pooled
+    # number is 89% a soloQ number. The per-domain blocks are the real output;
+    # the pooled one is only there so the arm is comparable with itself.
+    val_dom = summarise_by_domain(table, splits["val"], yv, pv)
+    test_dom = summarise_by_domain(table, splits["test"], yt, pt) \
+        if test_rep is not None else {}
+
     # ---- baseline on the same rows, same seed, same split
     base = BlueWinRateBaseline().fit(table.y[splits["train"]])
     base_val = summarise(yv, base.predict_proba(len(yv)))
@@ -356,6 +441,9 @@ def train(args):
                                                  metric=m, seed=args.seed)
                             for m in ("log_loss", "brier", "accuracy")},
             "auc_delta": test_rep["roc_auc"] - base_test["roc_auc"],
+            "by_domain": domain_deltas(table, splits["test"], yt, pt, groups,
+                                       bp, args.seed,
+                                       train_idx=splits["train"]),
         }
 
     report = {
@@ -389,6 +477,8 @@ def train(args):
         },
         "val": val_rep,
         "test": test_rep,
+        "val_by_domain": val_dom,
+        "test_by_domain": test_dom,
         "baseline": {"prior": base.describe(), "val": base_val,
                      "test": base_test},
         "comparison": deltas,
@@ -408,6 +498,15 @@ def train(args):
                      "excludes 0" if d["excludes_zero"] else "straddles 0"))
         print("  roc_auc    %+.5f  (baseline is 0.5 by construction)"
               % deltas["auc_delta"])
+        for dom, d in deltas["by_domain"].items():
+            print("  -- %s only (n=%d) --" % (dom, d["n"]))
+            print(M.format_report(test_dom[dom], "  %s" % dom, indent=2))
+            for m, b in d["vs_baseline"].items():
+                print("    d%-9s %+.5f  95%% CI [%+.5f, %+.5f]  %s"
+                      % (m, b["delta"], b["lo"], b["hi"],
+                         "excludes 0" if b["excludes_zero"]
+                         else "straddles 0"))
+            print("    d%-9s %+.5f" % ("roc_auc", d["auc_delta"]))
     print("side bias (learned): %+.4f  vs prior logit %+.4f"
           % (float(model.side_bias),
              math.log(base.prior / (1 - base.prior))))
@@ -416,9 +515,13 @@ def train(args):
 
     if run is not None:
         import wandb
-        wandb.log({"test/log_loss": test_rep["log_loss"] if test_rep else None,
-                   "test/brier": test_rep["brier"] if test_rep else None,
-                   "test/roc_auc": test_rep["roc_auc"] if test_rep else None})
+        final = {"test/log_loss": test_rep["log_loss"] if test_rep else None,
+                 "test/brier": test_rep["brier"] if test_rep else None,
+                 "test/roc_auc": test_rep["roc_auc"] if test_rep else None}
+        for dom, rep in (test_dom or {}).items():
+            final["test_%s/log_loss" % dom] = rep["log_loss"]
+            final["test_%s/roc_auc" % dom] = rep["roc_auc"]
+        wandb.log(final)
         wandb.finish()
     return report
 
