@@ -25,7 +25,10 @@ team_check.py how much of the outcome is team/player strength rather than draft
               (§10, §13) - `--team-mode {rate,bt,player,roster}`
 cross_domain.py   does a champion-strength prior fitted on one domain predict the
               other? (§17)
-test_winpred.py  46 tests
+choice_test.py    does the model rank the champion the team actually picked above
+              the alternatives? (§18) - the test that decides whether a win head
+              could ever re-rank a suggestion
+test_winpred.py  50 tests
 reports/      the JSON evidence behind every number below
 ```
 
@@ -83,6 +86,10 @@ python model/winpred/train.py --data soloq --loss ce --seed 20261105 --epochs 20
     --champ-feat --champ-by-role
 python model/winpred/cross_domain.py --by-role \
     --out model/winpred/reports/cross_domain_champ.json
+
+# can it rank picks at all? (§18) - 10 min on CPU, and the null control runs too
+python model/winpred/choice_test.py --k 24 --null-games 1000 \
+    --out model/winpred/reports/choice_pro.json
 
 pytest model/winpred
 ```
@@ -171,7 +178,7 @@ in `pro`/focal. The two CE arms stop just short on opposite sides: pro/CE peaks
 at 0.6463 against a 0.65 gate, soloQ/CE bottoms at 0.3508 against 0.35. So
 precision/recall at high confidence is `nan` for five of six arms, and the honest
 reading is "the model never commits". The calibration bins carry the information
-a fixed band throws away — see §18 item 5.
+a fixed band throws away — see §19 item 5.
 
 ---
 
@@ -408,7 +415,7 @@ Two differences that are large enough to be structural rather than noise:
   improvement on run 1's 1.0572 but still a collapse of the probabilities).
 * **Focal is worse on soloQ and a wash on pro.** It gains 0.00156 log-loss on
   soloQ where CE gains 0.00310, and 0.0016 AUC on pro where it gains 0.0000 on
-  soloQ. Neither gap survives a seed repeat (§18).
+  soloQ. Neither gap survives a seed repeat (§19).
 
 ### The cross view — the sweep's real question
 
@@ -513,11 +520,11 @@ not work. Joint training at this ratio is a negative result.
 **Does not:** rank CE against focal. Every within-domain gap here is smaller
 than the early-stopping noise (pro selects epoch 6 vs 12 out of 40), and the
 joint comparison is one collapse against a slower collapse. It is also one seed
-throughout; §18 lists the repeat as the cheapest way to settle it.
+throughout; §19 lists the repeat as the cheapest way to settle it.
 
 **Does not** say the joint corpus is hopeless. It says *this* joint setup is:
 one shared head, no domain input, no reweighting. A domain flag or per-domain
-loss normalisation attacks exactly the failure mode observed, and §18 puts it
+loss normalisation attacks exactly the failure mode observed, and §19 puts it
 first for that reason.
 
 ---
@@ -565,7 +572,7 @@ role-only arm's +0.006 AUC over v1 therefore **cannot be the prior itself** —
 25 extra parameters changed the gradient path, the model converged somewhere
 else, and that somewhere else scored higher. That is the useful warning: on this
 test set **±0.007 AUC is what a trajectory perturbation buys**, so a single-seed
-architecture comparison of that size proves nothing (§18 item 2 is still open).
+architecture comparison of that size proves nothing (§19 item 2 is still open).
 
 Why inert: the slot embedding already contains the role, so cross-attention can
 learn role weighting from content, and an additive ±0.2–0.9 on a softmax over
@@ -1029,7 +1036,81 @@ only the explanation.
 
 ---
 
-## 18. Next steps
+## 18. Does it rank picks? No - and that closes the line
+
+§7-§17 answer "who wins this finished draft". A draft *suggestion* asks something
+else: given this board, is the champion the team chose better than the ones it
+did not choose? The two questions are not the same, and the second is the one a
+product needs. A model can be useless at the first and useful at the second,
+because everything that dominates a per-game error - who is playing, form, the
+patch - is identical across two candidates for the same board and cancels in the
+comparison. That is why §7's 53.4 % was not a complete answer, and why this
+section exists.
+
+`choice_test.py` asks it directly. For every pick in every test game (4,762
+games, 47,620 picks) it scores the real board, then the same board with that one
+slot swapped for each of 24 alternatives that are actually played in that role
+(train-only pools of 76/64/75/43/54 champions), and reports the fraction of them
+the chosen champion outranks. 0.50 is "knows nothing".
+
+| scorer | pct of alternatives beaten | top-1 of 25 |
+|---|---|---|
+| pro draft-only encoder (5.88 M params) | **0.5002** [0.4974, 0.5028] | 0.0401 (chance 0.0400) |
+| champion x role tier list alone (§16) | **0.5000** | 0.0385 |
+| null: random champion in the chosen slot | 0.5015 [0.4957, 0.5069] | - |
+
+**The interval is ±0.003, so this is not a null result for want of data** - an
+effect of 0.51 would have been visible. Nothing is hiding in a subgroup either:
+blue 0.4997, red 0.5007, the five roles 0.4979-0.5021, and splitting by whether
+the picking side actually won gives 0.5023 vs 0.4979, a 0.004 gap well inside
+noise. The model's opinion of the chosen champion differs from its opinion of a
+random alternative by **-0.005 probability points**.
+
+Two controls, because a number like this is easy to fake:
+
+* **null** - the same pipeline with a random champion in the "chosen" position
+  returns 0.5015, and a pure-noise scorer returns 0.524/0.471 on 200 picks.
+  The harness is unbiased.
+* **tier list** - the champion prior on its own also lands on 0.5000, with no
+  ties anywhere (every role pool has fully distinct ratings), so that is a
+  measurement and not indifference.
+
+**The tier-list row is the interesting one.** Champion win-rate has *no*
+relationship to which champion a pro team picks: pros draft for composition,
+counters and role fit, and the highest-win-rate champion is often a situational
+counterpick that only works as a fifth pick. This also weakens §16's "ship the
+ordering, not the magnitudes" - the ordering describes *outcomes*, not
+*choices*, so it is not a recommendation and should not be presented as one.
+
+**The two numbers are the same fact.** A model whose per-pick ranking is at
+chance cannot be carrying 0.005 nats of draft signal, and a model with 0.005
+nats cannot rank picks above chance. §5 and this section measure one property
+twice, from opposite ends, and agree.
+
+**What it rules out, and what it does not.** It rules out a win-probability head
+as a re-ranker for the suggestion model - the thing it would rank by is not
+there. It does not rule out every value model, only *this* one: trained on
+outcomes, with a mean-pooled champion encoder and no bans. A model trained on
+the choice objective itself (which of these candidates did the team take, given
+the board) is a different function - and `model/checkpoints/masking-*` already
+implements it. That is the suggestion system; this experiment had nothing to add
+to it.
+
+Not run on soloQ: 38,436 games would be 9.6 M board evaluations, and the
+reference would be wrong anyway - soloQ picks are ten strangers choosing for
+fun, so agreeing with them is not evidence of a good suggestion. Pro is the only
+domain where "the pick the team made" is a quality reference.
+
+**A bug worth recording.** `top1` first printed 0.129 against a chance rate of
+0.040. The cause was `scores.max(1, keepdims=True)[0]`: a `[N,1]` compared
+against the *first row's* max, so every slot was scored against slot 0. The
+percentile metric never calls that function and was unaffected, the null control
+does not look at `top1` and did not catch it - a rank histogram did, showing
+3.3 % at rank 0 against the 12.3 % being reported. Fixed, and pinned by a test.
+
+---
+
+## 19. Next steps
 
 The brief's "don't train more experiments yet" expired with the six-arm sweep, so
 items 1, 2 and 4 of the old list are **done** (§7): `b_side` is bias-free, soloQ
@@ -1037,7 +1118,10 @@ has been run, and dropout is 0.2 everywhere. §8's architecture variant is also
 done, §10–§14 answered the "improve the pro log-loss" brief (−0.045 nats from
 the strength feature, −0.039 more from player ratings, −0.013 from shrinking the
 head — each measured on its own base, so they do not simply add), and §16–§17
-answered the soloQ one. What is left:
+answered the soloQ one. §18 then asked the only question that could have made
+this folder shippable — can it rank picks? — and the answer is no, at ±0.003.
+**There is no product path from here to the frontend.** What is left is worth
+doing only if the goal changes from "suggest picks" to "predict games":
 
 0a. **soloQ is at its ceiling, and the ceiling is the champion prior.** The whole
    draft signal is 0.0031 nats and 865 champion×role cells get 0.0031 of it; the

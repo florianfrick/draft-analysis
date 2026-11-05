@@ -693,3 +693,68 @@ def test_champion_rating_columns_are_shared_between_domains():
     assert name_to_idx["Annie"] == 0        # riot id order, not alphabetical
     assert name_to_idx["Olaf"] == 1
     assert len(set(name_to_idx.values())) == n_champs
+
+
+# ------------------------------------------------- choice-discrimination test
+def test_pct_of_first_is_unbiased_for_exchangeable_scores():
+    """The metric behind `choice_test.py` must average 0.50 when the scores
+    carry no information, or every number the script prints is shifted."""
+    from model.winpred import choice_test as C
+    rng = np.random.default_rng(0)
+    s = rng.random((8000, 25))
+    p = C.pct_of_first(s)
+    assert abs(float(p.mean()) - 0.5) < 0.01
+    assert p.min() >= 0.0 and p.max() <= 1.0
+    # a champion that always wins the comparison scores 1.0
+    s[:, 0] = 2.0
+    assert float(C.pct_of_first(s).mean()) == 1.0
+
+
+def test_side_scores_are_from_the_pickers_point_of_view():
+    """Red picks score 1 - P(blue): without the flip, the red side's choices
+    would be ranked backwards and the whole test would average 0.50."""
+    from model.winpred import choice_test as C
+    assert C.side_scores(0.7, 0) == pytest.approx(0.7)
+    assert C.side_scores(0.7, D.N_SLOTS - 1) == pytest.approx(0.3)
+
+
+def test_choice_candidates_never_include_a_champion_already_on_the_board():
+    """A swapped-in champion that is already on the board would be a duplicate
+    board the model never saw, and the "chosen" slot would be compared against
+    itself - the exact way this test can go quietly to 0.5."""
+    from model.winpred import choice_test as C
+    pools = [np.arange(60) for _ in range(5)]          # generous role pools
+    row_champ = np.arange(D.N_SLOTS, dtype=np.int64)   # champions 0..9
+    role = np.arange(D.N_SLOTS, dtype=np.int64) % D.TEAM_SIZE
+    rng = np.random.default_rng(3)
+    for chosen in (row_champ, None):
+        cand = C.build_candidates(row_champ, role, pools, k=8, rng=rng,
+                                  chosen=chosen)
+        assert cand.shape == (D.N_SLOTS, 9)
+        on_board = set(row_champ.tolist())
+        for slot in range(D.N_SLOTS):
+            alts = cand[slot, 1:]
+            assert len(set(alts.tolist())) == alts.size, "duplicate candidate"
+            assert not (set(alts.tolist()) & on_board), "already on the board"
+        if chosen is not None:
+            assert np.array_equal(cand[:, 0], chosen)
+        else:
+            # the null control: position 0 is drawn exactly like the rest, so
+            # it must be off-board and from the pool - but *not* unique across
+            # slots, which a birthday argument would break at random.
+            assert not (set(cand[:, 0].tolist()) & on_board)
+            assert cand[:, 0].min() >= row_champ.max() + 1
+
+
+def test_top1_compares_each_row_against_its_own_max():
+    """A [N,1] vs [N] broadcast silently compares row i against row j's max.
+    The first version of this did exactly that and reported top1 = 0.129
+    against a chance rate of 0.040 - a plausible-looking number from a
+    one-character mistake."""
+    from model.winpred import choice_test as C
+    s = np.zeros((3, 5))
+    s[:, 0] = 0.5
+    s[0, 2] = 1.0      # row 0: chosen is beaten
+    s[1, 3] = 0.2      # row 1: chosen is the max
+    s[2, 0] = 0.9      # row 2: chosen is the max
+    assert C.top1_of_first(s).tolist() == [False, True, True]
