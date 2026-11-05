@@ -32,6 +32,14 @@ from model.winpred.train import parse_args, train    # noqa: E402
 BASE = ["--data", "pro", "--loss", "ce", "--seed", "20261105",
         "--epochs", "20", "--patience", "4", "--no-test", "--no-wandb"]
 
+# Grids that are not pro. soloQ is 8x the rows (307 k train), so a config costs
+# ~2 min rather than 30 s; the same split seed is used so every arm in a grid is
+# comparable to the next, and --no-test keeps the 38,436 held-out rows out of
+# the loop exactly as it does for pro.
+SOLOQ = ["--data", "soloq", "--loss", "ce", "--seed", "20261105",
+         "--epochs", "20", "--patience", "4", "--no-test", "--no-wandb"]
+BASE_OVERRIDES = {"soloq_base": SOLOQ, "soloq_champ": SOLOQ}
+
 GRIDS = {
     # Does the model want less capacity? Every arm overfits by epoch ~8, and
     # 37 k rows against 2.6 M parameters is the obvious suspect.
@@ -179,13 +187,46 @@ GRIDS = {
         ("p-kp10-h32", ["--team-feat", "--dropout", "0.3",
                         "--team-mode", "player", "--head-dim", "32"]),
     ],
+    # soloQ, first question: does the pro finding about the head transfer? The
+    # committed soloQ arm (0.68838 val) is d256 / dropout 0.2 / full-width head
+    # / 40 epochs selecting at epoch 31.
+    "soloq_base": [
+        ("h256", []),
+        ("h64", ["--head-dim", "64"]),
+        ("h32", ["--head-dim", "32"]),
+        ("h24", ["--head-dim", "24"]),
+        ("h24-drop1", ["--head-dim", "24", "--dropout", "0.1"]),
+        ("h24-i1", ["--head-dim", "24", "--num-intra", "1"]),
+    ],
+    # soloQ, second question: a champion Bradley-Terry prior is worth 0.68987 on
+    # its own (865 champion x role cells) - the same as the whole 2.6 M-param
+    # encoder. Handing it to the head leaves the encoder the interactions.
+    # The h24-i1 recipe from 'soloq_base' carries over (num_intra 1 was the one
+    # change that both improved val and trained steadily to epoch 19 instead of
+    # peaking at epoch 2).
+    "soloq_champ": [
+        ("c-h24-role-i1", ["--head-dim", "24", "--num-intra", "1",
+                           "--champ-feat", "--champ-by-role"]),
+        ("c-h24-i1", ["--head-dim", "24", "--num-intra", "1",
+                      "--champ-feat"]),
+        ("c-h24-role", ["--head-dim", "24", "--champ-feat",
+                        "--champ-by-role"]),
+        ("c-h256-role-i1", ["--num-intra", "1", "--champ-feat",
+                            "--champ-by-role"]),
+        ("c-d128-role-i1", ["--embed-dim", "128", "--head-dim", "24",
+                            "--num-intra", "1", "--champ-feat",
+                            "--champ-by-role"]),
+        ("c-h24-role-i1-k5", ["--head-dim", "24", "--num-intra", "1",
+                              "--champ-feat", "--champ-by-role",
+                              "--champ-k", "5"]),
+    ],
 }
 
 
-def run_one(name, tokens, scratch):
+def run_one(name, tokens, scratch, base=None):
     out = Path(scratch) / name
     t0 = time.time()
-    args = parse_args(BASE + list(tokens) + ["--out-dir", str(out)])
+    args = parse_args((base or BASE) + list(tokens) + ["--out-dir", str(out)])
     report = train(args)
     v = report["val"]
     return {"name": name, "tokens": list(tokens),
@@ -205,13 +246,14 @@ def main(argv=None):
     ap.add_argument("--out", default="")
     args = ap.parse_args(argv)
 
+    base = BASE_OVERRIDES.get(args.grid, BASE)
     rows = []
     for name, tokens in GRIDS[args.grid]:
         print("\n" + "#" * 72)
         print("# %s  (%s)" % (name, " ".join(tokens) or "base recipe"))
         print("#" * 72)
         try:
-            rows.append(run_one(name, tokens, args.scratch))
+            rows.append(run_one(name, tokens, args.scratch, base))
         except Exception as exc:                      # noqa: BLE001
             print("FAILED %s: %s" % (name, exc))
             rows.append({"name": name, "tokens": list(tokens), "error": str(exc)})
@@ -233,7 +275,7 @@ def main(argv=None):
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         with open(args.out, "w", encoding="utf-8") as f:
-            json.dump({"grid": args.grid, "base": BASE, "rows": rows}, f,
+            json.dump({"grid": args.grid, "base": base, "rows": rows}, f,
                       indent=1)
             f.write("\n")
         print("\nwrote %s" % args.out)

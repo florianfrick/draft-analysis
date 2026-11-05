@@ -1,0 +1,435 @@
+{
+ "protocol": {
+  "seed": 20261105,
+  "corpus": "2022",
+  "views": [
+   "soloq",
+   "pro"
+  ],
+  "n_boot": 1000
+ },
+ "arms": [
+  "soloq-old",
+  "soloq-h24i1"
+ ],
+ "views": {
+  "soloq": {
+   "n": 38436,
+   "blue_win_rate": 0.47543969195545843,
+   "prior": {
+    "name": "blue_win_rate_prior",
+    "prior": 0.4766166694852415,
+    "n_train": 307484,
+    "predicted_side": "red",
+    "expected_accuracy": 0.5233833305147585,
+    "note": "one scalar, fitted on the training split only; AUC is 0.5 by construction"
+   },
+   "scores": {
+    "prior": {
+     "report": {
+      "n": 38436,
+      "n_blue_wins": 18274,
+      "base_rate": 0.47543969195545843,
+      "log_loss": 0.6919430543127674,
+      "brier": 0.24939817654486282,
+      "roc_auc": 0.5,
+      "accuracy": 0.5245603080445416,
+      "accuracy_ci": [
+       0.5195654376111339,
+       0.5295502694629556
+      ],
+      "mean_p": 0.47661666948524156,
+      "ece": 0.0011769775297831298,
+      "mce": 0.0011769775297831298,
+      "brier_skill": -5.5545065296147556e-06,
+      "log_loss_skill": -4.013109129008541e-06,
+      "const_brier": 0.24939679126875725,
+      "const_log_loss": 0.6919402774809231,
+      "confident": {
+       "lo": 0.35,
+       "hi": 0.65,
+       "n_blue_calls": 0,
+       "n_red_calls": 0,
+       "n_confident": 0,
+       "coverage": 0.0,
+       "precision_blue": NaN,
+       "precision_blue_ci": [
+        0.0,
+        1.0
+       ],
+       "recall_blue": 0.0,
+       "precision_red": NaN,
+       "precision_red_ci": [
+        0.0,
+        1.0
+       ],
+       "recall_red": 0.0,
+       "precision_confident": NaN
+      }
+     }
+    },
+    "soloq-old": {
+     "report": {
+      "n": 38436,
+      "n_blue_wins": 18274,
+      "base_rate": 0.47543969195545843,
+      "log_loss": 0.6888388955957911,
+      "brier": 0.24785691935749207,
+      "roc_auc": 0.5438100925569539,
+      "accuracy": 0.5371006348215215,
+      "accuracy_ci": [
+       0.5321122557939296,
+       0.5420815983243453
+      ],
+      "mean_p": 0.47189538487566535,
+      "ece": 0.004896909702530096,
+      "mce": 0.010982280174607728,
+      "brier_skill": 0.006174385417837103,
+      "log_loss_skill": 0.004482152558632491,
+      "const_brier": 0.24939679126875725,
+      "const_log_loss": 0.6919402774809231,
+      "confident": {
+       "lo": 0.35,
+       "hi": 0.65,
+       "n_blue_calls": 0,
+       "n_red_calls": 0,
+       "n_confident": 0,
+       "coverage": 0.0,
+       "precision_blue": NaN,
+       "precision_blue_ci": [
+        0.0,
+        1.0
+       ],
+       "recall_blue": 0.0,
+       "precision_red": NaN,
+       "precision_red_ci": [
+        0.0,
+        1.0
+       ],
+       "recall_red": 0.0,
+       "precision_confident": NaN
+      }
+     },
+     "delta": {
+      "log_loss": {
+       "metric": "log_loss",
+       "delta": -0.003104158716976224,
+       "lo": -0.0039422232197738605,
+       "hi": -0.002323276211177647,
+       "n_boot": 1000,
+       "n_groups": 38436,
+       "excludes_zero": true,
+       "frac_draws_lt_zero": 1.0
+      },
+      "brier": {
+       "metric": "brier",
+       "delta": -0.0015412571873707481,
+       "lo": -0.0019550787817313267,
+       "hi": -0.0011533467463581547,
+       "n_boot": 1000,
+       "n_groups": 38436,
+       "excludes_zero": true,
+       "frac_draws_lt_zero": 1.0
+      },
+      "accuracy": {
+       "metric": "accuracy",
+       "delta": 0.012540326776979915,
+       "lo": 0.007414923509210136,
+       "hi": 0.017510276823811097,
+       "n_boot": 1000,
+       "n_groups": 38436,
+       "excludes_zero": true,
+       "frac_draws_lt_zero": 0.0
+      }
+     },
+     "auc_delta": 0.043810092556953895
+    },
+    "soloq-h24i1": {
+     "report": {
+      "n": 38436,
+      "n_blue_wins": 18274,
+      "base_rate": 0.47543969195545843,
+      "log_loss": 0.6895225153338439,
+      "brier": 0.24819305963733285,
+      "roc_auc": 0.5406120460387747,
+      "accuracy": 0.5333541471537101,
+      "accuracy_ci": [
+       0.5283634974540565,
+       0.5383381301613914
+      ],
+      "mean_p": 0.4757121378944163,
+      "ece": 0.0027217687344014965,
+      "mce": 0.06307398382088403,
+      "brier_skill": 0.004826572247784933,
+      "log_loss_skill": 0.003494177497343154,
+      "const_brier": 0.24939679126875725,
+      "const_log_loss": 0.6919402774809231,
+      "confident": {
+       "lo": 0.35,
+       "hi": 0.65,
+       "n_blue_calls": 0,
+       "n_red_calls": 0,
+       "n_confident": 0,
+       "coverage": 0.0,
+       "precision_blue": NaN,
+       "precision_blue_ci": [
+        0.0,
+        1.0
+       ],
+       "recall_blue": 0.0,
+       "precision_red": NaN,
+       "precision_red_ci": [
+        0.0,
+        1.0
+       ],
+       "recall_red": 0.0,
+       "precision_confident": NaN
+      }
+     },
+     "delta": {
+      "log_loss": {
+       "metric": "log_loss",
+       "delta": -0.00242053897892347,
+       "lo": -0.0030317502196610556,
+       "hi": -0.0018833221559507482,
+       "n_boot": 1000,
+       "n_groups": 38436,
+       "excludes_zero": true,
+       "frac_draws_lt_zero": 1.0
+      },
+      "brier": {
+       "metric": "brier",
+       "delta": -0.001205116907529974,
+       "lo": -0.0015091211631414851,
+       "hi": -0.000936872618238624,
+       "n_boot": 1000,
+       "n_groups": 38436,
+       "excludes_zero": true,
+       "frac_draws_lt_zero": 1.0
+      },
+      "accuracy": {
+       "metric": "accuracy",
+       "delta": 0.008793839109168533,
+       "lo": 0.0036645332500781142,
+       "hi": 0.013555000520345528,
+       "n_boot": 1000,
+       "n_groups": 38436,
+       "excludes_zero": true,
+       "frac_draws_lt_zero": 0.001
+      }
+     },
+     "auc_delta": 0.04061204603877466
+    }
+   }
+  },
+  "pro": {
+   "n": 4762,
+   "blue_win_rate": 0.5197396052078959,
+   "prior": {
+    "name": "blue_win_rate_prior",
+    "prior": 0.5332190772032241,
+    "n_train": 37343,
+    "predicted_side": "blue",
+    "expected_accuracy": 0.5332190772032241,
+    "note": "one scalar, fitted on the training split only; AUC is 0.5 by construction"
+   },
+   "scores": {
+    "prior": {
+     "report": {
+      "n": 4762,
+      "n_blue_wins": 2475,
+      "base_rate": 0.5197396052078959,
+      "log_loss": 0.692732284679499,
+      "brier": 0.24979204415150932,
+      "roc_auc": 0.5,
+      "accuracy": 0.5197396052078959,
+      "accuracy_ci": [
+       0.5055390694717332,
+       0.5339083179529769
+      ],
+      "mean_p": 0.5332190772032241,
+      "ece": 0.013479471995328285,
+      "mce": 0.013479471995328285,
+      "brier_skill": -0.0007279192018232461,
+      "log_loss_skill": -0.0005266142908741944,
+      "const_brier": 0.24961034798623635,
+      "const_log_loss": 0.6923676739678482,
+      "confident": {
+       "lo": 0.35,
+       "hi": 0.65,
+       "n_blue_calls": 0,
+       "n_red_calls": 0,
+       "n_confident": 0,
+       "coverage": 0.0,
+       "precision_blue": NaN,
+       "precision_blue_ci": [
+        0.0,
+        1.0
+       ],
+       "recall_blue": 0.0,
+       "precision_red": NaN,
+       "precision_red_ci": [
+        0.0,
+        1.0
+       ],
+       "recall_red": 0.0,
+       "precision_confident": NaN
+      }
+     }
+    },
+    "soloq-old": {
+     "report": {
+      "n": 4762,
+      "n_blue_wins": 2475,
+      "base_rate": 0.5197396052078959,
+      "log_loss": 0.6999341168800997,
+      "brier": 0.25335628841047286,
+      "roc_auc": 0.50703175171037,
+      "accuracy": 0.4867702645947081,
+      "accuracy_ci": [
+       0.4725902123866291,
+       0.5009716449776609
+      ],
+      "mean_p": 0.47120377385080586,
+      "ece": 0.053351155252628873,
+      "mce": 0.08249305742504326,
+      "brier_skill": -0.015007151964882004,
+      "log_loss_skill": -0.010928359593811443,
+      "const_brier": 0.24961034798623635,
+      "const_log_loss": 0.6923676739678482,
+      "confident": {
+       "lo": 0.35,
+       "hi": 0.65,
+       "n_blue_calls": 0,
+       "n_red_calls": 0,
+       "n_confident": 0,
+       "coverage": 0.0,
+       "precision_blue": NaN,
+       "precision_blue_ci": [
+        0.0,
+        1.0
+       ],
+       "recall_blue": 0.0,
+       "precision_red": NaN,
+       "precision_red_ci": [
+        0.0,
+        1.0
+       ],
+       "recall_red": 0.0,
+       "precision_confident": NaN
+      }
+     },
+     "delta": {
+      "log_loss": {
+       "metric": "log_loss",
+       "delta": 0.007201832200600666,
+       "lo": 0.003124179440496333,
+       "hi": 0.011592846199441557,
+       "n_boot": 1000,
+       "n_groups": 2737,
+       "excludes_zero": true,
+       "frac_draws_lt_zero": 0.0
+      },
+      "brier": {
+       "metric": "brier",
+       "delta": 0.0035642442589635948,
+       "lo": 0.001527663737901766,
+       "hi": 0.005739716304472847,
+       "n_boot": 1000,
+       "n_groups": 2737,
+       "excludes_zero": true,
+       "frac_draws_lt_zero": 0.0
+      },
+      "accuracy": {
+       "metric": "accuracy",
+       "delta": -0.032969340613187736,
+       "lo": -0.056752592118457956,
+       "hi": -0.009002306156312426,
+       "n_boot": 1000,
+       "n_groups": 2737,
+       "excludes_zero": true,
+       "frac_draws_lt_zero": 0.998
+      }
+     },
+     "auc_delta": 0.00703175171036996
+    },
+    "soloq-h24i1": {
+     "report": {
+      "n": 4762,
+      "n_blue_wins": 2475,
+      "base_rate": 0.5197396052078959,
+      "log_loss": 0.6972869327209505,
+      "brier": 0.2520611483909345,
+      "roc_auc": 0.5108779089539912,
+      "accuracy": 0.49139017219655606,
+      "accuracy_ci": [
+       0.47720353302080776,
+       0.5055906916130952
+      ],
+      "mean_p": 0.4753154030696327,
+      "ece": 0.04502814310981867,
+      "mce": 0.06295469199085846,
+      "brier_skill": -0.00981850481949298,
+      "log_loss_skill": -0.007104980399952776,
+      "const_brier": 0.24961034798623635,
+      "const_log_loss": 0.6923676739678482,
+      "confident": {
+       "lo": 0.35,
+       "hi": 0.65,
+       "n_blue_calls": 0,
+       "n_red_calls": 0,
+       "n_confident": 0,
+       "coverage": 0.0,
+       "precision_blue": NaN,
+       "precision_blue_ci": [
+        0.0,
+        1.0
+       ],
+       "recall_blue": 0.0,
+       "precision_red": NaN,
+       "precision_red_ci": [
+        0.0,
+        1.0
+       ],
+       "recall_red": 0.0,
+       "precision_confident": NaN
+      }
+     },
+     "delta": {
+      "log_loss": {
+       "metric": "log_loss",
+       "delta": 0.00455464804145167,
+       "lo": 0.00102360236638564,
+       "hi": 0.008232002824164891,
+       "n_boot": 1000,
+       "n_groups": 2737,
+       "excludes_zero": true,
+       "frac_draws_lt_zero": 0.007
+      },
+      "brier": {
+       "metric": "brier",
+       "delta": 0.0022691042394252514,
+       "lo": 0.0005089146959003908,
+       "hi": 0.004103346491064487,
+       "n_boot": 1000,
+       "n_groups": 2737,
+       "excludes_zero": true,
+       "frac_draws_lt_zero": 0.007
+      },
+      "accuracy": {
+       "metric": "accuracy",
+       "delta": -0.028349433011339797,
+       "lo": -0.052175980669719825,
+       "hi": -0.004361490640506568,
+       "n_boot": 1000,
+       "n_groups": 2737,
+       "excludes_zero": true,
+       "frac_draws_lt_zero": 0.989
+      }
+     },
+     "auc_delta": 0.010877908953991211
+    }
+   }
+  }
+ }
+}

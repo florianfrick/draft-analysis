@@ -87,6 +87,17 @@ def parse_args(argv=None):
                          "this game', not 'is this draft good': team identity "
                          "is worth ~0.044 nats on pro and the draft ~0.005, so "
                          "never quote a team-feat run as a draft result.")
+    ap.add_argument("--champ-feat", action="store_true", default=False,
+                    help="add each side's mean champion strength (a per-"
+                         "champion Bradley-Terry rating fitted on train rows "
+                         "only) to the head. The soloQ analogue of --team-feat: "
+                         "works on both domains and needs no team names.")
+    ap.add_argument("--champ-k", type=float, default=20.0,
+                    help="pseudo-games of shrinkage for the champion ratings "
+                         "(only with --champ-feat)")
+    ap.add_argument("--champ-by-role", action="store_true", default=False,
+                    help="rate champion x role instead of champion "
+                         "(865 cells, ~350 games each on soloQ)")
     ap.add_argument("--team-k", type=float, default=10.0,
                     help="shrinkage for the team strength (only with "
                          "--team-feat): pseudo-games for the win rate, L2 "
@@ -360,10 +371,16 @@ def train(args):
     patch_vocab = meta["patch_vocab"] if args.patch_emb else []
     attr_matrix = W.attr_matrix_or_none(D.NUM_REAL_CHAMPS, args.attr)
 
-    # Team strength is computed once for every row, from the TRAIN rows only,
-    # then sliced by the loaders - so val and test rows carry a feature that
-    # never saw them. Doing it after the split is the whole point.
+    # A strength feature is computed once for every row, from the TRAIN rows
+    # only, then sliced by the loaders - so val and test rows carry a feature
+    # that never saw them. Doing it after the split is the whole point. Team and
+    # champion strength share one 2-column channel in the head (and one input
+    # slot in `WinPredictor`); they are alternatives, not addends.
+    if args.team_feat and args.champ_feat:
+        raise SystemExit("--team-feat and --champ-feat both fill the same head "
+                         "input; pass one")
     team_feat = None
+    strength_source = None
     if args.team_feat:
         if args.data != "pro":
             raise SystemExit("--team-feat needs pro data (it reads team names)")
@@ -372,10 +389,19 @@ def train(args):
                                     mode=args.team_mode,
                                     half_life_days=args.team_half_life,
                                     kp=args.team_player_k)
+        strength_source = "team:" + args.team_mode
         print("team feature: %d columns, fitted on %d train rows, "
               "mode=%s k=%.1f half-life=%s"
               % (team_feat.shape[1], len(splits["train"]), args.team_mode,
                  args.team_k, args.team_half_life or "off"))
+    elif args.champ_feat:
+        team_feat = D.champion_strength(table, splits["train"], k=args.champ_k,
+                                        by_role=args.champ_by_role,
+                                        verbose=True)
+        strength_source = "champ-role" if args.champ_by_role else "champ"
+        print("champ feature: %d columns, fitted on %d train rows, by_role=%s "
+              "k=%.1f" % (team_feat.shape[1], len(splits["train"]),
+                          args.champ_by_role, args.champ_k))
 
     tr_loader = make_loader(table, splits["train"], args.batch_size, True,
                             init_seed, args.num_workers, team_feat)
@@ -396,7 +422,7 @@ def train(args):
                            head_dim=args.head_dim or None,
                            head_product=args.head_product,
                            role_bias=args.role_bias,
-                           team_feat=args.team_feat).to(device)
+                           team_feat=team_feat is not None).to(device)
     cfg = W.config_of(model, data=args.data, loss=args.loss,
                       focal_gamma=args.focal_gamma,
                       focal_alpha=args.focal_alpha, seed=args.seed,
@@ -505,13 +531,17 @@ def train(args):
     yv, pv, _ = predict(model, va_loader, device)
     val_rep = summarise(yv, pv)
     test_rep = None
+    # val predictions are always written, including under --no-test: a search
+    # arm's val log-loss differs from its neighbours in the 4th decimal, and the
+    # only honest way to rank two of them is a paired bootstrap on these rows
+    # (`compare_arms.py --ref a=.../val_preds.npz`). Saving them only when a
+    # test set exists made every search arm uncomparable.
+    D.save_predictions(out_dir / "val_preds.npz", yv, pv, table, splits["val"])
     if te_loader is not None:
         yt, pt, ids = predict(model, te_loader, device)
         test_rep = summarise(yt, pt)
         D.save_predictions(out_dir / "test_preds.npz", yt, pt, table,
                            splits["test"])
-        D.save_predictions(out_dir / "val_preds.npz", yv, pv, table,
-                           splits["val"])
 
     # A joint run pools 38,436 soloQ and 4,762 pro test games, so the pooled
     # number is 89% a soloQ number. The per-domain blocks are the real output;
@@ -566,8 +596,11 @@ def train(args):
                 # indistinguishable from a v1 run except by `params`.
                 "head_product": bool(args.head_product),
                 "role_bias": bool(args.role_bias),
-                "team_feat": bool(args.team_feat),
+                "team_feat": team_feat is not None,
+                # which estimator filled that input: "team:bt", "champ", ...
+                "strength_source": strength_source,
                 "team_k": args.team_k if args.team_feat else None,
+                "champ_k": args.champ_k if args.champ_feat else None,
                 "team_mode": args.team_mode if args.team_feat else None,
                 "team_half_life": (args.team_half_life if args.team_feat
                                    else None),

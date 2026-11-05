@@ -1,0 +1,104 @@
+{
+ "grid": "soloq_base",
+ "base": [
+  "--data",
+  "soloq",
+  "--loss",
+  "ce",
+  "--seed",
+  "20261105",
+  "--epochs",
+  "20",
+  "--patience",
+  "4",
+  "--no-test",
+  "--no-wandb"
+ ],
+ "rows": [
+  {
+   "name": "h256",
+   "tokens": [],
+   "val_log_loss": 0.6895491964563676,
+   "val_auc": 0.5404002337985857,
+   "val_brier": 0.24820664127272568,
+   "epoch": 2,
+   "params": 2615297,
+   "corpus": "soloq",
+   "seconds": 140.5
+  },
+  {
+   "name": "h64",
+   "tokens": [
+    "--head-dim",
+    "64"
+   ],
+   "val_log_loss": 0.6887409794003233,
+   "val_auc": 0.5463107236250031,
+   "val_brier": 0.24780563604588296,
+   "epoch": 2,
+   "params": 2467457,
+   "corpus": "soloq",
+   "seconds": 139.8
+  },
+  {
+   "name": "h32",
+   "tokens": [
+    "--head-dim",
+    "32"
+   ],
+   "val_log_loss": 0.6891741648329738,
+   "val_auc": 0.5447016409650501,
+   "val_brier": 0.2480204848877218,
+   "epoch": 3,
+   "params": 2442817,
+   "corpus": "soloq",
+   "seconds": 159.6
+  },
+  {
+   "name": "h24",
+   "tokens": [
+    "--head-dim",
+    "24"
+   ],
+   "val_log_loss": 0.6892899922507417,
+   "val_auc": 0.5434009042035534,
+   "val_brier": 0.24807721988034312,
+   "epoch": 2,
+   "params": 2436657,
+   "corpus": "soloq",
+   "seconds": 135.4
+  },
+  {
+   "name": "h24-drop1",
+   "tokens": [
+    "--head-dim",
+    "24",
+    "--dropout",
+    "0.1"
+   ],
+   "val_log_loss": 0.6897392162081551,
+   "val_auc": 0.5382023269506372,
+   "val_brier": 0.24830104343846787,
+   "epoch": 1,
+   "params": 2436657,
+   "corpus": "soloq",
+   "seconds": 113.0
+  },
+  {
+   "name": "h24-i1",
+   "tokens": [
+    "--head-dim",
+    "24",
+    "--num-intra",
+    "1"
+   ],
+   "val_log_loss": 0.688165670861409,
+   "val_auc": 0.5487751172821926,
+   "val_brier": 0.2475227974891565,
+   "epoch": 19,
+   "params": 1646897,
+   "corpus": "soloq",
+   "seconds": 351.1
+  }
+ ]
+}

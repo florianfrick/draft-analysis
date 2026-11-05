@@ -1,0 +1,126 @@
+{
+ "grid": "soloq_champ",
+ "base": [
+  "--data",
+  "soloq",
+  "--loss",
+  "ce",
+  "--seed",
+  "20261105",
+  "--epochs",
+  "20",
+  "--patience",
+  "4",
+  "--no-test",
+  "--no-wandb"
+ ],
+ "rows": [
+  {
+   "name": "c-h24-role-i1",
+   "tokens": [
+    "--head-dim",
+    "24",
+    "--num-intra",
+    "1",
+    "--champ-feat",
+    "--champ-by-role"
+   ],
+   "val_log_loss": 0.6876692761615473,
+   "val_auc": 0.5522884458390979,
+   "val_brier": 0.24727630987409158,
+   "epoch": 10,
+   "params": 1646975,
+   "corpus": "soloq",
+   "seconds": 330.4
+  },
+  {
+   "name": "c-h24-i1",
+   "tokens": [
+    "--head-dim",
+    "24",
+    "--num-intra",
+    "1",
+    "--champ-feat"
+   ],
+   "val_log_loss": 0.6882838512161686,
+   "val_auc": 0.5485022142053618,
+   "val_brier": 0.24758016925864793,
+   "epoch": 8,
+   "params": 1646975,
+   "corpus": "soloq",
+   "seconds": 270.2
+  },
+  {
+   "name": "c-h24-role",
+   "tokens": [
+    "--head-dim",
+    "24",
+    "--champ-feat",
+    "--champ-by-role"
+   ],
+   "val_log_loss": 0.6876337884683235,
+   "val_auc": 0.5523018415618939,
+   "val_brier": 0.24725863144335122,
+   "epoch": 10,
+   "params": 2436735,
+   "corpus": "soloq",
+   "seconds": 376.4
+  },
+  {
+   "name": "c-h256-role-i1",
+   "tokens": [
+    "--num-intra",
+    "1",
+    "--champ-feat",
+    "--champ-by-role"
+   ],
+   "val_log_loss": 0.6879455708443525,
+   "val_auc": 0.5521444638715673,
+   "val_brier": 0.24740566766451494,
+   "epoch": 3,
+   "params": 1826311,
+   "corpus": "soloq",
+   "seconds": 180.9
+  },
+  {
+   "name": "c-d128-role-i1",
+   "tokens": [
+    "--embed-dim",
+    "128",
+    "--head-dim",
+    "24",
+    "--num-intra",
+    "1",
+    "--champ-feat",
+    "--champ-by-role"
+   ],
+   "val_log_loss": 0.6880835293086149,
+   "val_auc": 0.5513648032205234,
+   "val_brier": 0.24747228041846597,
+   "epoch": 2,
+   "params": 430335,
+   "corpus": "soloq",
+   "seconds": 156.4
+  },
+  {
+   "name": "c-h24-role-i1-k5",
+   "tokens": [
+    "--head-dim",
+    "24",
+    "--num-intra",
+    "1",
+    "--champ-feat",
+    "--champ-by-role",
+    "--champ-k",
+    "5"
+   ],
+   "val_log_loss": 0.687722300290703,
+   "val_auc": 0.5519692120990863,
+   "val_brier": 0.2472998353504266,
+   "epoch": 10,
+   "params": 1646975,
+   "corpus": "soloq",
+   "seconds": 301.5
+  }
+ ]
+}

@@ -23,7 +23,9 @@ compare_arms.py  paired model-vs-model test on the same rows, and ensembling (§
 search.py     val-only hyperparameter search (`--no-test`, early stopping) (§9)
 team_check.py how much of the outcome is team/player strength rather than draft
               (§10, §13) - `--team-mode {rate,bt,player,roster}`
-test_winpred.py  43 tests
+cross_domain.py   does a champion-strength prior fitted on one domain predict the
+              other? (§17)
+test_winpred.py  46 tests
 reports/      the JSON evidence behind every number below
 ```
 
@@ -61,6 +63,8 @@ python model/winpred/train.py --data pro --loss ce --seed 20261105 --epochs 40 \
 python model/winpred/search.py --grid team_bt      # which strength estimator
 python model/winpred/search.py --grid head_small   # how wide the head should be
 python model/winpred/search.py --grid player       # player ratings instead of teams
+python model/winpred/search.py --grid soloq_base   # does the pro head finding transfer?
+python model/winpred/search.py --grid soloq_champ  # champion prior in the head (§16)
 
 # how much of the outcome is who is playing, rather than what was picked (§10, §13)
 # --team-mode player also prints the draft+strength stack fitted on val
@@ -68,10 +72,17 @@ python model/winpred/team_check.py --team-mode player \
     --ckpt model/checkpoints/winpred-pro-ce-d384-seed20261105-through-20261104 \
     --out model/winpred/reports/player_strength_pro_seed20261105.json
 
-# the best arm (§13): 20 epochs is plenty, it selects at epoch 1-6
+# the best pro arm (§13): 20 epochs is plenty, it selects at epoch 1-6
 python model/winpred/train.py --data pro --loss ce --seed 20261105 --epochs 20 \
     --patience 4 --tag players --dropout 0.2 --head-dim 24 \
     --team-feat --team-mode player --team-player-k 10
+
+# the best soloQ arm (§16), and the cross-domain test of its main component (§17)
+python model/winpred/train.py --data soloq --loss ce --seed 20261105 --epochs 20 \
+    --patience 4 --tag soloq-champ --head-dim 24 --num-intra 1 \
+    --champ-feat --champ-by-role
+python model/winpred/cross_domain.py --by-role \
+    --out model/winpred/reports/cross_domain_champ.json
 
 pytest model/winpred
 ```
@@ -160,7 +171,7 @@ in `pro`/focal. The two CE arms stop just short on opposite sides: pro/CE peaks
 at 0.6463 against a 0.65 gate, soloQ/CE bottoms at 0.3508 against 0.35. So
 precision/recall at high confidence is `nan` for five of six arms, and the honest
 reading is "the model never commits". The calibration bins carry the information
-a fixed band throws away — see §15 item 5.
+a fixed band throws away — see §18 item 5.
 
 ---
 
@@ -397,7 +408,7 @@ Two differences that are large enough to be structural rather than noise:
   improvement on run 1's 1.0572 but still a collapse of the probabilities).
 * **Focal is worse on soloQ and a wash on pro.** It gains 0.00156 log-loss on
   soloQ where CE gains 0.00310, and 0.0016 AUC on pro where it gains 0.0000 on
-  soloQ. Neither gap survives a seed repeat (§15).
+  soloQ. Neither gap survives a seed repeat (§18).
 
 ### The cross view — the sweep's real question
 
@@ -502,11 +513,11 @@ not work. Joint training at this ratio is a negative result.
 **Does not:** rank CE against focal. Every within-domain gap here is smaller
 than the early-stopping noise (pro selects epoch 6 vs 12 out of 40), and the
 joint comparison is one collapse against a slower collapse. It is also one seed
-throughout; §15 lists the repeat as the cheapest way to settle it.
+throughout; §18 lists the repeat as the cheapest way to settle it.
 
 **Does not** say the joint corpus is hopeless. It says *this* joint setup is:
 one shared head, no domain input, no reweighting. A domain flag or per-domain
-loss normalisation attacks exactly the failure mode observed, and §15 puts it
+loss normalisation attacks exactly the failure mode observed, and §18 puts it
 first for that reason.
 
 ---
@@ -554,7 +565,7 @@ role-only arm's +0.006 AUC over v1 therefore **cannot be the prior itself** —
 25 extra parameters changed the gradient path, the model converged somewhere
 else, and that somewhere else scored higher. That is the useful warning: on this
 test set **±0.007 AUC is what a trajectory perturbation buys**, so a single-seed
-architecture comparison of that size proves nothing (§15 item 2 is still open).
+architecture comparison of that size proves nothing (§18 item 2 is still open).
 
 Why inert: the slot embedding already contains the role, so cross-attention can
 learn role weighting from content, and an additive ±0.2–0.9 on a softmax over
@@ -857,16 +868,186 @@ Collected so it does not get re-tried:
 
 ---
 
-## 15. Next steps
+## 16. soloQ — the draft is a champion-strength lookup
+
+The brief for this section: improve soloQ, but **not** by the team/player route.
+That route is not merely undesirable, it is unavailable — soloQ has no teams and
+ten thousand strangers per side, so there is nothing to rate that has a history.
+What does exist in both domains is the champion, and §10–§13's real lesson was
+not "add strength ratings" but "**hand the head the linear part and let it find
+the interactions**". That lesson transfers; the specific feature does not.
+
+soloQ baseline (committed, §7): prior **0.69194**, model **0.68884** test
+(0.68838 val), AUC 0.5438, 2.62 M parameters, selecting epoch 31 of 40. The
+whole draft signal is therefore **0.0031 nats** — 1.6× smaller than pro's 0.005
+(§5) on 8× the rows, which is what "the outcome is ten strangers' skill" looks
+like in a number.
+
+### 16.1 The champion prior
+
+`champion_strength` (`--champ-feat`) fits a Bradley-Terry block over champion
+ids with the same machinery as §11–§13, on **train rows only**: `logit P(blue) =
+mean(r_5 blue) - mean(r_5 red) + h`. `--champ-by-role` rates champion × role
+(865 cells) instead of champion (173), because a champion's value depends on
+where it is played. It needs no scan — the champion ids are already in the
+table — and it works on both domains, because the pro pipeline builds its
+champion map *from* the soloQ one, so index 42 is the same champion everywhere.
+
+Fitted on 307 k train rows and scored directly (`sigmoid(blue - red)`, no
+fitted scale *and no side intercept* — this is the harshest version, since it
+throws away the 47.6 % blue rate the encoder gets for free):
+
+| strength estimate | train | val | test | test AUC |
+|---|---|---|---|---|
+| champion (173 cells) | 0.68902 | 0.68979 | 0.69018 | 0.5430 |
+| **champion × role (865 cells)** | 0.68669 | **0.68887** | **0.68987** | **0.5465** |
+
+**865 numbers reproduce the entire 2.6 M-parameter encoder** (0.68987 vs
+0.68884, and slightly better AUC). That is the same shape of result as §10 — the
+linear part of the signal is nearly all of it — and it is why the rest of this
+section is about *where the encoder is allowed to add anything* rather than
+about capacity. Refitting the scale and the side intercept on train rows — the
+one thing the encoder's `side_bias` does that the row above refuses to do — moves
+the 865-cell row to **0.68879** (coef 1.02, intercept −0.092, `cross_domain.py`),
+i.e. *below* the encoder. The honest reading is that the champion prior alone is
+level with the model, not 0.001 behind it.
+
+### 16.2 The pro findings do not transfer, and the val curve is noise
+
+Val log-loss, `--no-test`, same split:
+
+| arm | val log-loss | val AUC | sel. ep |
+|---|---|---|---|
+| full-width head (the §7 recipe) | 0.68955 | 0.5404 | 2 |
+| head 64 | 0.68874 | 0.5463 | 2 |
+| head 32 | 0.68917 | 0.5447 | 3 |
+| head 24 | 0.68929 | 0.5434 | 2 |
+| head 24, dropout 0.1 | 0.68974 | 0.5382 | 1 |
+| **head 24, 1 intra block** | **0.68817** | **0.5488** | 19 |
+
+`num_intra=1` looked like the one change worth keeping: best val *and* the only
+arm that kept improving (epoch 19 instead of 2). It is not. Run with the test set
+attached, the same recipe scores **0.68952**, which is **worse** than the
+baseline: **+0.00068 [+0.00020, +0.00115]**, interval excludes zero. The val
+ranking was noise, and at 38 k val rows with a 0.003-nat signal a 0.001 gap is
+not a measurement.
+
+So the §12 finding (shrink the head, 771×256 → 771×24, −0.0128 on pro) **does
+not carry over**: on soloQ the same change is a significant loss. The regimes
+differ by 8× the training data (37 k rows against 307 k) and roughly half the
+signal (0.005 nats against 0.003), and a smaller head helps in exactly one of
+them. The variable that decides it is parameters per training row, not the
+domain: pro gives the 2.6 M-param model 69 parameters per row and it has to be
+starved; soloQ gives it 8.5 and starving it only removes capacity. This is the
+first place in the file where a pro conclusion reverses.
+
+### 16.3 Handing the head the prior
+
+Val log-loss, `--no-test`:
+
+| arm | val log-loss | params |
+|---|---|---|
+| head 24, champion × role | **0.68763** | 2.44 M |
+| head 24, 1 intra, champion × role | 0.68767 | 1.65 M |
+| head 24, 1 intra, champion × role, `--champ-k 5` | 0.68772 | 1.65 M |
+| 1 intra, full-width head, champion × role | 0.68795 | 1.83 M |
+| embed 128, head 24, 1 intra, champion × role | 0.68808 | 0.43 M |
+| head 24, 1 intra, **no** champion feature | 0.68828 | 1.65 M |
+
+The feature is worth ~0.0006 val, which is 20 % of the entire draft signal. The
+final arm and its test numbers, paired against the committed baseline on the
+same 38,436 rows:
+
+| arm | params | sel. ep | test log-loss | Brier | AUC | Δ log-loss vs §7 [95 % CI] |
+|---|---|---|---|---|---|---|
+| §7 baseline (d256, 40 ep) | 2.62 M | 31 | 0.68884 | 0.24786 | 0.5438 | — |
+| **champion × role, h24, i1** | 1.65 M | 10 | **0.68845** | 0.24766 | **0.5465** | **−0.00039 [−0.00087, +0.00011]** |
+| head 24, i1, no feature | 1.65 M | 2 | 0.68952 | 0.24819 | 0.5406 | +0.00068 [+0.00020, +0.00115] |
+| champion × role, h24, i1, **no cross attention** | 0.86 M | 8 | 0.68880 | 0.24783 | 0.5456 | +0.00035 [+0.00015, +0.00054] vs the row above |
+
+**The honest verdict: −0.0004 nats, and the interval straddles zero.** The
+ranking improves (+0.0027 AUC) and the model is 37 % smaller, so the champion
+prior is a better model at equal or slightly better accuracy — but it is not a
+measurable improvement in log-loss, and calling it one would be reading a
+0.4-sigma move.
+
+### 16.4 The cross attention is worth 0.00035 nats
+
+The brief asked about "removing the cross attention role matrix"; the role prior
+was already off (it is inert — §8). Removing the cross attention *entirely*
+(`--num-cross 0`) is the stronger version, and the answer is that the layer is
+almost exactly free to delete: **+0.00035 [+0.00015, +0.00054]** log-loss for
+**half the parameters** (857 k against 1.65 M), with AUC −0.0009 and ECE worse.
+Statistically detectable, practically negligible. On soloQ the two teams barely
+need to interact: the champion prior already prices both sides, and what is left
+is a 0.001-nat residual that a 24-unit head can carry.
+
+That is the honest summary of the architecture work in this file: on pro, the
+encoder and its cross attention were never the bottleneck (§12); on soloQ they
+are not even worth their parameter count.
+
+---
+
+## 17. Does any of it predict pro? No — in either direction
+
+Two tests, because "the model does not transfer" and "the signal does not
+transfer" are different claims and the second is the one that matters.
+
+**The signal** (`cross_domain.py`): fit champion ratings on one domain's train
+rows, apply the same vector to the other domain's rows, and report the ranking
+with *no* fitting (AUC is calibration-free) plus log-loss after refitting one
+coefficient on the *target's* train rows.
+
+| target | ratings fitted on | AUC (rank only) | log-loss (scale refit) | refit coef |
+|---|---|---|---|---|
+| soloQ | soloQ | 0.5465 | 0.68879 | 1.023 |
+| soloQ | **pro** | **0.4994** | 0.69194 (the prior) | **0.001** |
+| pro | pro | 0.5568 | 0.69009 | 1.089 |
+| pro | **soloQ** | **0.5119** | 0.69257 | 0.116 |
+
+The pro-fitted vector contributes **literally nothing** to soloQ: AUC 0.4994 and
+a fitted coefficient of 0.001, i.e. the penalised fit looked at the feature and
+set it to zero. In the other direction the transfer is not zero but is worth
+0.0002 nats. **Champion strength is a property of the league, not of the
+champion** — the same champion is not equally good in soloQ and in pro, because
+the draft around it, the players and the pace are different.
+
+**The model** (`sweep.py`, both views, one seed): a soloQ-trained encoder scored
+on pro's test rows is worse than pro's own prior, and the new architecture
+transfers no better than the old one:
+
+| arm | soloQ test (ll / AUC) | pro test (ll / AUC) |
+|---|---|---|
+| §7 baseline | 0.68884 / 0.5438 | 0.69993 / 0.5070 |
+| head 24, i1, no feature | 0.68952 / 0.5406 | 0.69729 / 0.5109 |
+| prior (each view's own) | 0.69194 / 0.5000 | 0.69273 / 0.5000 |
+
+A soloQ model on pro costs **+0.0046 nats over the pro prior**, and its AUC
+(+0.011) is the only thing above chance. §7 found the same thing at AUC 0.5002
+for the old architecture; the champion prior does not change the conclusion,
+only the explanation.
+
+---
+
+## 18. Next steps
 
 The brief's "don't train more experiments yet" expired with the six-arm sweep, so
 items 1, 2 and 4 of the old list are **done** (§7): `b_side` is bias-free, soloQ
 has been run, and dropout is 0.2 everywhere. §8's architecture variant is also
-done, and §10–§14 answered the "improve the pro log-loss" brief: −0.045 nats from
-the strength feature, −0.039 more from player ratings, and −0.013 from shrinking
-the head (each measured on its own base, so they do not simply add). What is
-left:
+done, §10–§14 answered the "improve the pro log-loss" brief (−0.045 nats from
+the strength feature, −0.039 more from player ratings, −0.013 from shrinking the
+head — each measured on its own base, so they do not simply add), and §16–§17
+answered the soloQ one. What is left:
 
+0a. **soloQ is at its ceiling, and the ceiling is the champion prior.** The whole
+   draft signal is 0.0031 nats and 865 champion×role cells get 0.0031 of it; the
+   encoder's marginal contribution over that prior is 0.0003 test (0.0006 val),
+   and its log-loss improvement over §7's baseline is inside the interval. Don't
+   spend more encoder capacity here.
+   If soloQ is worth another attempt, it needs a *different* input — champion
+   pair interactions (synergies and counters, which a linear prior cannot see),
+   or the 16.19 rows that are sitting unused in the shards (~15 % more data) —
+   not a better architecture.
 0. **Player strength is a feature, not a trick.** It lives in `data.py` as a
    `[N,2]` column so the encoder can consume it; it should be a first-class
    input with its own ablation (announced lineup only, per-role ratings, a

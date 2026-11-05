@@ -112,6 +112,19 @@ def patch_remap(ck_vocab, data_vocab):
 @torch.no_grad()
 def _predict_ckpt(path, table, idx, meta, args):
     model, payload = W.load_checkpoint(path, args.device)
+    cfg = payload.get("config") or {}
+    if cfg.get("team_feat"):
+        # A strength-feature checkpoint needs a per-row feature fitted on the
+        # train rows of the data it is scoring. That is not something this
+        # script can infer (and for a cross-domain run it would not even be the
+        # same feature), so say so instead of dying inside the head with a
+        # ValueError. Score it from the predictions `train.py` saved instead.
+        raise SystemExit(
+            "%s carries a strength feature (%s); evaluate it from its saved "
+            "val_preds.npz/test_preds.npz with --preds, or compare two arms "
+            "with compare_arms.py."
+            % (Path(path).parent.name,
+               cfg.get("strength_source") or "team_feat"))
     ck_vocab = list(payload.get("patch_vocab") or [])
     data_vocab = list(meta.get("patch_vocab") or [])
     remap = None

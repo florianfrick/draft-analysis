@@ -645,3 +645,51 @@ def test_player_block_is_not_a_silent_no_op(pro_table):
     assert np.corrcoef(team, player)[0, 1] < 0.99
     assert np.std(player) > 0.5
     assert abs(np.std(player) - np.std(team)) < np.std(team)
+
+
+def test_champion_strength_never_reads_val_or_test_labels(pro_table):
+    """Same guarantee as the team/player fits: train rows only.
+
+    The champion prior is the soloQ model's main component (README 16), so the
+    fairness argument has to hold for it too - and it is checked the same way,
+    by flipping every label it must not see.
+    """
+    table, _ = pro_table
+    splits, _ = D.make_splits(table, verbose=False)
+    tr = splits["train"]
+    other = np.concatenate([splits["val"], splits["test"]])
+
+    flipped = copy.deepcopy(table)
+    flipped.y[other] = 1 - flipped.y[other]
+    for by_role in (False, True):
+        a = D.champion_strength(table, tr, by_role=by_role)
+        b = D.champion_strength(flipped, tr, by_role=by_role)
+        assert np.array_equal(a, b), by_role
+
+
+def test_apply_champion_ratings_is_the_mean_of_the_five(pro_table):
+    """A side's value is the mean of its five picks, not their sum.
+
+    The head consumes this next to a 1-logit strength term, so the scale has to
+    be a mean: a sum would make the feature 5x larger than the draft logit it is
+    combined with.
+    """
+    table, _ = pro_table
+    rating = np.arange(D.NUM_REAL_CHAMPS, dtype=np.float64)
+    feat = D.apply_champion_ratings(table, rating)
+    expect_blue = table.champ[:, :D.TEAM_SIZE].astype(np.float64).mean(axis=1)
+    expect_red = table.champ[:, D.TEAM_SIZE:].astype(np.float64).mean(axis=1)
+    assert np.allclose(feat[:, 0], expect_blue)
+    assert np.allclose(feat[:, 1], expect_red)
+
+
+def test_champion_rating_columns_are_shared_between_domains():
+    """The pro pipeline builds its champion map from the soloQ mapping, so a
+    rating vector can be moved across domains with no alignment. Pin it: if a
+    future change re-indexes one side, the cross-domain test silently measures
+    noise instead of failing."""
+    name_to_idx, n_champs = D.PRO_PIPE.load_name_to_idx()
+    assert n_champs == D.NUM_REAL_CHAMPS
+    assert name_to_idx["Annie"] == 0        # riot id order, not alphabetical
+    assert name_to_idx["Olaf"] == 1
+    assert len(set(name_to_idx.values())) == n_champs

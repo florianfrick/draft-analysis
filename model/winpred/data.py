@@ -342,6 +342,46 @@ def _age_days(dates):
     return out
 
 
+def _fit_ratings(rows_i, cols_i, vals, n_cols, lam, y, idx, weight):
+    """Sparse L2 logistic fit of `logit P(blue) = X r + h`. -> (r, h).
+
+    Shared by the team/player and the champion estimators: the design matrix is
+    the only thing that differs between them, and it is passed in as
+    coordinate lists so each caller can build it from whatever ids it has.
+
+    `lam` is per-column, which is what lets two blocks in one matrix shrink by
+    the same *pseudo-games* rule despite contributing different per-game
+    weights (`_bt_ratings` derives it, see the comment there).
+    """
+    idx = np.asarray(idx, dtype=np.int64)
+    X = torch.sparse_coo_tensor(
+        torch.as_tensor(np.stack([np.concatenate(rows_i),
+                                  np.concatenate(cols_i)])),
+        torch.as_tensor(np.concatenate(vals), dtype=torch.float64),
+        (idx.size, n_cols), check_invariants=False).coalesce()
+
+    r = torch.zeros(n_cols, dtype=torch.float64, requires_grad=True)
+    h = torch.zeros(1, dtype=torch.float64, requires_grad=True)
+    yt = torch.as_tensor(y[idx], dtype=torch.float64)
+    wt = torch.as_tensor(weight, dtype=torch.float64)
+    lam_t = torch.as_tensor(np.asarray(lam, dtype=np.float64))
+
+    opt = torch.optim.LBFGS([r, h], lr=1.0, max_iter=300, history_size=30,
+                            line_search_fn="strong_wolfe")
+
+    def closure():
+        opt.zero_grad()
+        z = torch.sparse.mm(X, r.unsqueeze(1)).squeeze(1) + h
+        bce = torch.nn.functional.binary_cross_entropy_with_logits(
+            z, yt, reduction="none")
+        loss = ((wt * bce).sum() + 0.5 * (lam_t * r ** 2).sum()) / wt.sum()
+        loss.backward()
+        return loss
+
+    opt.step(closure)
+    return r.detach().numpy(), float(h.detach())
+
+
 def _bt_ratings(tb, tr, y, idx, k, weight, verbose=False, roster=None, kp=None,
                 use_team=True):
     """Bradley-Terry ratings by L2 logistic regression, train rows only.
@@ -415,16 +455,6 @@ def _bt_ratings(tb, tr, y, idx, k, weight, verbose=False, roster=None, kp=None,
         vals.append(np.asarray(pv, dtype=np.float64))
 
     total = n_team + n_player
-    X = torch.sparse_coo_tensor(
-        torch.as_tensor(np.stack([np.concatenate(rows_i),
-                                  np.concatenate(cols_i)])),
-        torch.as_tensor(np.concatenate(vals), dtype=torch.float64),
-        (idx.size, total), check_invariants=False).coalesce()
-
-    r = torch.zeros(total, dtype=torch.float64, requires_grad=True)
-    h = torch.zeros(1, dtype=torch.float64, requires_grad=True)
-    yt = torch.as_tensor(y[idx], dtype=torch.float64)
-    wt = torch.as_tensor(weight, dtype=torch.float64)
     # Per-column penalty so both blocks shrink by *pseudo-games*, not by raw
     # lambda. For a column of per-game weight v the Hessian is 0.25 * v^2, so
     # the shrinkage factor is 0.25 v^2 n / (0.25 v^2 n + lambda); "k games of
@@ -434,22 +464,8 @@ def _bt_ratings(tb, tr, y, idx, k, weight, verbose=False, roster=None, kp=None,
     lam = np.full(total, max(k, 1e-6) / 4.0)
     if n_player:
         lam[n_team:] = 0.25 * 0.2 ** 2 * max(kp, 1e-6)
-    lam_t = torch.as_tensor(lam, dtype=torch.float64)
-
-    opt = torch.optim.LBFGS([r, h], lr=1.0, max_iter=300, history_size=30,
-                            line_search_fn="strong_wolfe")
-
-    def closure():
-        opt.zero_grad()
-        z = torch.sparse.mm(X, r.unsqueeze(1)).squeeze(1) + h
-        bce = torch.nn.functional.binary_cross_entropy_with_logits(
-            z, yt, reduction="none")
-        loss = ((wt * bce).sum() + 0.5 * (lam_t * r ** 2).sum()) / wt.sum()
-        loss.backward()
-        return loss
-
-    opt.step(closure)
-    rating = r.detach().numpy()
+    rating, side_h = _fit_ratings(rows_i, cols_i, vals, total, lam, y, idx,
+                                  weight)
 
     # Back out a per-side strength for every row: the team term plus the mean
     # of that side's five player ratings. This is the quantity the head sees,
@@ -471,8 +487,88 @@ def _bt_ratings(tb, tr, y, idx, k, weight, verbose=False, roster=None, kp=None,
         sr = sr + np.array([_mean(red_p[i]) for i in range(len(tb))])
     if verbose:
         print("  bt: %d teams, %d players, %d train games, k %.1f, h %+.3f"
-              % (n_team, n_player, idx.size, k, float(h.detach())))
+              % (n_team, n_player, idx.size, k, side_h))
     return np.stack([sb, sr], axis=1).astype(np.float32)
+
+
+def _champ_cells(table, by_role=False):
+    """[N, 10] rating-column index per slot, champion-major (5c + r).
+
+    Champion ids are shared by both domains: `data/pro play/pipeline.py` builds
+    its name -> idx map *from* the soloQ `champ_mapping.json`, so a champion has
+    the same index in a soloQ row and a pro row. That is what makes a rating
+    fitted on one domain applicable to the other.
+    """
+    champ = np.asarray(table.champ)
+    if not by_role:
+        return champ
+    return 5 * champ + np.asarray(table.role)
+
+
+def _champ_cells_size(table, by_role=False):
+    # +1 because a table may carry the UNK champion index (173), which is a real
+    # cell with its own rating rather than an error: it is a handful of rows and
+    # dropping them would silently change the split's row count.
+    champ = np.asarray(table.champ)
+    n_champs = max(NUM_REAL_CHAMPS, int(champ.max()) + 1)
+    return n_champs * 5 if by_role else n_champs
+
+
+def apply_champion_ratings(table, rating, by_role=False):
+    """Per-side mean of a champion rating vector -> [N, 2] float32.
+
+    Split out of `champion_strength` so a vector fitted on one domain can be
+    applied to another table's rows - the cross-domain test in README 16.
+    """
+    cells = _champ_cells(table, by_role)
+    rating = np.asarray(rating, dtype=np.float64)
+    sb = rating[cells[:, :TEAM_SIZE]].mean(axis=1)
+    sr = rating[cells[:, TEAM_SIZE:]].mean(axis=1)
+    return np.stack([sb, sr], axis=1).astype(np.float32)
+
+
+def champion_strength(table, train_idx, k=20.0, by_role=False, verbose=False,
+                      return_ratings=False):
+    """Per-side champion strength logits, fitted on **train rows only**.
+
+    The soloQ analogue of `team_strength`, and the one strength feature that
+    exists in both domains: there is no team to rate in solo queue and the
+    players are thousands of strangers, but a champion is a champion in both.
+
+    Model: `logit P(blue) = mean(r_5 blue) - mean(r_5 red) + h`, i.e. the same
+    Bradley-Terry block as `_bt_ratings`' player block (each of the five picks
+    contributes 1/5, so the side term is the mean), fitted on the champion ids
+    the table already carries - no scan, and no dependence on the CSV pipelines.
+
+    `by_role=True` indexes `champion x role` (865 cells) *instead of* the
+    champion block. Not in addition to it: the two are nested, so a joint fit
+    would be identified only by its prior and would land wherever LBFGS stopped
+    - the same failure as `--team-mode roster` (README 13). A champion's value
+    does depend on its role, so this is the more expressive of the two, at the
+    cost of ~350 games per cell instead of ~3,500.
+
+    `k` is pseudo-games of shrinkage: `lambda = 0.25 * (1/5)^2 * k`. With this
+    much data it is nearly inert (3,500 games against k = 20), which is the
+    point - the estimate, not the prior, is doing the work here.
+    """
+    cells = _champ_cells(table, by_role)
+    n_cols = _champ_cells_size(table, by_role)
+
+    idx = np.asarray(train_idx, dtype=np.int64)
+    rows_i = [np.repeat(np.arange(idx.size), N_SLOTS)]
+    cols_i = [cells[idx].ravel().astype(np.int64)]
+    vals = [np.tile([0.2] * TEAM_SIZE + [-0.2] * TEAM_SIZE, idx.size)]
+
+    lam = np.full(n_cols, 0.25 * 0.2 ** 2 * max(k, 1e-6))
+    rating, side_h = _fit_ratings(rows_i, cols_i, vals, n_cols, lam,
+                                  table.y.astype(np.float64), idx,
+                                  np.ones(idx.size))
+    if verbose:
+        print("  champ: %d of %d cells seen in train, %d train games, "
+              "k %.1f, h %+.3f"
+              % (np.unique(cells[idx]).size, n_cols, idx.size, k, side_h))
+    feat = apply_champion_ratings(table, rating, by_role=by_role)
+    return (feat, rating) if return_ratings else feat
 
 
 def team_strength(table, train_idx, k=10.0, corpus="2022", verbose=False,
