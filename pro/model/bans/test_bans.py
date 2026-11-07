@@ -1,4 +1,4 @@
-"""Tests for the ban-aware policy (branch exp/bans).
+"""Tests for the ban-aware policy (`pro/model/bans/`).
 
 What each one pins, and what would fail silently without it:
 

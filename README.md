@@ -60,7 +60,16 @@ path prefix, not a naming convention. Weights are git-ignored in both.
 Both frontend defaults are pro-track (`frontend/server.py`):
 
 - **role board / masked completion** — `masking-proonly-randomvalsplit-through-wlds-ig-tes`
-- **next move** — `nextpick-proto-ensemble/ensemble.json` (mean of three members' logits)
+- **next move** — `nextpick-bans-aware-through-wlds-ig-tes` (pro-only policy + `ban_side`, `ban_fearless`, `counter_rank`)
+
+The next-move default changed on 2026-11-07 from the 3-member
+`nextpick-proto-ensemble` to the ban-aware arm: same corpus and split, three
+flags on, **+0.60 pp top-5 over its own control** (0.5056 vs 0.4995, p 4.3e-8).
+That is a *val* number on one seed — the ensemble's +1.33 pp was measured on the
+439 draft rows neither it nor its predecessor had trained on, so the two are not
+comparable and must not be added (`pro/model/bans/README.md`, `STATUS.md` §7).
+The ensemble is still selectable in the UI; its members are fixed at three and
+evicting one on a single seed would void the number that describes it.
 
 The measured case for it (`STATUS.md` §7, pinned Worlds 2026 test split):
 
@@ -222,4 +231,5 @@ last two rows):
 | pro | `masking-proonly` | pro drafts only, from scratch |
 | pro | `nextpick-proonly` | pro drafts only, encoder + policy from scratch |
 | pro | `masking-proonly-randomvalsplit-through-wlds-ig-tes` | **shipped role board** |
-| pro | `nextpick-proto-ensemble` | **shipped next move** (3-member logit mean) |
+| pro | `nextpick-bans-aware-through-wlds-ig-tes` | **shipped next move** (ban-aware policy) |
+| pro | `nextpick-proto-ensemble` | 3-member logit mean — selectable, the previous default |

@@ -30,8 +30,11 @@ are pro-track because the pro-only recipe is the better model.
   nextpick-policy     soloQ encoder + policy head
   nextpick-proonly    pro drafts only, encoder + policy head from scratch
                       (through 2026-10-31)
+  nextpick-bans-*     the pro-only policy with the ban-awareness flags on
+                      (`ban_side`, `ban_fearless`, `counter_rank`); the
+                      `aware` arm is the shipped next-move default
   nextpick-proto-ensemble   `ensemble.json`: the mean of three nextpick
-                      members' policy logits (the shipped next-move default)
+                      members' policy logits (selectable, no longer default)
 
 A `-through-<league>-<a>-<b>` suffix states which series the training data ends
 on, so two runs of the same stage are distinguishable and a stale artefact
@@ -50,12 +53,20 @@ train with `--no-test`), so `STATUS.md` §7 - the pinned-test scores - still
 belongs to the originals; the only honest comparison for these is
 `compare.py --split shared --other old` against an original, which is in §7 too.
 
-The next-move default is not a checkpoint but `nextpick-proto-ensemble/
-ensemble.json`: three pro-only policy arms whose policy logits are averaged
-(the members alone are no better than the checkpoint they replaced). It is
-scored on the rows neither it nor its predecessor trained on - see
-`pro/model/proto/README.md` and `compare_shipped.py`. The header shows that number
-as "held-out top-5", not as a val score.
+The next-move default is `nextpick-bans-aware-through-wlds-ig-tes`: the
+pro-only policy plus all three ban-awareness flags, so the ban block (side and
+fearless pool included) is a real input instead of something the model has to
+infer from which champions are already gone. It replaced the 3-member
+`nextpick-proto-ensemble`, which stays selectable.
+
+The two defaults are not justified the same way, and the difference matters.
+The ban-aware arm's number is a **val** score on the same split its control
+trained and selected under (aware 0.5056 vs control 0.4995 top-5, +0.60 pp,
+paired bootstrap p = 4.3e-8), and it is a **single seed** - the single-switch
+arms are flat, so the split between interaction and seed luck is unresolved
+(`pro/model/bans/README.md`). The ensemble's +1.33 pp was measured on the 439
+draft rows neither it nor its predecessor had trained on, which is a different
+and harder set; do not read the two as comparable, and do not add them.
 
 `_ckpt_roles` reads that prefix, so the dropdown never offers a policy
 checkpoint to the role board. Select via --ckpt / --policy-ckpt (CLI), the
@@ -126,14 +137,30 @@ CKPT_PATTERNS = tuple(            # what the dropdown offers (no torch.load)
 # Trained with `--no-test`, so it has no pinned-test score - §7 of STATUS.md is
 # the originals' number, not its. Override with --ckpt / --policy-ckpt.
 MASKED_DEFAULT = PRO_CKPT_DIR / "masking-proonly-randomvalsplit-through-wlds-ig-tes" / "best.pt"
-# The next-move default is an ENSEMBLE (mean of three members' policy logits),
-# not a single checkpoint. It is the only arm that beat the previous default on
-# rows neither had trained on: +1.33 pp top-5 (bootstrap [+0.64, +2.07],
-# p = 2.6e-4), +0.94 pp top-1, +1.79 pp top-10 over
-# `nextpick-proonly-randomvalsplit-*`. Each member alone is NOT better than the
-# previous default (base64 +0.06 pp, n.s.), so do not "simplify" this to one
-# file without re-measuring: `python pro/model/proto/compare_shipped.py`.
-POLICY_DEFAULT = PRO_CKPT_DIR / "nextpick-proto-ensemble" / "ensemble.json"
+# The next-move default is the ban-aware arm: the same pro-only policy, plus
+# `ban_side` / `ban_fearless` / `counter_rank` (pro/model/bans/). The flags are
+# NOT passed here - they live in the checkpoint's own config and infer.py reads
+# them from there, so an old checkpoint still rebuilds unchanged.
+#
+# Why this one: aware 0.5056 vs control 0.4995 top-5 on the same val set,
+# +0.60 pp, paired bootstrap p = 4.3e-8, CI [+0.39, +0.82] pp. A ban-aware
+# model that also predicts better needs no further argument.
+#
+# Why to stay sceptical: it is ONE SEED. The single-switch arms (counter-only,
+# fearless-only) are flat, so how much of the gain is the interaction and how
+# much is seed luck is unresolved; pro/model/bans/README.md calls it "promising
+# and unconfirmed" until a second seed runs. Re-run sweep.py before trusting a
+# re-measurement.
+#
+# It replaces `nextpick-proto-ensemble`, which is NOT deleted: its members are
+# fixed at three, so swapping one out would void the number that describes it.
+# The two claims are on different sets (val vs 439 held-out rows) and are not
+# comparable.
+POLICY_DEFAULT = PRO_CKPT_DIR / "nextpick-bans-aware-through-wlds-ig-tes" / "best.pt"
+# Still selectable in the dropdown and still pinned by the ensemble tests: a
+# `.json` manifest is a model, and `read_ensemble` + logit-averaging is the
+# contract the +1.33 pp was measured under. Do not "simplify" it to one .pt.
+ENSEMBLE_CKPT = PRO_CKPT_DIR / "nextpick-proto-ensemble" / "ensemble.json"
 UPLOAD_DIR = FRONTEND_DIR / "uploaded"
 MAX_UPLOAD_BYTES = 512 * 1024 * 1024      # generous; ckpts are 20-150 MB
 LOAD_LOCK = threading.Lock()              # serialize runtime model swaps
@@ -1517,8 +1544,10 @@ def main():
     ap.add_argument("--policy-ckpt", default="",
                     help="next-move checkpoint, or an ensemble.json manifest - "
                          "loaded alongside the role model, not instead of it "
-                         "(default: pro/model/checkpoints/nextpick-proto-ensemble/"
-                         "ensemble.json, a 3-member logit ensemble)")
+                         "(default: pro/model/checkpoints/"
+                         "nextpick-bans-aware-through-wlds-ig-tes/best.pt, the "
+                         "ban-aware arm; nextpick-proto-ensemble/ensemble.json "
+                         "is still selectable, it is a 3-member logit mean)")
     ap.add_argument("--no-policy", action="store_true",
                     help="run the role board only, without a next-move model")
     args = ap.parse_args()

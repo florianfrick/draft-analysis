@@ -66,7 +66,7 @@ def parse_args(argv=None):
     ap.add_argument("--num-heads", type=int, default=8)
     ap.add_argument("--dropout", type=float, default=0.1)
     ap.add_argument("--state-dim", type=int, default=64)
-    # ---- ban-awareness (branch exp/bans). All off = the shipped model, so a
+    # ---- ban-awareness (pro/model/bans/). All off = the shipped model, so a
     # run with these omitted is a control that must reproduce the baseline.
     ap.add_argument("--ban-side", dest="ban_side", action="store_true",
                     default=False,

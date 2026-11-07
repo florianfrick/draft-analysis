@@ -26,7 +26,7 @@ graph TD
 
     Policy --> Eval["evaluate.py<br/>exact top-1/5/10 + block partner@1/5<br/>paired McNemar + game bootstrap"]
     Eval --> Arms["7 arms, one seed each<br/>36-epoch round vs 64-epoch round"]
-    Arms --> Ens["nextpick-proto-ensemble<br/>mean of 3 members' logits<br/>= shipped next-move default"]
+    Arms --> Ens["nextpick-proto-ensemble<br/>mean of 3 members' logits<br/>= frontend default 2026-11-05..07"]
 ```
 
 - **Every arm starts from the same `runs/masked-pro` encoder** (2.49 M params,
@@ -47,8 +47,8 @@ graph TD
   unfreezes everything, **embeddings included** (the production policy never
   unfreezes its embedding tables).
 - **`ProtoPolicy` has its own `forward`.** It calls `ban_context` without
-  kind/side ids and never adds the counter term, so the `exp/bans` switches are
-  not part of any arm in this directory.
+  kind/side ids and never adds the counter term, so the ban-awareness switches
+  are not part of any arm in this directory.
 - **The shipped artefact is a manifest, not a checkpoint.** `ensemble.json`
   names three members and the evaluator averages their **logits**; no single
   member beats the old default, so the gain is the averaging (3× inference).
@@ -227,9 +227,19 @@ Reports: `pro/model/proto/reports/test_arms.json`, `test_64.json`, `test_ens.jso
 * **The 64-epoch arms are still improving** (`combo64` peaked at its last
   epoch). The schedule is not converged, so the absolute numbers are a floor.
 
-## 6. Promoted: the ensemble is the frontend's next-move default
+## 6. Promoted: the ensemble was the frontend's next-move default
 
-`ensemble3` beat the checkpoint the frontend was serving, so it is now the
+**Superseded on 2026-11-07** by the ban-aware arm
+(`nextpick-bans-aware-through-wlds-ig-tes`, `pro/model/bans/README.md`), which is
+selectable-for-selectable a different model on a different comparison: +0.60 pp
+top-5 against its own control on the *val* split. That number and the +1.33 pp
+below are measured on different sets — val versus 439 rows neither model had
+trained on — so they are not comparable and must not be added. The manifest is
+kept, not deleted, and is still offered in the dropdown: its members are fixed
+at three, so evicting one on a single seed would void the number that describes
+it. Nothing below has changed.
+
+`ensemble3` beat the checkpoint the frontend was serving, so it became the
 default (`pro/model/checkpoints/nextpick-proto-ensemble/`). The comparison that
 authorised it is not the test split above — the members and the old default were
 trained on *different* splits, so neither side's own number is comparable. The
@@ -244,7 +254,7 @@ Top-1 +0.94 pp (p = .0036), top-10 +1.79 pp, block partner@5 +0.54 pp
 default** (base64 +0.06 pp, p = .90; combo64 +0.33 pp, p = .44; unfreeze36
 −1.49 pp, p = 5e-5) — the gain is the averaging, not a better member. That is
 why the shipped artefact is the manifest and not a checkpoint, and why
-`test_ensemble_default_is_a_manifest` fails if someone "simplifies" it.
+`test_ensemble_manifest_is_still_servable` fails if someone "simplifies" it.
 
 Reproduce with `python pro/model/proto/compare_shipped.py`. `shipped_val` is
 reconstructed exactly (42,121/4,758/0, `pinned_test=None` — the pin would

@@ -295,8 +295,10 @@ def test_turn_highlight_is_board_derived():
 
 # --- finetune checkpoints + runtime model switching ---------------------
 
-FINETUNE_GLOB = str(S.ROOT / "model" / "checkpoints"
-                    / "masking-finetune" / "*.pt")
+# The finetune stage lives in the solo-queue track; the split moved it out of
+# `model/checkpoints/`. Both globs in this file named the old location and so
+# skipped instead of failing - see the note on the policy_ckpt fixture.
+FINETUNE_GLOB = str(S.SOLOQ_CKPT_DIR / "masking-finetune" / "*.pt")
 
 
 def _finetune_paths():
@@ -417,25 +419,50 @@ def test_resolve_ckpt_path_validation():
 
 
 # --------------------------------------------------------------- ensembles
-def test_ensemble_default_is_a_manifest():
-    """The shipped next-move default is a manifest, not a checkpoint.
+def test_ensemble_manifest_is_still_servable():
+    """The proto ensemble is no longer the default, but must stay loadable.
 
-    Its members alone are no better than the checkpoint it replaced, so a
-    future "simplification" to one .pt would silently lose the only measured
-    gain. If this fails, re-run `pro/model/proto/compare_shipped.py` before
-    changing the default.
+    Its members alone are no better than the checkpoint it replaced, so the
+    manifest is the only thing carrying that measurement; a future cleanup that
+    drops or flattens it would lose the +1.33 pp claim. Re-run
+    `pro/model/proto/compare_shipped.py` before deleting anything here.
 
     The checkpoint stores are git-ignored (weights), so only the code-level half
     is asserted unconditionally; the on-disk half skips on a fresh clone, like
     the other checkpoint tests.
     """
-    assert S.POLICY_DEFAULT.suffix == ".json"
-    if not S.POLICY_DEFAULT.is_file():
+    assert S.ENSEMBLE_CKPT.suffix == ".json"
+    if not S.ENSEMBLE_CKPT.is_file():
         pytest.skip("ensemble manifest not on disk (checkpoints are ignored)")
-    members, ev, _ = S.read_ensemble(S.POLICY_DEFAULT)
+    members, ev, _ = S.read_ensemble(S.ENSEMBLE_CKPT)
     assert len(members) >= 2
     assert all(m.is_file() and m.suffix == ".pt" for m in members)
     assert ev.get("top5") and ev.get("n_drafts")
+
+
+def test_policy_default_is_the_ban_aware_arm():
+    """A tripwire, not a law: this pins the default the project chose.
+
+    Two ways to get the default wrong and both look fine at runtime - point it
+    at a ban-blind checkpoint, or pass the flags at construction time instead of
+    reading them from the checkpoint (which serves a model whose weights were
+    trained with different modules present). So the assertion is on the *built*
+    model, which is where infer.py's config read lands.
+
+    If a better next-move model ships, update this test and the three docs that
+    name the default (`README.md`, `STATUS.md` §7, `frontend/README.md`)
+    together. Failing here means the artefact and the documentation disagree,
+    which is the thing worth catching.
+    """
+    assert S.POLICY_DEFAULT.suffix == ".pt", "the default is a checkpoint now"
+    assert "bans-aware" in S.POLICY_DEFAULT.parent.name
+    if not S.POLICY_DEFAULT.is_file():
+        pytest.skip("checkpoint not on disk (checkpoints are ignored)")
+    model = S.make_predictor(S.POLICY_DEFAULT, device="cpu").models[0]
+    assert model.ban_side is True
+    assert model.ban_fearless is True
+    assert model.counter_rank == 32
+    assert hasattr(model, "counter") and hasattr(model, "ban_context")
 
 
 def test_ensemble_predictor_averages_member_logits():
@@ -445,11 +472,11 @@ def test_ensemble_predictor_averages_member_logits():
     contract so a refactor cannot quietly change what the numbers describe.
     """
     import torch
-    if not S.POLICY_DEFAULT.is_file():
+    if not S.ENSEMBLE_CKPT.is_file():
         pytest.skip("ensemble manifest absent")
-    pred = S.make_predictor(S.POLICY_DEFAULT, device="cpu")
+    pred = S.make_predictor(S.ENSEMBLE_CKPT, device="cpu")
     assert pred.kind == "policy"
-    assert len(pred.models) == len(S.read_ensemble(S.POLICY_DEFAULT)[0])
+    assert len(pred.models) == len(S.read_ensemble(S.ENSEMBLE_CKPT)[0])
 
     picks = [1, 2, None, None, None, None, None, None, None, None]
     bans = [11, 12, 13, 14, 15, 16]
@@ -479,7 +506,7 @@ def test_read_ensemble_rejects_bad_manifests():
     being tested, so a tmp_path outside the repo would pass for the wrong
     reason.
     """
-    good = S.read_ensemble(S.POLICY_DEFAULT)[0][0]
+    good = S.read_ensemble(S.ENSEMBLE_CKPT)[0][0]
     work = Path(tempfile.mkdtemp(prefix=".pytest_ens_", dir=str(S.ROOT)))
     try:
         man = work / "ensemble.json"
@@ -627,12 +654,21 @@ def test_drafts_endpoints(app, httpd):
 
 # --- next-move policy models --------------------------------------------
 
-POLICY_GLOB = str(S.ROOT / "model" / "checkpoints"
-                  / "nextpick-policy" / "best_policy.pt")
+POLICY_GLOB = str(S.PRO_CKPT_DIR / "nextpick-*" / "best.pt")
 
 
 @pytest.fixture()
 def policy_ckpt():
+    """A working next-move model: the shipped default if present, else any.
+
+    This fixture used to name one hand-picked path under `model/checkpoints/`.
+    The two-track split removed that path, and because the fixture called
+    pytest.skip instead of failing, 14 next-move tests quietly stopped running
+    while the suite still reported green. Preferring POLICY_DEFAULT also means
+    these tests exercise the model that actually ships.
+    """
+    if S.POLICY_DEFAULT.is_file():
+        return str(S.POLICY_DEFAULT)
     hits = sorted(glob.glob(POLICY_GLOB))
     if not hits:
         pytest.skip("no policy checkpoints on disk")
@@ -645,7 +681,7 @@ def _empty_board(first_pick=0):
 
 
 def test_policy_checkpoint_switches_kind(app, policy_ckpt):
-    """A best_policy.pt must load as a next-move model, not an encoder."""
+    """A `nextpick-*` checkpoint must load as a next-move model, not an encoder."""
     pred = S.load_predictor(Path(policy_ckpt))
     assert pred.kind == "policy"
     info = S.model_info(pred)
@@ -653,7 +689,10 @@ def test_policy_checkpoint_switches_kind(app, policy_ckpt):
     assert info["metric"] == "next-move top5"
     # policy checkpoints report val next-move top5, not champ_top5
     assert info["val_top5"] is None or 0.0 <= info["val_top5"] <= 1.0
-    assert info["ckpt"].endswith("best_policy.pt")
+    # The contract is the `nextpick-` prefix, not a literal filename: the
+    # stores name artefacts `<stage>-<recipe>-through-<series>/best.pt`, and
+    # pinning `best_policy.pt` here failed the moment the default moved.
+    assert info["ckpt"].startswith("nextpick-")
 
 
 def test_next_move_endpoint_returns_a_ban_decision(app, httpd, policy_ckpt):

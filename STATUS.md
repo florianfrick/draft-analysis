@@ -49,7 +49,8 @@ of the two UI slots may load it.
 | pro-only, all data, 16.20 val | `nextpick-proonly-through-wlds-ig-tes/best.pt` | next-move ranking |
 | pro-only, all data, random val | `masking-proonly-randomvalsplit-through-wlds-ig-tes/best.pt` | masked completion, role board — **the shipped default** |
 | pro-only, all data, random val | `nextpick-proonly-randomvalsplit-through-wlds-ig-tes/best.pt` | next-move ranking — the shipped default until 2026-11-05 |
-| pro-only, seeded 80/10/10 split | `nextpick-proto-ensemble/ensemble.json` | next-move ranking — **the shipped default** (mean of 3 members' logits; +1.33 pp top-5 over the row above on the rows neither trained on — `pro/model/proto/README.md` §6) |
+| pro-only, seeded 80/10/10 split | `nextpick-proto-ensemble/ensemble.json` | next-move ranking — the shipped default until 2026-11-07 (mean of 3 members' logits; +1.33 pp top-5 over the row above on the rows neither trained on — `pro/model/proto/README.md` §6) |
+| pro-only, ban-aware | `nextpick-bans-aware-through-wlds-ig-tes/best.pt` | next-move ranking — **the shipped default** (same corpus and split as the `-randomvalsplit-` row, plus `ban_side` / `ban_fearless` / `counter_rank`; +0.60 pp top-5 over its own control, p 4.3e-8, **one seed** — `pro/model/bans/README.md`) |
 
 The `-through-` checkpoints were added on 2026-11-04: same architecture and seed,
 retrained on the whole corpus with no test split (§7). The suffix states which
@@ -70,6 +71,26 @@ rows: on the 458 games that are val for both it and the original, masked top-5 i
 compared to anything this way — it trained on nearly every row, so no honest
 common set exists with it — which is why it is kept as a recorded experiment
 rather than as a candidate.
+
+The ban-aware arm (2026-11-07) is the `-randomvalsplit-` recipe plus three
+off-by-default flags on `PolicyValueModel` — `ban_side` (the ban block gets the
+side it was made by, derived as `BAN_SIDE_BY_SLOT ^ first_pick`), `ban_fearless`
+(the fearless pool is an input), `counter_rank=32` (a rank-limited
+counter-pick interaction). Its control reproduces the shipped model to 4e-5, so
+the flags are the only difference: **0.5056 vs 0.4995 top-5, +0.60 pp, paired
+bootstrap p = 4.3e-8, CI [+0.39, +0.82] pp**. It is a val number on the split its
+control trained and selected under, not a held-out one.
+
+Two caveats belong with that number, and the frontend default rests on it anyway
+because the model is both more correct and not worse. First, it is **one seed**:
+each single switch is flat (counter-only +0.08 pp, fearless-only +0.11 pp,
+p 0.485), so the interaction and seed luck are not separated until a second seed
+runs. Second, its predecessor's claim is not comparable — the ensemble's +1.33 pp
+was measured on the 439 draft rows neither it nor its predecessor trained on.
+Do not add the two numbers, and do not quote the ban-aware arm as beating the
+ensemble. Why it is not a 4th ensemble member: the manifest's members are fixed
+at three, and evicting one on a single seed would void the number that describes
+the manifest (`pro/model/bans/README.md`).
 
 Weights are git-ignored. 18 older checkpoints (1.9 GB) were deleted on
 2026-11-03; their numbers live in `pro/model/proonly/reports/` and §4/§6 here, but
@@ -902,8 +923,18 @@ Green today (2026-11-07, after the `solo_queue/` + `pro/` split):
 (`test_swap_sides_flips_econ_team_pairs`, pre-existing);
 `pytest pro/model/proonly pro/model/bans pro/model/test_split` 47 passed 1 skipped;
 `pytest "data/pro play"` 41 passed;
-`pytest frontend` 58 passed 18 skipped (the ensemble-symlink test skips on
+`pytest frontend` 76 passed 1 skipped (the ensemble-symlink test skips on
 Windows, where `os.symlink` needs a privilege the shell does not have).
+
+**`pytest frontend` read 58 passed 18 skipped for a while after the split, and
+that was a lie.** Three globs in `test_server.py` still named pre-split paths
+(`model/checkpoints/nextpick-policy/best_policy.pt`, `.../masking-finetune/*.pt`)
+and the `policy_ckpt` fixture called `pytest.skip` when its glob came up empty,
+so 18 next-move and finetune tests stopped running while the suite stayed green.
+A skip that means "the fixture is broken" and a skip that means "this clone has
+no weights" look identical; only the count gives it away. The globs are fixed and
+the fixture now prefers `POLICY_DEFAULT`, so the endpoint tests exercise the model
+that actually ships.
 `solo_queue/analysis/explorer/test_explorer.py` is excluded: it opens an HTTP
 connection at import time and errors during collection when no server is running.
 

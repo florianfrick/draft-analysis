@@ -323,7 +323,7 @@ def load_policy_model(path, device="cpu", payload=None):
         n_econ=cfg.get("n_econ", 0), dropout=cfg.get("head_dropout", 0.0),
         n_patches=cfg.get("n_patches", 0), with_value=with_value, **extra,
         # Ban-awareness switches, read from the checkpoint. A checkpoint
-        # written before branch exp/bans has none of these keys, so it
+        # written before the flags existed has none of these keys, so it
         # rebuilds the original module set and loads exactly as it did.
         **({} if cls is not PolicyValueModel else {
             "ban_side": bool(cfg.get("ban_side", False)),

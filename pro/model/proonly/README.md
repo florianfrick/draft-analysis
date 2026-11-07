@@ -89,7 +89,7 @@ What the code actually does, and the defaults that matter:
   the model is D256 / 2 intra / 1 cross / 8 heads with `dropout 0.1` (not the
   soloQ 0.0 — 37k drafts against 2.5M parameters is the overfitting regime).
 - **The ban switches exist but default off** (`--ban-side`, `--ban-fearless`,
-  `--counter-rank 0`), so every checkpoint recorded before `exp/bans` is
+  `--counter-rank 0`), so every checkpoint recorded before the flags existed is
   ban-blind; see `pro/model/bans/README.md`.
 - Selection in stage 1 is `rel_champ_top5` on val, not raw top-5, because the
   raw number tracks how easy the window is and this window is much easier than
@@ -97,9 +97,9 @@ What the code actually does, and the defaults that matter:
 
 ### Stage 2, ban-aware variant (`--ban-side --ban-fearless --counter-rank`)
 
-The diagram above is the default path. The `exp/bans` branch adds three
-off-by-default switches to the same `PolicyValueModel`; this is the same
-forward pass with all three on.
+The diagram above is the default path. The ban-awareness flags
+(`pro/model/bans/`) add three off-by-default switches to the same
+`PolicyValueModel`; this is the same forward pass with all three on.
 
 ```mermaid
 graph TD
@@ -146,8 +146,8 @@ What the switches actually change, in the order the diagram reads:
   1 cross, no value head) and `train_policy.py` calls
   `set_freeze_encoder(False)`, exactly like the default path above. An earlier
   revision of this diagram read "SoloQ encoder (frozen), intra ×6 + cross ×3" —
-  that was copied from `solo_queue/model/policy/` and is wrong for this branch: nothing in
-  `exp/bans` touches soloQ data or freezes the trunk.
+  that was copied from `solo_queue/model/policy/` and is wrong for this variant: nothing in
+  the ban-awareness work touches soloQ data or freezes the trunk.
 - **`ban_side`** adds a 3-row side embedding to the ban tokens (blue / red /
   none), derived as `BAN_SIDE_BY_SLOT ^ first_pick`. Your ban and the enemy's
   ban stop being the same fact. Zero-initialised.
@@ -192,7 +192,8 @@ inference and the stage:
 | `nextpick-proonly-through-wlds-ig-tes` | `train_policy.py`, init from the row above | the same, on all 46,879 drafts |
 | `masking-proonly-randomvalsplit-through-wlds-ig-tes` | `train_masked.py --no-test --val-split random` | the same, val drawn at random per patch — **the shipped default** |
 | `nextpick-proonly-randomvalsplit-through-wlds-ig-tes` | `train_policy.py`, init from the row above | the same — the next-move default until 2026-11-05 |
-| `nextpick-proto-ensemble/ensemble.json` | `pro/model/proto/` (seeded 80/10/10 split) | mean of 3 members' logits — **the shipped next-move default** (`pro/model/proto/README.md` §6) |
+| `nextpick-proto-ensemble/ensemble.json` | `pro/model/proto/` (seeded 80/10/10 split) | mean of 3 members' logits — the next-move default until 2026-11-07 (`pro/model/proto/README.md` §6) |
+| `nextpick-bans-aware-through-wlds-ig-tes` | `pro/model/bans/` (this recipe + `ban_side`, `ban_fearless`, `counter_rank`) | **the shipped next-move default** (`pro/model/bans/README.md`) |
 
 **The `-through-<league>-<a>-<b>` suffix** states which series the training data
 ends on. `--out-dir` is refused unless it ends with the suffix derived from the

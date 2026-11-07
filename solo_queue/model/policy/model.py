@@ -33,7 +33,7 @@ ban. Do not "simplify" the split below without handling those rows.
 Value head output: [B, 1] win logit for the side to move (or blue-win
 logit — configurable). Default: blue-win logit (matches finetune).
 
-Ban-awareness (branch exp/bans). The description above is the original
+Ban-awareness (`pro/model/bans/`). The description above is the original
 "ban-blind" shape: bans reach the logits only through one cross-attention
 block and a single pooled vector, and the fearless pool is a legality mask
 rather than an input. Three switches make the model intrinsically ban-aware,
