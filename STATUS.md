@@ -2,7 +2,7 @@
 
 Last updated 2026-11-03. This is the single narrative document: what the models
 are, what they measure, what failed and why, and what to do next. It replaces
-`assumptions.md`, `plan-model-v2.md` and `model/proonly/FINDINGS.md`, whose
+`assumptions.md`, `plan-model-v2.md` and `pro/model/proonly/FINDINGS.md`, whose
 content is distilled here.
 
 Operational docs stay separate and this file does not repeat them: `README.md`
@@ -31,10 +31,12 @@ they are here so nobody re-runs them.
 
 ## 1. Where it stands
 
-Nine checkpoints, all under `model/checkpoints/`. The directory name states the
-inference the checkpoint serves and the stage that produced it, and
-`frontend/server._ckpt_roles` reads that prefix to decide which of the two UI
-slots may load it.
+Nine checkpoints, each in its track's store: `solo_queue/model/checkpoints/`
+for `masking-soloqueue`, `masking-finetune` and `nextpick-policy`; everything
+else under `pro/model/checkpoints/`. The track says which data trained the
+model; the directory name states the inference it serves and the stage that
+produced it, and `frontend/server._ckpt_roles` reads that prefix to decide which
+of the two UI slots may load it.
 
 | class | checkpoint | inference |
 |---|---|---|
@@ -46,7 +48,8 @@ slots may load it.
 | pro-only, all data, 16.20 val | `masking-proonly-through-wlds-ig-tes/best.pt` | masked completion, role board |
 | pro-only, all data, 16.20 val | `nextpick-proonly-through-wlds-ig-tes/best.pt` | next-move ranking |
 | pro-only, all data, random val | `masking-proonly-randomvalsplit-through-wlds-ig-tes/best.pt` | masked completion, role board — **the shipped default** |
-| pro-only, all data, random val | `nextpick-proonly-randomvalsplit-through-wlds-ig-tes/best.pt` | next-move ranking — **the shipped default** |
+| pro-only, all data, random val | `nextpick-proonly-randomvalsplit-through-wlds-ig-tes/best.pt` | next-move ranking — the shipped default until 2026-11-05 |
+| pro-only, seeded 80/10/10 split | `nextpick-proto-ensemble/ensemble.json` | next-move ranking — **the shipped default** (mean of 3 members' logits; +1.33 pp top-5 over the row above on the rows neither trained on — `pro/model/proto/README.md` §6) |
 
 The `-through-` checkpoints were added on 2026-11-04: same architecture and seed,
 retrained on the whole corpus with no test split (§7). The suffix states which
@@ -69,7 +72,7 @@ common set exists with it — which is why it is kept as a recorded experiment
 rather than as a candidate.
 
 Weights are git-ignored. 18 older checkpoints (1.9 GB) were deleted on
-2026-11-03; their numbers live in `model/proonly/reports/` and §4/§6 here, but
+2026-11-03; their numbers live in `pro/model/proonly/reports/` and §4/§6 here, but
 their paired comparisons can no longer be re-run.
 
 **The corpus is pinned** at `pipeline.CORPUS_MAX_DATE = "2026-11-04 23:59:59"`
@@ -97,7 +100,7 @@ final-day series, 7 games, all patch 16.20. Split: **42,100 train / 4,768 val /
 masked modelling. Sketch in the root README: embedding → Siamese intra-team
 attention → symmetric inter-team cross-attention → slot-level champion and role
 heads, plus pooling to auxiliary heads. Frozen as an I/O contract and enforced
-by tests (`model/pretraining/soloq_model.py`).
+by tests (`solo_queue/model/pretraining/base_model.py`).
 
 **Why sets, not sequences.** A champion cannot repeat and only the current state
 matters for comp value, so permutation invariance is wanted and there are no
@@ -470,8 +473,8 @@ games — they catch a broken model and refuse to rank working ones. The per-sta
 tables carry the information, because every model is scored on the identical
 board.
 
-Full report: `model/test_split/REPORT_test_split_evaluation.{md,html}`; evidence:
-`model/test_split/reports/test_split.json`.
+Full report: `pro/model/test_split/REPORT_test_split_evaluation.{md,html}`; evidence:
+`pro/model/test_split/reports/test_split.json`.
 
 **The all-data refresh has no number here, by construction.** The two
 `-through-wlds-ig-tes` checkpoints (2026-11-04) are trained with `--no-test` on
@@ -541,7 +544,7 @@ CI [−0.104, −0.007]) and 5.9 pp top-10. A "train 40 epochs, keep the last" r
 would have shipped a measurably worse encoder, and the 52-game val is what
 caught it — which is the argument for keeping a val at all, at whatever scope.
 
-Evidence: `model/proonly/reports/compare_{shared,pinned,allval}_{policy,masked}.json`
+Evidence: `pro/model/proonly/reports/compare_{shared,pinned,allval}_{policy,masked}.json`
 and `compare_epoch9_vs_40_masked.json`. The all-patch-val weights were deleted
 after losing the comparison; reproduce with the two `--val-scope all --no-test`
 commands in §10.
@@ -594,7 +597,7 @@ comparison above is against the originals, and why the `-through-` pair stays in
 the record as a measured experiment rather than a candidate. Per instruction, the
 three-arm control of the previous subsection was not repeated.
 
-Evidence: `model/proonly/reports/compare_shared_random_{masked,policy}.json`.
+Evidence: `pro/model/proonly/reports/compare_shared_random_{masked,policy}.json`.
 
 ---
 
@@ -611,7 +614,7 @@ refused at load rather than failing later.
   the rest are optimised jointly (lexicographic), so the newest pick always wins
   a contested role and older picks move aside; without that, a fresh Vi was
   pushed to its runner-up while Pantheon kept jungle.
-- **Next move** — `model/policy/infer.py:PolicyPredictor`, no dataset or training
+- **Next move** — `solo_queue/model/policy/infer.py:PolicyPredictor`, no dataset or training
   imports. Resolves the canonical 20-move order (including a red first pick) and
   runs one forward pass for the side on the clock. A ban suggestion is the same
   distribution as a pick suggestion: the policy's imitation of what a pro does
@@ -814,49 +817,49 @@ that set, which also gives the calibration the "what not to do" list demands.
 
 ```bash
 # the five kept artefacts, one command per class
-docker compose run --rm dev python model/proonly/train_masked.py \
-    --out-dir model/checkpoints/masking-proonly
-docker compose run --rm dev python model/proonly/train_policy.py \
-    --init-ckpt model/checkpoints/masking-proonly/best.pt \
-    --out-dir model/checkpoints/nextpick-proonly
-docker compose run --rm dev python model/finetune/train.py \
-    --out-dir model/checkpoints/masking-finetune
-docker compose run --rm dev python model/policy/train.py \
-    --out-dir model/checkpoints/nextpick-policy
-# the pretrain is kept, not retrained: model/checkpoints/masking-soloqueue/
+docker compose run --rm dev python pro/model/proonly/train_masked.py \
+    --out-dir pro/model/checkpoints/masking-proonly
+docker compose run --rm dev python pro/model/proonly/train_policy.py \
+    --init-ckpt pro/model/checkpoints/masking-proonly/best.pt \
+    --out-dir pro/model/checkpoints/nextpick-proonly
+docker compose run --rm dev python solo_queue/model/finetune/train.py \
+    --out-dir solo_queue/model/checkpoints/masking-finetune
+docker compose run --rm dev python solo_queue/model/policy/train.py \
+    --out-dir solo_queue/model/checkpoints/nextpick-policy
+# the pretrain is kept, not retrained: solo_queue/model/checkpoints/masking-soloqueue/
 
 # the shipped defaults: all the data, no test split, val = a random 10% of every
 # patch (stage 1 ~7 min, stage 2 ~14 min)
-docker compose run --rm dev python model/proonly/train_masked.py \
+docker compose run --rm dev python pro/model/proonly/train_masked.py \
     --no-test --val-split random --seed 0 \
-    --out-dir model/checkpoints/masking-proonly-randomvalsplit-through-wlds-ig-tes
-docker compose run --rm dev python model/proonly/train_policy.py \
+    --out-dir pro/model/checkpoints/masking-proonly-randomvalsplit-through-wlds-ig-tes
+docker compose run --rm dev python pro/model/proonly/train_policy.py \
     --no-test --val-split random --seed 0 \
-    --init-ckpt model/checkpoints/masking-proonly-randomvalsplit-through-wlds-ig-tes/best.pt \
-    --out-dir model/checkpoints/nextpick-proonly-randomvalsplit-through-wlds-ig-tes
+    --init-ckpt pro/model/checkpoints/masking-proonly-randomvalsplit-through-wlds-ig-tes/best.pt \
+    --out-dir pro/model/checkpoints/nextpick-proonly-randomvalsplit-through-wlds-ig-tes
 
 # the earlier refresh, kept as a recorded experiment: same data, val on 16.20 only
-docker compose run --rm dev python model/proonly/train_masked.py \
+docker compose run --rm dev python pro/model/proonly/train_masked.py \
     --no-test --val-scope latest --val-frac 0.20 \
-    --out-dir model/checkpoints/masking-proonly-through-wlds-ig-tes
-docker compose run --rm dev python model/proonly/train_policy.py \
+    --out-dir pro/model/checkpoints/masking-proonly-through-wlds-ig-tes
+docker compose run --rm dev python pro/model/proonly/train_policy.py \
     --no-test --val-scope latest --val-frac 0.20 \
-    --init-ckpt model/checkpoints/masking-proonly-through-wlds-ig-tes/best.pt \
-    --out-dir model/checkpoints/nextpick-proonly-through-wlds-ig-tes
+    --init-ckpt pro/model/checkpoints/masking-proonly-through-wlds-ig-tes/best.pt \
+    --out-dir pro/model/checkpoints/nextpick-proonly-through-wlds-ig-tes
 
 # the honest comparison for a no-test run: rows val for BOTH protocols
-docker compose run --rm dev python model/proonly/compare.py --task policy \
+docker compose run --rm dev python pro/model/proonly/compare.py --task policy \
     --split shared --other old --new-scope all --val-split random \
-    --a model/checkpoints/nextpick-proonly/best.pt \
-    --b model/checkpoints/nextpick-proonly-randomvalsplit-through-wlds-ig-tes/best.pt
-docker compose run --rm dev python model/proonly/compare.py --task masked \
+    --a pro/model/checkpoints/nextpick-proonly/best.pt \
+    --b pro/model/checkpoints/nextpick-proonly-randomvalsplit-through-wlds-ig-tes/best.pt
+docker compose run --rm dev python pro/model/proonly/compare.py --task masked \
     --split shared --other old --new-scope all --val-split random --mask-mode slot \
-    --a model/checkpoints/masking-proonly/best.pt \
-    --b model/checkpoints/masking-proonly-randomvalsplit-through-wlds-ig-tes/best.pt
+    --a pro/model/checkpoints/masking-proonly/best.pt \
+    --b pro/model/checkpoints/masking-proonly-randomvalsplit-through-wlds-ig-tes/best.pt
 
 # the comparison
-docker compose run --rm dev python model/test_split/eval_test_split.py
-docker compose run --rm dev python model/test_split/render_test_split.py
+docker compose run --rm dev python pro/model/test_split/eval_test_split.py
+docker compose run --rm dev python pro/model/test_split/render_test_split.py
 ```
 
 `--out-dir` writes a run straight to its final name; without it a run lands in
@@ -884,16 +887,25 @@ metric into a statement about recency. Selection is on `rel_*` — the ratio to
 the frequency table — not raw top-5, so beating the popular patch is the target
 rather than memorising it.
 
-**Tests.** Run per directory — the suite does not combine into one `pytest
-model/`. `finetune/train.py` and `policy/train.py` both do `import train`, so
-those two must be separate invocations. `model/policy` must go in as a
-*directory*: `model/policy/model.py` shadows the `model` package when that folder
-is first on `sys.path`, which is what `pytest model/policy/test_infer.py` does.
-Green today: `pytest model/policy model/proonly model/pretraining model/tests
-model/test_split` (147 passed, 1 skipped), `pytest model/finetune` (25),
-`pytest "data/pro play" frontend` (114 passed). `soloq data
-analysis/explorer/test_explorer.py` is excluded: it opens an HTTP connection at
-import time and errors during collection when no server is running.
+**Tests.** Run per directory — the suite does not combine into one `pytest .`.
+`solo_queue/model/finetune/train.py` and `solo_queue/model/policy/train.py` are
+both `train`, and `test_datasets_aug.py` does `import train as T`; collecting
+both folders in one session leaves `train` bound to whichever was imported first,
+and three of that file's tests then call the wrong `evaluate` signature. The old
+`model.py` shadowing is gone: the package is `solo_queue.model`, so
+`pytest solo_queue/model/policy/test_infer.py` and the directory form are now
+equivalent.
+Green today (2026-11-07, after the `solo_queue/` + `pro/` split):
+`pytest solo_queue/model/tests` 52 passed 1 skipped;
+`pytest solo_queue/model/finetune` 25 passed;
+`pytest solo_queue/model/policy` 59 passed, 1 failed
+(`test_swap_sides_flips_econ_team_pairs`, pre-existing);
+`pytest pro/model/proonly pro/model/bans pro/model/test_split` 47 passed 1 skipped;
+`pytest "data/pro play"` 41 passed;
+`pytest frontend` 58 passed 18 skipped (the ensemble-symlink test skips on
+Windows, where `os.symlink` needs a privilege the shell does not have).
+`solo_queue/analysis/explorer/test_explorer.py` is excluded: it opens an HTTP
+connection at import time and errors during collection when no server is running.
 
 **Two reproduction traps that look like regressions.**
 

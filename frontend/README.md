@@ -26,17 +26,32 @@ python frontend\server.py --port 8777     # http://127.0.0.1:8777
 ```
 
 Binds `127.0.0.1` only. `--ckpt <path>` pins the **role model** (default:
-`model/checkpoints/masking-proonly-through-wlds-ig-tes/best.pt`; if it is
-absent, the `best.pt` with the highest val champ-top5 under
-`model/checkpoints/*/`), `--policy-ckpt <path>` pins the **next-move model**
-(default: `model/checkpoints/nextpick-proonly-through-wlds-ig-tes/best.pt`),
+`pro/model/checkpoints/masking-proonly-randomvalsplit-through-wlds-ig-tes/best.pt`;
+if it is absent, the `best.pt` with the highest val champ-top5 across both
+stores, `solo_queue/model/checkpoints/*/` and `pro/model/checkpoints/*/`),
+`--policy-ckpt <path>` pins the **next-move model**
+(default: `pro/model/checkpoints/nextpick-proto-ensemble/ensemble.json`),
 `--no-policy` skips it entirely, and `--device cuda` for GPU inference (CPU
 default keeps the GPU free).
 
-Both defaults are the 2026-11-04 refresh (`-through-wlds-ig-tes`: all 46,879
-drafts, no test split). The `masking-proonly` / `nextpick-proonly` originals are
-still listed in the dropdown and are the only pair with a pinned-test score
-(`STATUS.md` §7); the refresh has none by construction.
+The role default is the 2026-11-04 refresh (`-randomvalsplit-`: 42,121 train,
+no test split). The `masking-proonly` originals are still listed in the dropdown
+and are the only ones with a pinned-test score (`STATUS.md` §7); the refresh has
+none by construction.
+
+The next-move default is **not a checkpoint but an ensemble manifest**: three
+pro-only policy arms whose policy logits are averaged before the softmax. It is
+the only arm that beat the checkpoint it replaced on rows neither had trained on
+(+1.33 pp top-5, bootstrap [+0.64, +2.07], p = 2.6e-4; +0.94 pp top-1). The
+members alone are *not* better than the old default, so the manifest is the
+artefact: `python pro/model/proto/compare_shipped.py` re-measures it. Because an
+ensemble has no val run of its own, the header reports its number as
+"held-out top-5 (439 drafts · 3 models)" rather than as a val score.
+
+An `ensemble.json` is `{"members": ["a.pt", "b.pt"], "eval": {...}}`, members
+resolved relative to the manifest and confined to the project. Any checkpoint
+path in the dropdown can also be replaced by such a manifest, so the averaging
+path is not special-cased to the default.
 
 Through Docker, pass `--host 0.0.0.0` (a published port arrives on the
 container's `eth0`, not its loopback) — see `DOCKER.md` §"The frontend".
@@ -48,13 +63,13 @@ The header shows both slots (label, kind, val metric each) with a `role` +
 
 1. **CLI** — `--ckpt` fills the role slot, `--policy-ckpt` the next-move slot:
    ```powershell
-   python frontend\server.py --ckpt "model\checkpoints\masking-finetune\best_mask.pt"
-   python frontend\server.py --policy-ckpt "model\checkpoints\nextpick-policy\best_policy.pt"
+   python frontend\server.py --ckpt "solo_queue\model\checkpoints\masking-finetune\best_mask.pt"
+   python frontend\server.py --policy-ckpt "solo_queue\model\checkpoints\nextpick-policy\best_policy.pt"
    ```
-2. **Header dropdowns** — every `.pt` under `model/checkpoints/<name>/` and
-   `model/uploaded/`, **split by the slot each one can fill**. The kept
-   artefacts are named for the inference they serve, and the name is the whole
-   rule:
+2. **Header dropdowns** — every `.pt` under `<track>/model/checkpoints/<name>/`
+   (both tracks, one list) and `frontend/uploaded/`, **split by the slot each
+   one can fill**. The kept artefacts are named for the inference they serve,
+   and the name is the whole rule — the track does not affect it:
 
    | prefix | slot | what it answers |
    |---|---|---|
@@ -67,7 +82,7 @@ The header shows both slots (label, kind, val metric each) with a `role` +
    load. Refreshed when a select gains focus (so freshly trained runs appear
    without a restart), then press **Load**.
 3. **From file…** — opens the OS file picker; the file is POSTed to
-   `/api/upload`, saved as `model/uploaded/<name>.pt` and filed into the slot
+   `/api/upload`, saved as `frontend/uploaded/<name>.pt` and filed into the slot
    its kind belongs to (a file that fails to load is deleted).
 
 Finetune payloads store the shared encoder under `encoder.` plus the win/econ
@@ -118,7 +133,7 @@ models (the checkpoint list plus an upload), and it scores the whole draft
 under each one:
 
 - **Policy** models score all 20 moves with the test-split methodology
-  (`model/test_split/eval_test_split.py`): the real patch id, exact role-keyed
+  (`pro/model/test_split/eval_test_split.py`): the real patch id, exact role-keyed
   slots, and the real move's rank over the model's full next-move
   distribution. They cover bans and picks.
 - **Masked** models hide one pick slot at a time and rank the real pick. The
@@ -196,7 +211,7 @@ for a role-frequency prior. It is not fearless *understanding*: the order of
 the legal champions is unchanged and the pool still holds 11–19% of the
 probability mass before masking, so the bar says "role board filters them out
 only" whenever a pool is active.
-`model/test_split/eval_fearless_mask.py` reproduces the numbers.
+`pro/model/test_split/eval_fearless_mask.py` reproduces the numbers.
 
 **Real games seed it.** Loading a walkthrough game sets the pool from that
 game's own `unavailable`, so a G3 walkthrough starts with the 20 champions
@@ -357,7 +372,7 @@ Three states matter:
   forwards per board change); bans and already-picked champions are
   post-filtered out. Once a team has all five roles filled, every slot is
   filled and no target cards remain.
-- Output contract (model/README.md §2): `[MASK]`/`[PAD]`/FLEX exist only on
+- Output contract (solo_queue/model/README.md §2): `[MASK]`/`[PAD]`/FLEX exist only on
   the **input** side — the champ head is `Linear(D, 173)` and the role head
   `Linear(D, 5)`, so a suggestion can never be a special token and a role
   prediction can never be FLEX (hard-filtered + regression-tested). The amber
@@ -410,6 +425,6 @@ Three states matter:
   games, loaded lazily on first use).
 
 Tests: `python -m pytest frontend/test_server.py -q` and
-`python -m pytest model/policy/test_infer.py -q`. The endpoint test pins the
+`python -m pytest solo_queue/model/policy/test_infer.py -q`. The endpoint test pins the
 published `move_plan` to `infer.move_plan`, and a source-level guard keeps
 `renderTurn` board-derived rather than model-derived.

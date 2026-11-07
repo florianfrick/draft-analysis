@@ -47,12 +47,12 @@ using the WSL2 backend and that `nvidia-smi` works on the host.
 docker compose run --rm dev
 
 # train
-docker compose run --rm dev python model/pretraining/train.py --epochs 30
-docker compose run --rm dev python model/finetune/train.py --no-wandb
+docker compose run --rm dev python solo_queue/model/pretraining/train.py --epochs 30
+docker compose run --rm dev python solo_queue/model/finetune/train.py --no-wandb
 
 # evaluate a checkpoint under the eval protocol
-docker compose run --rm dev python model/policy/evaluate.py \
-    --ckpt model/checkpoints/nextpick-proonly-through-wlds-ig-tes/best.pt
+docker compose run --rm dev python solo_queue/model/policy/evaluate.py \
+    --ckpt pro/model/checkpoints/nextpick-proonly-through-wlds-ig-tes/best.pt
 ```
 
 `--rm` matters: without it every invocation leaves a stopped container behind.
@@ -60,29 +60,33 @@ docker compose run --rm dev python model/policy/evaluate.py \
 
 ### Tests
 
-Run each file separately — several of them collide on module names
-(`pipeline`, `model`) if collected in one pytest process. All of these pass in
-the image (177 passed, 1 skipped):
+Run each file separately — several of them collide on module names (`pipeline`,
+`train`) if collected in one pytest process. All of these pass in the image:
 
 ```bash
 for t in "data/pro play/test_eval_protocol.py" \
          "data/pro play/test_pipeline.py" \
          "data/solo queue/process matchdata/test_pipeline.py" \
-         "model/tests" \
-         "model/finetune/test_finetune.py" \
-         "model/policy" \
+         "solo_queue/model/tests" \
+         "solo_queue/model/finetune" \
+         "solo_queue/model/policy" \
+         "pro/model/proonly" \
+         "pro/model/bans" \
+         "pro/model/test_split" \
          "frontend/test_server.py"; do
   echo "=== $t"
   docker compose run --rm -T dev python -m pytest "$t" -q | tail -2
 done
 ```
 
-`model/policy` goes in as a *directory*: `model/policy/model.py` shadows the
-`model` package when that folder is first on `sys.path`, which is what
-`pytest model/policy/test_infer.py` does.
-```
+`solo_queue/model/finetune` and `solo_queue/model/policy` must stay separate
+invocations: both trainers are named `train`, and `test_datasets_aug.py` does
+`import train as T`, so one session would bind `T` to the finetune trainer and
+three of its tests would call the wrong `evaluate`. The old `model.py` shadowing
+is gone — the package is `solo_queue.model` now, so file and directory forms of
+the same path are equivalent.
 
-`soloq data analysis/explorer/test_explorer.py` is not a pytest suite — it is a
+`solo_queue/analysis/explorer/test_explorer.py` is not a pytest suite — it is a
 live smoke script that curls `http://127.0.0.1:8778` and executes at import, so
 pytest reports a collection error. Start the explorer first and run it directly.
 
@@ -93,7 +97,7 @@ a training run you intend to watch. For a run you want to leave:
 
 ```bash
 docker compose run --rm -d --name pretrain dev \
-    python model/pretraining/train.py --epochs 40
+    python solo_queue/model/pretraining/train.py --epochs 40
 docker compose logs -f pretrain
 ```
 
@@ -131,8 +135,8 @@ To pin them explicitly, or to run the role board alone:
 ```bash
 docker compose run --rm -T -p 127.0.0.1:8777:8777 dev \
     python frontend/server.py --host 0.0.0.0 --port 8777 \
-    --ckpt model/checkpoints/masking-finetune/best_mask.pt \
-    --policy-ckpt model/checkpoints/nextpick-policy/best_policy.pt
+    --ckpt solo_queue/model/checkpoints/masking-finetune/best_mask.pt \
+    --policy-ckpt solo_queue/model/checkpoints/nextpick-policy/best_policy.pt
 
 docker compose run --rm -T -p 127.0.0.1:8777:8777 dev \
     python frontend/server.py --host 0.0.0.0 --port 8777 --no-policy

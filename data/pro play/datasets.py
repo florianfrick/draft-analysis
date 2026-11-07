@@ -6,7 +6,7 @@ recent meta without touching the val/test distribution.
 
 ProNextMoveDataset: (prefix -> next move) examples from each 20-move
 draft. Prefix state uses the SoloQ partial-draft encoding (unpicked
-slots = CHAMP_PAD + pad_mask, per model/README.md Sec.3), plus ban list,
+slots = CHAMP_PAD + pad_mask, per solo_queue/model/README.md Sec.3), plus ban list,
 turn info (move idx, phase, side to move, first-pick side), the patch
 id, fearless unavailability mask, and legality mask (taken |
 unavailable) for -inf suppression at the head. Targets: (is_ban,
@@ -54,7 +54,7 @@ P = _load_module_by_path("pro_pipeline", HERE / "pipeline.py")
 _SOLOQ_PIPELINE = P.SOLOQ_PROC_DIR / "pipeline.py"
 _SQ = _load_module_by_path("soloq_pipeline", _SOLOQ_PIPELINE)
 
-# vocab constants: identical to soloq_model.py / model/README.md Sec.2
+# vocab constants: identical to base_model.py / solo_queue/model/README.md Sec.2
 N_SLOTS = 10
 TEAM_SIZE = 5
 N_MOVES = P.N_MOVES
@@ -290,7 +290,7 @@ def build_prefix(row, move_idx, num_champs=NUM_REAL_CHAMPS, patch_index=None,
     # the very next move. Only defined on the first move of a same-team pick
     # pair, because that is the only place the pair is still open - after
     # move_idx the first champion is taken and masked, so a set metric can
-    # never see both. `model/proto` uses it as an auxiliary target.
+    # never see both. `pro/model/proto` uses it as an auxiliary target.
     partner_champ = IGNORE_INDEX
     has_partner = 0
     if kind == MOVE_PICK and move_idx + 1 < N_MOVES:
@@ -510,7 +510,7 @@ class ProMaskedDraftDataset(Dataset):
             # random-subset win target: keep 1..9 random picks visible
             # (1..9, not 10: keep one team empty states in-distribution -
             # the encoder handles all-PAD teams without NaN since the
-            # key-padding clear in soloq_model._encode)
+            # key-padding clear in base_model._encode)
             keep_n = int(torch.randint(
                 1, N_SLOTS, (1,),
                 generator=self._generator(idx, 11)).item())

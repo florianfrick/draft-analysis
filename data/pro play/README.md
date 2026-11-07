@@ -43,7 +43,7 @@ satisfies the soloQ contract).
 ## `team_codes.json`
 
 Team name -> short code (`"Top Esports": "TES"`), read by
-`model/proonly/common.py:team_code` to build a checkpoint name that states
+`pro/model/proonly/common.py:team_code` to build a checkpoint name that states
 which series the training data ends on (`masking-proonly-through-wlds-ig-tes`).
 Keys are the exact `teamname` strings from the exports. It is a readability
 layer, not a dependency: an unlisted team falls back to a deterministic

@@ -21,9 +21,11 @@ services:
       - path: .env
         required: false
     environment:
-      # W&B writes runs/ inside the project (already gitignored) instead of
-      # into the container filesystem where it would vanish
-      WANDB_DIR: /workspace
+      # W&B run directories are chosen by each trainer, not here: every
+      # training script passes `dir=<its own model folder>/wandb_runs` to
+      # `wandb.init`, so a run lands next to the code that produced it and
+      # never at the repo root. `WANDB_DIR` is deliberately unset - it would
+      # be a silent global override of that per-trainer default.
       WANDB_START_METHOD: thread
       PYTHONUNBUFFERED: "1"
     # DataLoader workers + torch allocator need more than the 64MB default

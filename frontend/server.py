@@ -5,7 +5,7 @@ Open:   http://127.0.0.1:8777   (binds 127.0.0.1 only - no external access)
 
 UI: 5 ban + 5 pick slots per team (horizontal, role-free; the next pro
 pick/ban to move is HIGHLIGHTED, never enforced - sequence follows
-model/README.md draft format, mirrored when red has first pick), a role
+solo_queue/model/README.md draft format, mirrored when red has first pick), a role
 board per team (TOP..UTILITY, picked champs placed in their assigned role,
 empty roles showing the champion that role is looking for), dDragon
 champion art (https://ddragon.leagueoflegends.com/cdn/16.20.1/img/champion/
@@ -18,9 +18,11 @@ Two model slots, loaded at the same time and chosen independently:
     per-role MASK queries, i.e. /api/suggest.
   * next-move model (`nextpick-*` checkpoints) - /api/next-move and
     /api/explain. Optional (--no-policy runs the role board alone).
-Every kept artefact lives in model/checkpoints/<name>/ and the directory
-name *is* the contract: the prefix states which inference the checkpoint
-can do, the suffix which stage produced it.
+Every kept artefact lives in <track>/model/checkpoints/<name>/ - the track is
+`solo_queue/` or `pro/` - and the directory name *is* the contract: the prefix
+states which inference the checkpoint can do, the suffix which stage produced it.
+Both stores are globbed and offered in the same dropdown; the shipped defaults
+are pro-track because the pro-only recipe is the better model.
 
   masking-soloqueue   soloQ-pretrained encoder (masking-finetune's init)
   masking-finetune    soloQ encoder fine-tuned on pro drafts
@@ -28,6 +30,8 @@ can do, the suffix which stage produced it.
   nextpick-policy     soloQ encoder + policy head
   nextpick-proonly    pro drafts only, encoder + policy head from scratch
                       (through 2026-10-31)
+  nextpick-proto-ensemble   `ensemble.json`: the mean of three nextpick
+                      members' policy logits (the shipped next-move default)
 
 A `-through-<league>-<a>-<b>` suffix states which series the training data ends
 on, so two runs of the same stage are distinguishable and a stale artefact
@@ -38,21 +42,28 @@ cannot pass for a fresh one:
   masking-proonly-randomvalsplit-through-wlds-ig-tes    same data, val drawn
   nextpick-proonly-randomvalsplit-through-wlds-ig-tes   at random per patch
 
-The `-randomvalsplit-` pair is the shipped default: same corpus and frontier as
-the other `-through-` pair, but val is a seeded random 10% of *every* patch
-instead of each patch's tail, so 90% of every patch - including its end - is
-trained on. Neither pair holds a held-out number (both train with `--no-test`),
-so `STATUS.md` §7 - the pinned-test scores - still belongs to the originals; the
-only honest comparison for these is `compare.py --split shared --other old`
-against an original, which is in §7 too.
+The `-randomvalsplit-` pair is the shipped default for the ROLE board: same
+corpus and frontier as the other `-through-` pair, but val is a seeded random
+10% of *every* patch instead of each patch's tail, so 90% of every patch -
+including its end - is trained on. Neither pair holds a held-out number (both
+train with `--no-test`), so `STATUS.md` §7 - the pinned-test scores - still
+belongs to the originals; the only honest comparison for these is
+`compare.py --split shared --other old` against an original, which is in §7 too.
+
+The next-move default is not a checkpoint but `nextpick-proto-ensemble/
+ensemble.json`: three pro-only policy arms whose policy logits are averaged
+(the members alone are no better than the checkpoint they replaced). It is
+scored on the rows neither it nor its predecessor trained on - see
+`pro/model/proto/README.md` and `compare_shipped.py`. The header shows that number
+as "held-out top-5", not as a val score.
 
 `_ckpt_roles` reads that prefix, so the dropdown never offers a policy
 checkpoint to the role board. Select via --ckpt / --policy-ckpt (CLI), the
 two header dropdowns (GET /api/checkpoints + POST /api/load with a `role`),
-or "From file..." (POST /api/upload -> saved under model/uploaded/, offered
+or "From file..." (POST /api/upload -> saved under frontend/uploaded/, offered
 in both slots and validated on load).
 
-Inference contract (model/README.md): every empty slot is a MASK query
+Inference contract (solo_queue/model/README.md): every empty slot is a MASK query
 with its ROLE GIVEN (role-conditional, matches the 10% role-visible
 training condition); no PADs ever, so a team is never fully padded.
 Bans are NOT model inputs - applied as a post-filter (the model already
@@ -80,16 +91,23 @@ import torch
 FRONTEND_DIR = Path(__file__).resolve().parent
 ROOT = FRONTEND_DIR.parent                     # .../lol draft analysis
 PROC_DIR = ROOT / "data" / "solo queue" / "process matchdata"
-MODEL_DIR = ROOT / "model"
+# Two artefact stores, one per track. Nothing is shared: a checkpoint trained
+# on solo queue lives under `solo_queue/`, everything trained on pro drafts
+# lives under `pro/`. The UI offers both, because the role board has a
+# solo-queue option and the next-move panel does not.
+SOLOQ_CKPT_DIR = ROOT / "solo_queue" / "model" / "checkpoints"
+PRO_CKPT_DIR = ROOT / "pro" / "model" / "checkpoints"
+CKPT_DIRS = (SOLOQ_CKPT_DIR, PRO_CKPT_DIR)
 STATIC_DIR = FRONTEND_DIR / "static"
-CKPT_DIR = ROOT / "model" / "checkpoints"
 # Only the masking family: `nextpick-*/best.pt` also matches a bare
 # `*/best.pt` glob, and picking a policy checkpoint as the fallback role model
 # would fail at load. The name says which inference, so the glob uses it.
-CKPT_GLOB = str(CKPT_DIR / "masking-*" / "best.pt")
-CKPT_PATTERNS = (                 # what the dropdown offers (no torch.load)
-    ("checkpoints", str(CKPT_DIR / "*" / "*.pt")),
-    ("uploaded", str(ROOT / "model" / "uploaded" / "*.pt")),
+CKPT_GLOB = [str(d / "masking-*" / "best.pt") for d in CKPT_DIRS]
+CKPT_PATTERNS = tuple(            # what the dropdown offers (no torch.load)
+    [("checkpoints", str(d / "*" / "*.pt")) for d in CKPT_DIRS]
+    # an ensemble manifest is a selectable model, not a checkpoint payload
+    + [("checkpoints", str(d / "*" / "ensemble.json")) for d in CKPT_DIRS]
+    + [("uploaded", str(FRONTEND_DIR / "uploaded" / "*.pt"))]
 )
 # Shipped defaults, one per job. The role board needs a *masking* checkpoint
 # (role head + MASK queries); the next-move panel needs a *nextpick* one. They
@@ -97,15 +115,26 @@ CKPT_PATTERNS = (                 # what the dropdown offers (no torch.load)
 # "which role / what is this team still missing" is not the model that ranks
 # the next pick.
 #
-# Both point at the `-randomvalsplit-` refresh: same architecture and corpus as
-# the earlier `-through-` pair (42,121 train), but val is a seeded random 10% of
-# every patch rather than each patch's tail, so the end of every patch is
-# trained on and the selection signal is 4,758 games instead of 52. Trained with
-# `--no-test`, so they have no pinned-test score - §7 of STATUS.md is the
-# originals' number, not theirs. Override with --ckpt / --policy-ckpt.
-MASKED_DEFAULT = CKPT_DIR / "masking-proonly-randomvalsplit-through-wlds-ig-tes" / "best.pt"
-POLICY_DEFAULT = CKPT_DIR / "nextpick-proonly-randomvalsplit-through-wlds-ig-tes" / "best.pt"
-UPLOAD_DIR = ROOT / "model" / "uploaded"
+# Both defaults are **pro-track**: the pro-only recipe has been the better
+# model since 2026-11-03, and the frontend ships the better model, not the
+# older one. See README.md ("Which model actually ships").
+#
+# The role default is the `-randomvalsplit-` refresh: same architecture and
+# corpus as the earlier `-through-` pair (42,121 train), but val is a seeded
+# random 10% of every patch rather than each patch's tail, so the end of every
+# patch is trained on and the selection signal is 4,758 games instead of 52.
+# Trained with `--no-test`, so it has no pinned-test score - §7 of STATUS.md is
+# the originals' number, not its. Override with --ckpt / --policy-ckpt.
+MASKED_DEFAULT = PRO_CKPT_DIR / "masking-proonly-randomvalsplit-through-wlds-ig-tes" / "best.pt"
+# The next-move default is an ENSEMBLE (mean of three members' policy logits),
+# not a single checkpoint. It is the only arm that beat the previous default on
+# rows neither had trained on: +1.33 pp top-5 (bootstrap [+0.64, +2.07],
+# p = 2.6e-4), +0.94 pp top-1, +1.79 pp top-10 over
+# `nextpick-proonly-randomvalsplit-*`. Each member alone is NOT better than the
+# previous default (base64 +0.06 pp, n.s.), so do not "simplify" this to one
+# file without re-measuring: `python pro/model/proto/compare_shipped.py`.
+POLICY_DEFAULT = PRO_CKPT_DIR / "nextpick-proto-ensemble" / "ensemble.json"
+UPLOAD_DIR = FRONTEND_DIR / "uploaded"
 MAX_UPLOAD_BYTES = 512 * 1024 * 1024      # generous; ckpts are 20-150 MB
 LOAD_LOCK = threading.Lock()              # serialize runtime model swaps
 # dDragon static champion art (model patch 16.20)
@@ -114,24 +143,24 @@ DDRAGON_CDN = "https://ddragon.leagueoflegends.com/cdn/"
 DDRAGON_CACHE = FRONTEND_DIR / ".cache" / ("champion_%s.json" % DDRAGON_VERSION)
 # real pro games for the walkthrough (cached pro_drafts.pt)
 PRO_DRAFTS_PT = ROOT / "data" / "pro play" / "pro_drafts.pt"
-# The repo ROOT (parent of `model/`) goes on the path so `import model`
-# resolves to the package; `soloq_model.py` lives in `model/pretraining/`
+# The repo ROOT goes on the path so `import solo_queue` / `import pro` resolve;
+# the base encoder lives in `solo_queue/model/pretraining/base_model.py`
 # now, so the package path is the only stable way to import it.
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(FRONTEND_DIR))             # so `import llm` works
 
-from model.pretraining.soloq_model import (SoloQPretrainedModel,  # noqa: E402
+from solo_queue.model.pretraining.base_model import (SiameseBase,  # noqa: E402
                                            ROLE_FLEX_ID, NUM_ROLES,
                                            load_encoder_state,
                                            attr_matrix_for_config)
-from model.policy import infer  # noqa: E402  (next-move policy)
+from solo_queue.model.policy import infer  # noqa: E402  (next-move policy)
 import llm  # noqa: E402  (frontend/llm.py: retrieval + grounded explanation)
 
 ROLE_ROWS = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"]
 N_SLOTS = 10
 
 # --- breakdown scoring -------------------------------------------------------
-# Mirrors model/test_split/eval_test_split.py so the breakdown page reproduces
+# Mirrors pro/model/test_split/eval_test_split.py so the breakdown page reproduces
 # the test-split report's per-move methodology (real patch id, exact role-keyed
 # slots, target rank/prob) instead of the UI's inferred-role / UNK-patch
 # next-move path. Kept self-contained: importing the pro pipeline here would
@@ -238,7 +267,7 @@ def score_policy_model(pred, row, idx_to_img, names):
     samples = [_build_prefix(row, m, nc, pid) for m in range(len(row["moves"]))]
     batch = {k: v.to(pred.device) for k, v in _collate(samples).items()}
     with torch.no_grad():
-        logits = pred.model(batch)["policy_logits"].float()
+        logits = pred.policy_logits(batch).float()
     probs = torch.softmax(logits, dim=-1)
     rows_out, ranks = {}, []
     top1 = top5 = 0
@@ -492,9 +521,9 @@ def find_best_ckpt():
     on 16.20's tail - and a larger, more predictable val has a higher ceiling, so
     this is a preference order, not a ranking.
     """
-    paths = sorted(glob.glob(CKPT_GLOB))
+    paths = sorted(p for g in CKPT_GLOB for p in glob.glob(g))
     if not paths:
-        raise FileNotFoundError("no checkpoint under %s" % CKPT_GLOB)
+        raise FileNotFoundError("no checkpoint under %s" % (CKPT_GLOB,))
     best_path, best_score = None, (-1.0, -1.0)
     for p in paths:
         payload = None
@@ -608,7 +637,7 @@ class Predictor:
             self.kind = "finetune"
         else:
             self.kind = "pretrain"
-        self.model = SoloQPretrainedModel(
+        self.model = SiameseBase(
             num_champs=cfg["num_champs"], embed_dim=cfg["embed_dim"],
             num_heads=cfg["num_heads"],
             num_intra_layers=cfg["num_intra"],
@@ -642,7 +671,7 @@ class Predictor:
         # Output classes are REAL champions only: champ_head is
         # Linear(D, num_champs), so [MASK]/[PAD] exist solely in the
         # 175-wide INPUT embedding and can never be suggested. The bounds
-        # filter locks that contract in (model/README.md Sec.2).
+        # filter locks that contract in (solo_queue/model/README.md Sec.2).
         logits = logits.clone()
         logits[illegal] = float("-inf")
         probs = logits.softmax(-1)
@@ -698,7 +727,7 @@ class Predictor:
         the probability mass was computed as if the champion were
         available. The UI says so when a pool is active.
 
-        Special tokens are input-only (model/README.md Sec.2): every
+        Special tokens are input-only (solo_queue/model/README.md Sec.2): every
         returned idx is a real champion (< num_champs, never [MASK]/
         [PAD]) and every returned role is in 0..4 (never FLEX - the role
         head is Linear(D, 5)).
@@ -813,11 +842,18 @@ def model_info(pred):
             "metric": getattr(pred, "metric", "champ top5")}
     if getattr(pred, "stage", None) is not None:
         info["stage"] = pred.stage
+    # An ensemble has no single val run: it is scored on the rows neither it
+    # nor the checkpoint it replaced had trained on. Publish that number as
+    # `eval` (with its set and n) instead of passing it off as a val score.
+    ens = getattr(pred, "ensemble", None)
+    if ens:
+        info["ensemble"] = {"members": ens.get("members", []),
+                            "eval": ens.get("eval") or {}}
     return info
 
 
 def resolve_ckpt_path(spec, confine=True):
-    """Checkpoint spec -> absolute .pt Path.
+    """Checkpoint spec -> absolute .pt (or ensemble .json) Path.
     confine=True (HTTP): must resolve inside the project - no `..` escapes.
     """
     p = Path(str(spec)).expanduser()
@@ -829,11 +865,38 @@ def resolve_ckpt_path(spec, confine=True):
             p.relative_to(ROOT.resolve())
         except ValueError:
             raise ValueError("path outside project: %s" % spec)
-    if p.suffix.lower() != ".pt":
-        raise ValueError("expected a .pt checkpoint, got %s" % p.name)
+    if p.suffix.lower() not in (".pt", ".json"):
+        raise ValueError("expected a .pt checkpoint or an ensemble .json, "
+                         "got %s" % p.name)
     if not p.is_file():
         raise FileNotFoundError("no checkpoint at %s" % p)
     return p
+
+
+def read_ensemble(path):
+    """Ensemble manifest -> (member paths, eval block, note).
+
+    A manifest is the artefact that names a set of checkpoints to average. It
+    lives next to its members so `<track>/model/checkpoints/<name>/` stays the
+    single contract, and members are resolved relative to it (never absolute,
+    never outside the project).
+    """
+    man = json.loads(Path(path).read_text("utf-8"))
+    members = man.get("members") or []
+    if not members:
+        raise ValueError("ensemble manifest %s lists no members" % path)
+    base = Path(path).resolve().parent
+    out = []
+    for m in members:
+        mp = (base / m).resolve()
+        try:
+            mp.relative_to(ROOT.resolve())
+        except ValueError:
+            raise ValueError("ensemble member outside project: %s" % m)
+        if mp.suffix.lower() != ".pt" or not mp.is_file():
+            raise FileNotFoundError("ensemble member missing: %s" % m)
+        out.append(mp)
+    return out, man.get("eval") or {}, man.get("note") or ""
 
 
 def _ckpt_roles(path, kind):
@@ -843,7 +906,9 @@ def _ckpt_roles(path, kind):
     whole list in both would make most picks fail on load. torch.load'ing
     every checkpoint at startup just to classify them is not worth it, and
     it is not necessary: every kept artefact lives in
-    model/checkpoints/<name>/, and the name states the inference it serves.
+    <track>/model/checkpoints/<name>/, and the name states the inference it
+    serves. The track does not affect the classification - `masking-*` is the
+    role board whether it was trained on solo queue or on pro drafts.
 
       masking-*    masked champion + role completion -> the role board
       nextpick-*   next-move ranking                -> the next-move panel
@@ -908,8 +973,11 @@ def make_predictor(path, device=None):
 
     One file can hold three different model families, so the payload is
     read once here and dispatched: a policy checkpoint becomes a
-    `PolicyPredictor`, everything else stays a masked `Predictor`. The
-    result is cached per (path, device) so the breakdown endpoint can
+    `PolicyPredictor`, everything else stays a masked `Predictor`. An
+    `ensemble.json` manifest becomes a `PolicyPredictor` over its members
+    (mean of the policy logits - the measured quantity).
+
+    The result is cached per (path, device) so the breakdown endpoint can
     score several models without reloading the same multi-hundred-MB
     weights repeatedly.
     """
@@ -918,6 +986,14 @@ def make_predictor(path, device=None):
     cached = _MODEL_CACHE.get(key)
     if cached is not None:
         return cached
+    if Path(path).suffix.lower() == ".json":
+        members, ev, note = read_ensemble(path)
+        pred = infer.PolicyPredictor(members, device=device, label=path)
+        pred.ensemble = {"members": [m.name for m in members],
+                         "eval": ev, "note": note}
+        pred.patch_vocab = pred.patch_vocab or []
+        _MODEL_CACHE[key] = pred
+        return pred
     payload = torch.load(str(path), map_location="cpu")
     kind = peek_kind(payload)
     if kind == "policy":
@@ -1052,7 +1128,7 @@ class Handler(BaseHTTPRequestHandler):
             # answer describes the board it was requested for, so an answer in
             # flight is always one board behind. infer.move_plan is the single
             # source of truth (checked against pipeline.interleaved_moves in
-            # model/policy/test_infer.py), so publish it rather than copying
+            # solo_queue/model/policy/test_infer.py), so publish it rather than copying
             # the order into app.js.
             move_plan = {
                 str(fp): [["ban" if kind == infer.MOVE_BAN else "pick", int(t)]
@@ -1360,7 +1436,7 @@ class Handler(BaseHTTPRequestHandler):
                          else "masked"})
 
     def _handle_upload(self):
-        """Raw .pt bytes with ?name=x.pt -> model/uploaded/x.pt, then load."""
+        """Raw .pt bytes with ?name=x.pt -> frontend/uploaded/x.pt, then load."""
         try:
             length = int(self.headers.get("Content-Length", 0))
             if length <= 0:
@@ -1434,16 +1510,15 @@ def main():
     ap.add_argument("--ckpt", default="",
                     help="role-model checkpoint (a masking-* checkpoint) - "
                          "drives the role board and the per-role targets "
-                         "(default: model/checkpoints/"
+                         "(default: pro/model/checkpoints/"
                          "masking-proonly-randomvalsplit-through-wlds-ig-tes"
                          "/best.pt, "
                          "else the best masking checkpoint by val champ_top5)")
     ap.add_argument("--policy-ckpt", default="",
-                    help="next-move checkpoint (a nextpick-* checkpoint) - "
+                    help="next-move checkpoint, or an ensemble.json manifest - "
                          "loaded alongside the role model, not instead of it "
-                         "(default: model/checkpoints/"
-                         "nextpick-proonly-randomvalsplit-through-wlds-ig-tes"
-                         "/best.pt)")
+                         "(default: pro/model/checkpoints/nextpick-proto-ensemble/"
+                         "ensemble.json, a 3-member logit ensemble)")
     ap.add_argument("--no-policy", action="store_true",
                     help="run the role board only, without a next-move model")
     args = ap.parse_args()

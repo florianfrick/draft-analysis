@@ -2,7 +2,9 @@
 import glob
 import json
 import re
+import shutil
 import sys
+import tempfile
 import threading
 from http.client import HTTPConnection
 from pathlib import Path
@@ -30,13 +32,14 @@ def _best_available_score():
     """The champ_top5 find_best_ckpt is supposed to pick, from the files."""
     import torch
     best = 0.0
-    for path in glob.glob(S.CKPT_GLOB):
-        try:
-            payload = torch.load(path, map_location="cpu", weights_only=False)
-        except Exception:  # noqa: BLE001  unreadable ckpt is not this test
-            continue
-        best = max(best, float(payload.get("metrics", {})
-                               .get("champ_top5", -1.0)))
+    for pattern in S.CKPT_GLOB:
+        for path in glob.glob(pattern):
+            try:
+                payload = torch.load(path, map_location="cpu", weights_only=False)
+            except Exception:  # noqa: BLE001  unreadable ckpt is not this test
+                continue
+            best = max(best, float(payload.get("metrics", {})
+                                   .get("champ_top5", -1.0)))
     return best
 
 
@@ -44,13 +47,13 @@ def test_find_best_ckpt_picks_the_best_available(app):
     """The default must be the highest val champ_top5 present, not run1.
 
     Hard-coding 0.281 tied this test to one checkpoint that has since been
-    deleted; the contract is "max over model/checkpoints/", which survives
+    deleted; the contract is "max over both checkpoint stores", which survives
     churn.
     """
     ckpt = Path(app["masked"].ckpt_path)
     assert "checkpoints" in ckpt.as_posix()
     expected = _best_available_score()
-    assert expected > 0.0, "no readable checkpoint under model/checkpoints/"
+    assert expected > 0.0, "no readable checkpoint under either store"
     assert app["masked"].val_top5 == pytest.approx(expected, abs=1e-6)
 
 
@@ -185,7 +188,7 @@ def test_suggest_rejects_a_bad_last_slot(app, httpd):
 
 
 def test_outputs_are_only_real_classes(app):
-    """[MASK]/[PAD]/FLEX are INPUT-only vocabulary (model/README.md
+    """[MASK]/[PAD]/FLEX are INPUT-only vocabulary (solo_queue/model/README.md
     Sec.2): suggestions must always be real champions (< num_champs)
     and role predictions must always be one of the 5 real roles -
     the model never 'guesses' a special token as an output class."""
@@ -370,34 +373,34 @@ def test_ckpt_roles_follow_the_name():
     the family rules, which is why those cases are still asserted.
     """
     # the name decides
-    assert S._ckpt_roles("model/checkpoints/masking-proonly/best.pt",
+    assert S._ckpt_roles("pro/model/checkpoints/masking-proonly/best.pt",
                          "checkpoints") == ["masked"]
-    assert S._ckpt_roles("model/checkpoints/masking-finetune/best_mask.pt",
+    assert S._ckpt_roles("solo_queue/model/checkpoints/masking-finetune/best_mask.pt",
                          "checkpoints") == ["masked"]
-    assert S._ckpt_roles("model/checkpoints/masking-soloqueue/best.pt",
+    assert S._ckpt_roles("solo_queue/model/checkpoints/masking-soloqueue/best.pt",
                          "checkpoints") == ["masked"]
-    assert S._ckpt_roles("model/checkpoints/nextpick-policy/best_policy.pt",
+    assert S._ckpt_roles("solo_queue/model/checkpoints/nextpick-policy/best_policy.pt",
                          "checkpoints") == ["policy"]
-    assert S._ckpt_roles("model/checkpoints/nextpick-proonly/best.pt",
+    assert S._ckpt_roles("pro/model/checkpoints/nextpick-proonly/best.pt",
                          "checkpoints") == ["policy"]
     # a value artefact fills neither slot
-    assert S._ckpt_roles("model/checkpoints/value-x/best.pt",
+    assert S._ckpt_roles("pro/model/checkpoints/value-x/best.pt",
                          "checkpoints") == []
     # legacy families, still reachable by uploading an old checkpoint
-    assert S._ckpt_roles("model/pretraining/ckpt/run_1/best.pt",
+    assert S._ckpt_roles("solo_queue/model/pretraining/ckpt/run_1/best.pt",
                          "pretrain") == ["masked"]
-    assert S._ckpt_roles("model/finetune/ckpt/run_1/best_mask.pt",
+    assert S._ckpt_roles("solo_queue/model/finetune/ckpt/run_1/best_mask.pt",
                          "finetune") == ["masked"]
-    assert S._ckpt_roles("model/policy/ckpt/run_1/best_policy.pt",
+    assert S._ckpt_roles("solo_queue/model/policy/ckpt/run_1/best_policy.pt",
                          "policy") == ["policy"]
     assert S._ckpt_roles(
-        "model/proonly/ckpt/run_20261101_182415_m-patch-s0/best.pt",
+        "pro/model/proonly/ckpt/run_20261101_182415_m-patch-s0/best.pt",
         "proonly") == ["masked"]
     assert S._ckpt_roles(
-        "model/proonly/ckpt/run_20261101_183519_p-patch-s0/best.pt",
+        "pro/model/proonly/ckpt/run_20261101_183519_p-patch-s0/best.pt",
         "proonly") == ["policy"]
     # unknown (an upload) is offered in both and validated on load
-    assert S._ckpt_roles("model/uploaded/x.pt", "uploaded") == \
+    assert S._ckpt_roles("frontend/uploaded/x.pt", "uploaded") == \
         ["masked", "policy"]
 
 
@@ -407,10 +410,101 @@ def test_resolve_ckpt_path_validation():
     with pytest.raises(ValueError):
         S.resolve_ckpt_path("README.md")            # not a checkpoint
     with pytest.raises(FileNotFoundError):
-        S.resolve_ckpt_path("model/does/not/exist.pt")
+        S.resolve_ckpt_path("pro/model/does/not/exist.pt")
     # CLI-style (confine=False) may point outside, but must still exist
     with pytest.raises(FileNotFoundError):
         S.resolve_ckpt_path(str(Path.home() / "nope.pt"), confine=False)
+
+
+# --------------------------------------------------------------- ensembles
+def test_ensemble_default_is_a_manifest():
+    """The shipped next-move default is a manifest, not a checkpoint.
+
+    Its members alone are no better than the checkpoint it replaced, so a
+    future "simplification" to one .pt would silently lose the only measured
+    gain. If this fails, re-run `pro/model/proto/compare_shipped.py` before
+    changing the default.
+
+    The checkpoint stores are git-ignored (weights), so only the code-level half
+    is asserted unconditionally; the on-disk half skips on a fresh clone, like
+    the other checkpoint tests.
+    """
+    assert S.POLICY_DEFAULT.suffix == ".json"
+    if not S.POLICY_DEFAULT.is_file():
+        pytest.skip("ensemble manifest not on disk (checkpoints are ignored)")
+    members, ev, _ = S.read_ensemble(S.POLICY_DEFAULT)
+    assert len(members) >= 2
+    assert all(m.is_file() and m.suffix == ".pt" for m in members)
+    assert ev.get("top5") and ev.get("n_drafts")
+
+
+def test_ensemble_predictor_averages_member_logits():
+    """next_move must be the MEAN OF LOGITS, the quantity that was measured.
+
+    Averaging probabilities, or voting, is a different model; this pins the
+    contract so a refactor cannot quietly change what the numbers describe.
+    """
+    import torch
+    if not S.POLICY_DEFAULT.is_file():
+        pytest.skip("ensemble manifest absent")
+    pred = S.make_predictor(S.POLICY_DEFAULT, device="cpu")
+    assert pred.kind == "policy"
+    assert len(pred.models) == len(S.read_ensemble(S.POLICY_DEFAULT)[0])
+
+    picks = [1, 2, None, None, None, None, None, None, None, None]
+    bans = [11, 12, 13, 14, 15, 16]
+    out = pred.next_move(picks, bans, first_pick=0, k=173)
+    # rebuild the identical board state (next_move fills roles first)
+    board = S.infer.build_board(picks, bans, pred.num_champs, first_pick=0,
+                                device="cpu")
+    pred._fill_roles(board)
+    mv, _, _ = S.infer.resolve_position(int(board["n_bans"][0]),
+                                        int((~board["pad_mask"][0]).sum()), 0)
+    kind, team = S.infer.move_plan(0)[mv]
+    batch = S.infer._policy_batch(board, mv, kind, team,
+                                  patch_id=S.infer.PATCH_UNK_ID)
+    with torch.no_grad():
+        logits = torch.stack([m(batch)["policy_logits"][0]
+                              for m in pred.models]).mean(0)
+    ref = torch.softmax(logits.float(), -1)
+    got = {s["idx"]: s["prob"] for s in out["suggestions"]}
+    assert max(abs(float(ref[i]) - p) for i, p in got.items()) < 1e-6
+
+
+def test_read_ensemble_rejects_bad_manifests():
+    """Members resolve relative to the manifest and must stay in the project.
+
+    The manifest is written INSIDE the project because that is the only place
+    a servable manifest can live - the containment rule is part of what is
+    being tested, so a tmp_path outside the repo would pass for the wrong
+    reason.
+    """
+    good = S.read_ensemble(S.POLICY_DEFAULT)[0][0]
+    work = Path(tempfile.mkdtemp(prefix=".pytest_ens_", dir=str(S.ROOT)))
+    try:
+        man = work / "ensemble.json"
+        man.write_text(json.dumps({"members": []}), "utf-8")
+        with pytest.raises(ValueError):
+            S.read_ensemble(man)
+
+        man.write_text(json.dumps({"members": ["nope.pt"]}), "utf-8")
+        with pytest.raises(FileNotFoundError):
+            S.read_ensemble(man)
+
+        man.write_text(json.dumps({"members": ["../../etc/passwd"]}), "utf-8")
+        with pytest.raises(ValueError):
+            S.read_ensemble(man)
+
+        # a relative member resolves against the manifest's own directory
+        link = work / "member.pt"
+        try:
+            link.symlink_to(good)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks need SeCreateSymbolicLinkPrivilege on Windows")
+        man.write_text(json.dumps({"members": ["member.pt"]}), "utf-8")
+        assert S.read_ensemble(man)[0] == [good]
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 def test_load_endpoint_switches_model(app, httpd):
@@ -433,7 +527,7 @@ def test_load_endpoint_switches_model(app, httpd):
     status, _ = _post(httpd, "/api/load", json.dumps({"path": "../evil.pt"}))
     assert status == 400
     status, _ = _post(httpd, "/api/load",
-                      json.dumps({"path": "model/nope/missing.pt"}))
+                      json.dumps({"path": "pro/model/nope/missing.pt"}))
     assert status == 404
 
 

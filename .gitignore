@@ -3,7 +3,7 @@
 # ============================================================
 # Riot dev key (data/solo queue collection) + W&B key (training logs).
 # Both are provided via env vars; see data/solo queue/riot_api.py and
-# model/pretraining/train.py. Keep only .env.example in the repo.
+# solo_queue/model/pretraining/train.py. Keep only .env.example in the repo.
 .env
 !.env.example
 *.pem
@@ -25,17 +25,16 @@ secrets*.json
 *.onnx
 *.ckpt
 *.safetensors
-# The kept artefacts: model/checkpoints/<name>/ - one directory per
+# The kept artefacts: <track>/model/checkpoints/<name>/ - one directory per
 # inference class, the name states what it can do (masking-* / nextpick-*).
-model/checkpoints/
-model/**/ckpt/
-model/**/uploaded/
-model/finetune/ckpt/
-model/pretraining/ckpt/
+# The track (`solo_queue/` or `pro/`) says which data trained it.
+solo_queue/model/checkpoints/
+pro/model/checkpoints/
+**/ckpt/
 # Per-run console logs and the "last run" scratch file. The evidence that is
-# kept lives in model/proonly/reports/ (test reports + paired comparisons).
-model/proonly/logs/
-model/proonly/last_*.json
+# kept lives in pro/model/proonly/reports/ (test reports + paired comparisons).
+pro/model/proonly/logs/
+pro/model/proonly/last_*.json
 
 # ============================================================
 # Data (GBs of match records, derived caches, player ids)
@@ -62,7 +61,7 @@ matchdata/
 # ============================================================
 # Analytical store (derived, ~800MB, rebuilt by `store.py build`)
 # ============================================================
-soloq data analysis/store/
+solo_queue/analysis/store/
 **/*.duckdb
 **/*.duckdb.wal
 **/*.parquet
@@ -72,8 +71,9 @@ soloq data analysis/store/
 # ============================================================
 wandb/
 **/wandb/
-# pretraining logs here, not in pretraining/wandb - that folder name shadows
-# the installed wandb package on sys.path and breaks import
+# Every trainer passes `dir=<its own model folder>/wandb_runs` to wandb.init, so
+# runs land beside the code. Never name that folder `wandb`: it would shadow the
+# installed package on sys.path and `wandb.init` would silently not exist.
 wandb_runs/
 **/wandb_runs/
 frontend/server.log
@@ -83,6 +83,9 @@ frontend/.cache/
 *.err
 __pycache__/
 *.pyc
+# a local venv per model folder (pro/model/llm/.venv is ~330MB)
+.venv/
+**/.venv/
 .pytest_cache/
 .ipynb_checkpoints/
 last_run.json
@@ -95,4 +98,4 @@ Thumbs.db
 .idea/
 .workbuddy-ai/
 *.corrupt
-soloq data analysis/additive_model.json
+solo_queue/analysis/additive_model.json
