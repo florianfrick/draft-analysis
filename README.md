@@ -8,33 +8,81 @@ Project Goals:
 
 Create a draft analyzer/helper/predictor for league of legends pro games. It should be able to predict which champion will be picked/banned next.
 
-
 First, generate an understanding of champions, their role, strength on the patch, and synergies/counters. Use high elo soloQ games for lots of data (just one patch for now).
 
-## Repo layout & setup (keys + data stay local, never committed)
+## Repo layout
 
-SoloQ masked-draft pretraining + pro-play finetune for League of Legends
-draft prediction (patch 16.20).
+Two tracks, one per data source. The split is the point: **the pro track is the
+model that ships**, and it is where the work since 2026-11-03 has gone.
 
-### Layout
+```text
+data/        raw + derived data for both sources (git-ignored)
+frontend/    local draft-assistant UI (127.0.0.1 only)
+solo_queue/  everything trained on high-elo solo queue
+pro/         everything trained on pro drafts
+```
 
-- `model/pretraining/soloq_model.py` + `model/README.md` — frozen I/O contract.
-- `model/pretraining/train.py` — masked champ+role pretraining
-  (`--role-only-prob 0.10` teaches P(role|champ)).
-- `model/finetune/` — pro-play Stage 1 finetune (masked heads + win/econ).
-- `model/proonly/` — the pro-only recipe: pro drafts only, no soloQ, patch
-  embedding, within-patch split. Masked stage, next-pick stage, paired
-  comparison. See `model/proonly/README.md`.
-- `model/checkpoints/` — the five kept artefacts, one directory per inference
-  class: `masking-*` answers the role board, `nextpick-*` the next move,
-  `value-*` neither. Weights are git-ignored.
-- `model/test_split/` — three pinned Worlds 2026 series replayed through every
-  checkpoint, per class (what each model *said*, not just its accuracy). See
-  `model/test_split/README.md`.
-- `data/solo queue/` — Riot collection (puuids → match ids → match details)
-  + `process matchdata/pipeline.py` (masking, batch collate).
-- `data/pro play/` — Oracle's Elixir CSV → pro draft rows.
-- `frontend/` — local draft-assistant UI (127.0.0.1 only).
+The base encoder is defined **once**, in
+`solo_queue/model/pretraining/base_model.py`, and `pro/` imports it. That is a
+*code* dependency only: `proonly` trains the same architecture from scratch on
+pro drafts, and no pro checkpoint starts from a solo-queue weight. The name
+"soloQ pretraining" belongs to the solo-queue *stage*; the architecture it
+produces is the siamese base, and both tracks use it.
+
+### `solo_queue/`
+
+| path | what it is |
+|---|---|
+| `model/pretraining/` | the siamese base encoder (`base_model.py`) + masked champ/role pretraining (`--role-only-prob 0.10` teaches P(role\|champ)) |
+| `model/finetune/` | pro-play Stage 1 finetune on the frozen base: masked heads + win/econ heads (`value.py` for the prefix value function) |
+| `model/policy/` | Stage 2 next-move policy on the frozen base (bans → state → policy head) |
+| `model/tests/` | the I/O contract tests for the base encoder |
+| `model/checkpoints/` | `masking-soloqueue`, `masking-finetune`, `nextpick-policy` |
+| `analysis/` | soloQ data analysis: duckdb store, meta-overlap report, query explorer |
+
+### `pro/`
+
+| path | what it is |
+|---|---|
+| `model/proonly/` | **the recipe that ships** — pro drafts only, from scratch, patch embedding, within-patch split. Masked stage, next-pick stage, paired comparison |
+| `model/bans/` | ban-awareness experiment: three off-by-default switches (`ban_side`, `ban_fearless`, `counter_rank`) + the ablation probe |
+| `model/proto/` | the arm sandbox, and the shipped 3-member logit ensemble |
+| `model/llm/` | the frozen-LLM soft-prompt experiment |
+| `model/winpred/` | win-prediction runs (logs + weights; the code lived in a deleted `exp/`) |
+| `model/test_split/` | three pinned Worlds 2026 series replayed through **every** checkpoint, both tracks, per class |
+| `model/checkpoints/` | everything else |
+
+Each track keeps its own artefact store, so "which data trained this" is a
+path prefix, not a naming convention. Weights are git-ignored in both.
+
+### Which model actually ships
+
+Both frontend defaults are pro-track (`frontend/server.py`):
+
+- **role board / masked completion** — `masking-proonly-randomvalsplit-through-wlds-ig-tes`
+- **next move** — `nextpick-bans-aware-through-wlds-ig-tes` (pro-only policy + `ban_side`, `ban_fearless`, `counter_rank`)
+
+The next-move default changed on 2026-11-07 from the 3-member
+`nextpick-proto-ensemble` to the ban-aware arm: same corpus and split, three
+flags on, **+0.60 pp top-5 over its own control** (0.5056 vs 0.4995, p 4.3e-8).
+That is a *val* number on one seed — the ensemble's +1.33 pp was measured on the
+439 draft rows neither it nor its predecessor had trained on, so the two are not
+comparable and must not be added (`pro/model/bans/README.md`, `STATUS.md` §7).
+The ensemble is still selectable in the UI; its members are fixed at three and
+evicting one on a single seed would void the number that describes it.
+
+The measured case for it (`STATUS.md` §7, pinned Worlds 2026 test split):
+
+| task | solo-queue-trained | pro-trained |
+|---|---|---|
+| next move, top-5 | 0.479 (`nextpick-policy`) | **0.564** (`nextpick-proonly`) |
+| masked completion, top-5 | 0.529 (`masking-soloqueue`, pretrain only) | 0.714 pro-only / **0.743** soloQ→pro finetune |
+
+Training on pro drafts is what buys accuracy; solo-queue pretraining on its own
+is the weakest encoder in its own family, and fine-tuning it on pro drafts only
+ties the from-scratch pro model on 70 slots. That is why the pro recipe is the
+one that gets maintained and the solo-queue track is kept as the reference
+point for the question "does the pretraining help at all".
 
 ## Setup (keys + data stay local, never committed)
 
@@ -67,16 +115,20 @@ also works verbatim on the host if you already have the pinned versions.
      `drafts_<patch>.pt`.
    - Pro: drop Oracle's Elixir CSVs into `data/pro play/` and run
      `pipeline.py --rescan` to build `pro_drafts.pt`.
-3. Train: `python model/pretraining/train.py --epochs 30`
+3. Train: `python solo_queue/model/pretraining/train.py --epochs 30`
    (smoke: `--limit-drafts 4000 --epochs 2 --no-wandb`).
-   Checkpoints are git-ignored (100MB+ each) — both the kept
-   `model/checkpoints/` artefacts and any `ckpt/run_*/` a trainer writes.
-   Share them out-of-band (releases, drive, etc.), never via git.
+   Checkpoints are git-ignored (100MB+ each) — both the kept artefacts under
+   `<track>/model/checkpoints/` and any `ckpt/run_*/` a trainer writes.
+   W&B run directories land in `<track>/model/<folder>/wandb_runs/`, next to the
+   trainer that wrote them.
+   Share weights out-of-band (releases, drive, etc.), never via git.
 
 See each folder's README for full commands.
 
 - Multiple embedding layers summed e.g. champion (num champions + \[MASK\] + \[PAD\]), role (num roles + unknown/flex), team and patch if necessary
-    - e.g. ```class DraftSlotEmbedding(nn.Module):
+
+    ```python
+    class DraftSlotEmbedding(nn.Module):
         def __init__(self, num_champs=173, num_roles=6, embed_dim=128):
             super().__init__()
             # Static lookup tables
@@ -89,48 +141,48 @@ See each folder's README for full commands.
             x = (self.champ_lookup(champ_ids) + 
                 self.role_lookup(role_ids))
             
-            return self.layer_norm(x)```
+            return self.layer_norm(x)
+      ```
 
 - Masked modeling champion prediction in full draft (~15% chance to mask a champion and its role)
-    - ```                      [Blue Champion Set]                     [Red Champion Set]
-                                         │                                      │
-                                         ▼                                      ▼
-                             Intra-Team Self-Attention               Intra-Team Self-Attention
-                                         │                                      │
-                                         └───────────────┬──────────────────────┘
-                                                         ▼
-                                         Inter-Team Symmetric Cross-Attention
-                                                         │
-                                                         ▼ 
-                                        ┌────────────────┴────--(potentially/finetune)──────────┐
-                                        ▼                                                       ▼
-                                [Slot-Level Vectors]                                     [PMA Set Pooling]
-                                   Extract H_masks                                    v_Blue, v_Red 1D vectors
-                                        │                                                       │
-                                        │                                                       ▼
-                                        │                                    Concat(v_Blue, v_Red, v_Blue - v_Red, v_Blue ⊙ v_Red)  
-                                        ▼                                                       │
-                    ┌───────────────────┴────────────────────┐                                  ▼
-                    ▼                                        ▼                    Auxiliary heads (e.g. win prob / game metrics)
-        Champion Projection Head                   Role Projection Head
-        Linear Layer (173 Champions + mask?)               Linear Layer (5 Roles + flex?)
-                    │                                        │
-                    ▼                                        │
- Mask logits of already picked/banned champions (-inf)       │
-                    │                                        │
-                    ▼                                        ▼
-        Soft Cross-Entropy Loss                      Cross-Entropy Loss
-    (Cosine Similarity Targets / Softmax)           (Hard-Label Role Target)
-                    │                                        │
-                    └───────────────────┬────────────────────┘
-                                        ▼
-                    Total Loss = Loss_Champ + λ * Loss_Role ```
+
+```mermaid
+graph TD
+    subgraph Inputs
+        Blue[Blue Champion Set]
+        Red[Red Champion Set]
+    end
+
+    Blue --> IntraBlue[Intra-Team Self-Attention]
+    Red --> IntraRed[Intra-Team Self-Attention]
+
+    IntraBlue --> Cross[Inter-Team Symmetric Cross-Attention]
+    IntraRed --> Cross
+
+    Cross --> Slots[Slot-Level Vectors <br/> Extract H_masks]
+    Cross --> PMA[PMA Set Pooling <br/> v_Blue, v_Red 1D vectors]
+
+    Slots --> ChampHead[Champion Projection Head <br/> Linear Layer: 173 Champions + mask]
+    ChampHead --> Mask["Mask logits of picked/banned (-inf)"]
+    Mask --> LossChamp[Soft Cross-Entropy Loss <br/> Cosine Similarity / Softmax]
+
+    PMA --> Concat["Concat(v_Blue, v_Red, v_Blue - v_Red, v_Blue ⊙ v_Red)"]
+    Concat --> RoleHead[Role Projection Head <br/> Linear Layer: 5 Roles + flex]
+    Concat --> Aux[Auxiliary Heads <br/> Win Prob / Game Metrics]
+
+    RoleHead --> LossRole[Cross-Entropy Loss <br/> Hard-Label Role Target]
+
+    LossChamp --> TotalLoss["Total Loss = Loss_Champ + λ * Loss_Role"]
+    LossRole --> TotalLoss
+```
+
 - Auxiliary prediction heads (game duration/outcome, team/lane gold lead at x minutes, kills, deaths, objectives). More comprehensive + win probability estimate.
 - Possibly weigh loss differently based on game outcome (e.g. a team that loses might have made a draft mistake)
 
 
 
 Then, finetune / use with another model architecture for pro game draft order and fearless bans
+
 - Next pick/ban decision model
 - Desired frontend UI that, given the current state of a draft, can show all of the top viable options for all remaining roles.
     This should allow a coach, for example, to see not just what counterpicks are available in the next pick, but what the opponent's ideas are.
@@ -140,8 +192,8 @@ Then, finetune / use with another model architecture for pro game draft order an
 
 
 
-
 Why set attention blocks (and not ISAB):
+
 - https://arxiv.org/pdf/1810.00825
 - The same champion can not be picked twice and only the current state of the draft matters for the next pick. The order in which previous picks/bans were made doesn't matter.
 - Thus, permutation invariance and no positional embedding is desired.
@@ -156,21 +208,28 @@ Draft Format:
 
 Fearless bans (previously played champions in the series can not be picked again)
 First pick no longer always blue.
-Ban Phase 1:	Blue / Red	Alternating 3 bans per side (3-3 split)
+Ban Phase 1: Blue / Red Alternating 3 bans per side (3-3 split)
 Pick Phase 1:   B1
                 R1, R2
                 B2, B3
                 R3
-Ban Phase 2:	Red / Blue	Alternating 2 bans per side (2-2 split)
-Pick Phase 2:	R4
+Ban Phase 2: Red / Blue Alternating 2 bans per side (2-2 split)
+Pick Phase 2: R4
                 B4, B5
                 R5
 
 
 
-Best Model So Far (the only checkpoints still on disk — see STATUS.md):
-- masking-soloqueue   soloQ pretrain (kept, not retrained - it is the init)
-  masking-finetune    soloQ -> pro finetune
-  masking-proonly     pro drafts only, from scratch
-  nextpick-policy     soloQ encoder + policy head
-  nextpick-proonly    pro drafts only, encoder + policy from scratch
+Best model so far (see STATUS.md for the numbers; the shipped defaults are the
+last two rows):
+
+| track | checkpoint | what it is |
+|---|---|---|
+| solo_queue | `masking-soloqueue` | soloQ pretrain (kept as the init, not retrained) |
+| solo_queue | `masking-finetune` | soloQ → pro finetune |
+| solo_queue | `nextpick-policy` | soloQ encoder + policy head |
+| pro | `masking-proonly` | pro drafts only, from scratch |
+| pro | `nextpick-proonly` | pro drafts only, encoder + policy from scratch |
+| pro | `masking-proonly-randomvalsplit-through-wlds-ig-tes` | **shipped role board** |
+| pro | `nextpick-bans-aware-through-wlds-ig-tes` | **shipped next move** (ban-aware policy) |
+| pro | `nextpick-proto-ensemble` | 3-member logit mean — selectable, the previous default |

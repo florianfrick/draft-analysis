@@ -49,8 +49,16 @@ function modelText(m, what) {
     txt += ` · finetuned${m.stage != null ? ' (stage ' + m.stage + ')' : ''}`;
   else if (m.kind && m.kind !== 'pretrain' && m.kind !== 'policy')
     txt += ' · ' + m.kind;
-  txt += m.val_top5 == null ? ' · val top-5 n/a'
-    : ` · val top-5 ${(100 * m.val_top5).toFixed(1)}%`;
+  // An ensemble has no val run of its own; the server publishes the number it
+  // was measured at, on rows neither it nor the model it replaced had seen.
+  const ev = m.ensemble && m.ensemble.eval;
+  if (ev && ev.top5 != null) {
+    txt += ` · ${ev.label || 'held-out top-5'} ${(100 * ev.top5).toFixed(1)}%`
+         + ` (${ev.n_drafts} drafts · ${m.ensemble.members.length} models)`;
+  } else {
+    txt += m.val_top5 == null ? ' · val top-5 n/a'
+      : ` · val top-5 ${(100 * m.val_top5).toFixed(1)}%`;
+  }
   if (m.epoch != null) txt += ` · ep ${m.epoch}`;
   return txt;
 }

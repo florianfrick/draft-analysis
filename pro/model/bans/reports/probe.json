@@ -1,0 +1,78 @@
+{
+ "model/checkpoints/nextpick-bans-control-through-wlds-ig-tes/best.pt": {
+  "n_states": 95160,
+  "n_pick_states": 47580,
+  "full": {
+   "top1": 0.22654476670870113,
+   "top5": 0.5801176965111391
+  },
+  "blindfold": {
+   "top1": 0.21126523749474568,
+   "top5": 0.5529003783102143
+  },
+  "pool_blindfold": {
+   "top1": 0.22654476670870113,
+   "top5": 0.5801176965111391
+  },
+  "top1_changed": 0.07080872104599456,
+  "n_counterfactuals": 361608,
+  "spread": 1.1715001265641436,
+  "by_n_bans": {
+   "6": {
+    "n": 28548,
+    "top5": 0.5779739386296764,
+    "blind_top5": 0.5524029704357574,
+    "delta": 0.025570968193919012
+   },
+   "10": {
+    "n": 19032,
+    "top5": 0.5833333333333334,
+    "blind_top5": 0.5536464901218999,
+    "delta": 0.029686843211433375
+   }
+  },
+  "config": {
+   "ban_side": false,
+   "ban_fearless": false,
+   "counter_rank": 0
+  }
+ },
+ "model/checkpoints/nextpick-bans-aware-through-wlds-ig-tes/best.pt": {
+  "n_states": 95160,
+  "n_pick_states": 47580,
+  "full": {
+   "top1": 0.2261034047919294,
+   "top5": 0.5830601092896175
+  },
+  "blindfold": {
+   "top1": 0.20670449768810426,
+   "top5": 0.5493905002101723
+  },
+  "pool_blindfold": {
+   "top1": 0.22593526691887347,
+   "top5": 0.5808532997057587
+  },
+  "top1_changed": 0.090595340811044,
+  "n_counterfactuals": 361608,
+  "spread": 1.197267170312986,
+  "by_n_bans": {
+   "6": {
+    "n": 28548,
+    "top5": 0.580846293961048,
+    "blind_top5": 0.5507916491523049,
+    "delta": 0.030054644808743168
+   },
+   "10": {
+    "n": 19032,
+    "top5": 0.5863808322824716,
+    "blind_top5": 0.5472887767969735,
+    "delta": 0.03909205548549811
+   }
+  },
+  "config": {
+   "ban_side": true,
+   "ban_fearless": true,
+   "counter_rank": 32
+  }
+ }
+}

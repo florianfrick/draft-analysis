@@ -15,12 +15,12 @@
 #   docker-compose.yml). The repo is 9.4GB of checkpoints and CSVs; copying it
 #   into a layer would make every code edit invalidate a multi-GB layer, and
 #   checkpoints written inside the container would be invisible on the host.
-# * No `PYTHONPATH`: the scripts manage their own sys.path. `model` is a real
-#   package (`model/__init__.py` re-exports the model classes); every entry
-#   script inserts the **repo root** (the parent of `model/`) so `import model`
-#   resolves to the package and `from model.pretraining...` works. The old
-#   convention relied on each evaluator's own directory containing a `model.py`
-#   that shadowed the package - that is gone now.
+# * No `PYTHONPATH`: the scripts manage their own sys.path. The repo root is a
+#   package namespace with two tracks, `solo_queue/` and `pro/`; every entry
+#   script inserts the **repo root** so `import solo_queue.model...` and
+#   `import pro.model...` both resolve. The old convention relied on each
+#   evaluator's own directory containing a `model.py` that shadowed the package
+#   - that is gone now, and the two-level package name makes it impossible.
 
 FROM python:3.13-slim
 

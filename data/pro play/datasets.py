@@ -6,7 +6,7 @@ recent meta without touching the val/test distribution.
 
 ProNextMoveDataset: (prefix -> next move) examples from each 20-move
 draft. Prefix state uses the SoloQ partial-draft encoding (unpicked
-slots = CHAMP_PAD + pad_mask, per model/README.md Sec.3), plus ban list,
+slots = CHAMP_PAD + pad_mask, per solo_queue/model/README.md Sec.3), plus ban list,
 turn info (move idx, phase, side to move, first-pick side), the patch
 id, fearless unavailability mask, and legality mask (taken |
 unavailable) for -inf suppression at the head. Targets: (is_ban,
@@ -54,7 +54,7 @@ P = _load_module_by_path("pro_pipeline", HERE / "pipeline.py")
 _SOLOQ_PIPELINE = P.SOLOQ_PROC_DIR / "pipeline.py"
 _SQ = _load_module_by_path("soloq_pipeline", _SOLOQ_PIPELINE)
 
-# vocab constants: identical to soloq_model.py / model/README.md Sec.2
+# vocab constants: identical to base_model.py / solo_queue/model/README.md Sec.2
 N_SLOTS = 10
 TEAM_SIZE = 5
 N_MOVES = P.N_MOVES
@@ -69,6 +69,75 @@ NUM_ROLES = 5
 
 # move phases: 0=bans1, 1=picks1, 2=bans2, 3=picks2
 PHASE_OF = [0] * 6 + [1] * 6 + [2] * 4 + [3] * 4
+
+# Fearless pool width. A series is at most 5 games and a game is 10 picks, so
+# the pool entering game 5 holds at most 4*10 = 40 champions - a hard bound,
+# not a guess (`pipeline.attach_fearless` walks games 1..N-1 in order). The
+# corpus maximum is exactly 40, so nothing is ever truncated; the bound exists
+# so the token axis is a constant and batches need no per-batch padding.
+FEARLESS_SLOTS = 40
+
+
+def build_fearless_roles(rows):
+    """{gameid: {champ: role}} for the champions an earlier series game picked.
+
+    `row["unavailable"]` is a sorted list of champion ids with no roles
+    attached, and the role is the interesting half: "their mid pool is gone"
+    is a different fact from "40 champions are gone". The roles are
+    recoverable by walking each series in game order and remembering what was
+    picked, which is what this does.
+
+    Only rows that actually carry a pool get an entry, so the dict is ~10k
+    rows rather than 47k. A champion whose role cannot be recovered (the game
+    it came from was dropped) falls back to FLEX rather than being dropped -
+    the same convention `build_prefix` uses for bans, which have no role.
+
+    The pool membership itself is *not* recomputed here: `row["unavailable"]`
+    stays the single source of truth for which champions are gone, because
+    `attach_fearless` is what decides whether a series is fearless at all
+    (2025+, no internal re-pick). Recomputing it here would let the two
+    disagree.
+    """
+    by_series = {}
+    for r in rows:
+        sid = r.get("series_id")
+        if sid is not None:
+            by_series.setdefault(sid, []).append(r)
+    out = {}
+    for series_rows in by_series.values():
+        series_rows.sort(key=lambda x: (x.get("game_number") or 0,
+                                        x.get("gameid") or ""))
+        seen = {}
+        for r in series_rows:
+            if r.get("unavailable"):
+                out[r["gameid"]] = {c: seen.get(c, ROLE_FLEX_ID)
+                                    for c in r["unavailable"]}
+            for c, ro in zip(r.get("champ") or (), r.get("role") or ()):
+                seen[int(c)] = int(ro)
+    return out
+
+
+# Which team makes ban slot i, given first_pick. The interleave is fixed
+# (`pipeline.interleaved_moves`): bans1 alternates first-pick team first,
+# bans2 alternates second-pick team first. So the side of a ban is a pure
+# function of (slot, first_pick) - it is *derived* rather than carried in the
+# batch, which is why `swap_sides` needs no change: it flips `first_pick`, and
+# the derived side flips with it. Storing the side instead would have required
+# swapping the ban block too, and forgetting that would have silently mirrored
+# every ban onto the wrong team.
+BAN_SIDE_BY_SLOT = (0, 1, 0, 1, 0, 1, 1, 0, 1, 0)
+
+
+def ban_sides(first_pick):
+    """[10] long: 0 = blue banned that slot, 1 = red, given first_pick.
+
+    `first_pick` may be a tensor [B]; the result is then [B, 10].
+    """
+    table = torch.tensor(BAN_SIDE_BY_SLOT, dtype=torch.long)
+    if torch.is_tensor(first_pick):
+        fp = first_pick.long().unsqueeze(1)
+        return table.unsqueeze(0) ^ fp
+    return table ^ int(first_pick)
 
 
 def econ_targets(row, num_champs=NUM_REAL_CHAMPS):
@@ -152,11 +221,19 @@ def swap_sides(sample):
     the (blue, red) pairs inside econ_target.
 
     NOT swapped, deliberately:
-      - ban_ids: BanContext embeds bans as champ_lookup + FLEX role and
-        cross-attends with no positional or team signal, so the ban list
-        is team-agnostic to the model. A team swap also leaves the
-        chronological ban order unchanged, so the array is already the
-        correct mirrored representation.
+      - ban_ids: the ban *array* still needs no change, but no longer because
+        bans are team-agnostic. The chronological ban order is a fixed
+        function of first_pick (`interleaved_moves`), so a team swap leaves
+        slot i holding the same champion and the same "i-th ban of the game".
+        Which *side* owns slot i does flip - and that is handled by
+        `ban_sides()`, which derives the side from (slot, first_pick) at read
+        time. `first_pick` is swapped above, so the derived sides flip for
+        free. Storing the side in the batch instead would have required
+        swapping the ban block here too, and a missed swap would mirror every
+        ban onto the wrong team with nothing to catch it.
+      - fearless_ids / fearless_role_ids / n_fearless: the pool comes from
+        earlier games of the series and is role-attributed but not
+        side-attributed, so a swap inside this game cannot change it.
       - taken_mask / unavailable_mask: sets of champions, not per-team.
       - target_champ / target_role / is_ban / move_idx / phase: the same
         team is still to move and still makes the same move.
@@ -179,7 +256,8 @@ def swap_sides(sample):
     return out
 
 
-def build_prefix(row, move_idx, num_champs=NUM_REAL_CHAMPS, patch_index=None):
+def build_prefix(row, move_idx, num_champs=NUM_REAL_CHAMPS, patch_index=None,
+                 fearless_roles=None):
     """Encode draft state after moves[:move_idx] -> example dict.
 
     Slot tensors follow the soloQ partial-draft convention: unpicked
@@ -208,6 +286,18 @@ def build_prefix(row, move_idx, num_champs=NUM_REAL_CHAMPS, patch_index=None):
             role_ids[slot] = role
             pad_mask[slot] = False
     kind, team, t_champ, t_role = row["moves"][move_idx]
+    # The partner of a double-pick block: the champion the SAME team takes on
+    # the very next move. Only defined on the first move of a same-team pick
+    # pair, because that is the only place the pair is still open - after
+    # move_idx the first champion is taken and masked, so a set metric can
+    # never see both. `pro/model/proto` uses it as an auxiliary target.
+    partner_champ = IGNORE_INDEX
+    has_partner = 0
+    if kind == MOVE_PICK and move_idx + 1 < N_MOVES:
+        nk, nt, nc, _nr = row["moves"][move_idx + 1]
+        if nk == MOVE_PICK and nt == team:
+            partner_champ = nc
+            has_partner = 1
     taken = set(ban_ids[:n_bans].tolist())
     taken.update(champ_ids[~pad_mask].tolist())
     taken_mask = torch.zeros(num_champs, dtype=torch.bool)
@@ -215,6 +305,20 @@ def build_prefix(row, move_idx, num_champs=NUM_REAL_CHAMPS, patch_index=None):
     unavailable_mask = torch.zeros(num_champs, dtype=torch.bool)
     if row.get("unavailable"):
         unavailable_mask[sorted(row["unavailable"])] = True
+    # Fearless pool as tokens, not just a mask. `unavailable_mask` above is
+    # what makes the pool illegal to suggest; these are what let the model
+    # *see* it. Without them the pool is information the draft depends on and
+    # the model is never told - 21% of the corpus carries a non-empty pool,
+    # mean 15.6 champions, so this is not a corner case.
+    fearless_ids = torch.full((FEARLESS_SLOTS,), CHAMP_PAD_ID, dtype=torch.long)
+    fearless_role_ids = torch.full((FEARLESS_SLOTS,), ROLE_FLEX_ID,
+                                   dtype=torch.long)
+    pool = sorted(row["unavailable"]) if row.get("unavailable") else []
+    role_of = (fearless_roles or {}).get(row["gameid"], {})
+    n_fearless = min(len(pool), FEARLESS_SLOTS)
+    for k, champ in enumerate(pool[:FEARLESS_SLOTS]):
+        fearless_ids[k] = champ
+        fearless_role_ids[k] = int(role_of.get(champ, ROLE_FLEX_ID))
     return {
         "champ_ids": champ_ids,          # [10] partial draft, PAD = unpicked
         "role_ids": role_ids,            # [10]
@@ -223,6 +327,9 @@ def build_prefix(row, move_idx, num_champs=NUM_REAL_CHAMPS, patch_index=None):
         "n_bans": torch.tensor(n_bans, dtype=torch.long),
         "taken_mask": taken_mask,        # [C] banned|picked (legality)
         "unavailable_mask": unavailable_mask,  # [C] fearless-picked
+        "fearless_ids": fearless_ids,    # [40] pool so far, PAD-padded
+        "fearless_role_ids": fearless_role_ids,   # [40]
+        "n_fearless": torch.tensor(n_fearless, dtype=torch.long),
         "move_idx": torch.tensor(move_idx, dtype=torch.long),
         "phase": torch.tensor(phase_of(move_idx), dtype=torch.long),
         "to_move": torch.tensor(team, dtype=torch.long),  # 0=blue 1=red
@@ -233,6 +340,8 @@ def build_prefix(row, move_idx, num_champs=NUM_REAL_CHAMPS, patch_index=None):
         "target_role": torch.tensor(
             t_role if kind == MOVE_PICK else IGNORE_INDEX,
             dtype=torch.long),
+        "partner_champ": torch.tensor(partner_champ, dtype=torch.long),
+        "has_partner": torch.tensor(has_partner, dtype=torch.long),
         "win_label": torch.tensor(row["blue_win"], dtype=torch.long),
         "weight": torch.tensor(float(row.get("weight", 1.0)),
                                dtype=torch.float32),
@@ -279,7 +388,7 @@ class ProNextMoveDataset(Dataset):
 
     def __init__(self, rows, indices=None, num_champs=NUM_REAL_CHAMPS,
                  patch_index=None, prefix_mode="all", swap_aug=False,
-                 seed=0):
+                 seed=0, fearless_roles=None):
         if prefix_mode not in ("all", "random"):
             raise ValueError("prefix_mode must be 'all' or 'random', got %r"
                              % (prefix_mode,))
@@ -291,6 +400,12 @@ class ProNextMoveDataset(Dataset):
         self.seed = seed
         self.epoch = 0
         self._move_of = None
+        # Built over ALL rows, not `self.rows`: a val row's fearless pool comes
+        # from earlier games of its series, which are train rows. Building it
+        # over the split would empty every val row's pool and make the fearless
+        # arm look inert for the one reason that is not the model's fault.
+        self.fearless_roles = (fearless_roles if fearless_roles is not None
+                               else build_fearless_roles(rows))
         # Own stream so augmentation draws don't depend on loader order.
         self._aug_rng = torch.Generator().manual_seed(seed + 4241)
         if prefix_mode == "random":
@@ -323,7 +438,7 @@ class ProNextMoveDataset(Dataset):
             row = self.rows[idx // N_MOVES]
             move_idx = idx % N_MOVES
         sample = build_prefix(row, move_idx, self.num_champs,
-                              self.patch_index)
+                              self.patch_index, self.fearless_roles)
         if self.swap_aug and \
                 torch.rand((), generator=self._aug_rng).item() < 0.5:
             sample = swap_sides(sample)
@@ -395,7 +510,7 @@ class ProMaskedDraftDataset(Dataset):
             # random-subset win target: keep 1..9 random picks visible
             # (1..9, not 10: keep one team empty states in-distribution -
             # the encoder handles all-PAD teams without NaN since the
-            # key-padding clear in soloq_model._encode)
+            # key-padding clear in base_model._encode)
             keep_n = int(torch.randint(
                 1, N_SLOTS, (1,),
                 generator=self._generator(idx, 11)).item())

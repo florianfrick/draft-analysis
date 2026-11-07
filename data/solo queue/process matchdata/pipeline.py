@@ -10,7 +10,7 @@ Stages (streaming, no full-corpus RAM load):
   3. `record_to_slots` — quality filters + canonical slot order
      [B_TOP,B_JGL,B_MID,B_ADC,B_SUP,R_TOP,...].
   4. `SoloQDraftDataset` — masking (p~0.15 champ, 90/10 role, >=1 champ mask/draft, plus p~0.10 role-only with champ visible).
-  5. `soloq_collate` — stack to model/README.md Sec.3 batch.
+  5. `soloq_collate` — stack to solo_queue/model/README.md Sec.3 batch.
 
 Role map: TOP->0, JUNGLE->1, MIDDLE->2, BOTTOM->3, UTILITY->4.
 Batch keys: champ_ids, role_ids, role_masked, is_masked, champ_labels,
@@ -382,7 +382,7 @@ class SoloQDraftDataset(Dataset):
 
 
 def soloq_collate(samples):
-    """Stack per-draft dicts -> model/README.md Sec.3 batch [B,10]."""
+    """Stack per-draft dicts -> solo_queue/model/README.md Sec.3 batch [B,10]."""
     return {k: torch.stack([s[k] for s in samples]) for k in samples[0]}
 
 

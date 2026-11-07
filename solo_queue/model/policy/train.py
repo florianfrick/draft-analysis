@@ -1,0 +1,957 @@
+"""Policy-value training (Stage 2): next-move prediction + win value.
+
+Trains the PolicyValueModel on ProNextMoveDataset (20 examples/game
+from the 46.6k pro drafts). The SoloQ encoder is frozen; only the
+ban-context module, state embedding, policy head, and value head
+train from scratch.
+
+Loss per example (weighted by recency `weight`):
+  total = policy_CE(next_move) + value_w * BCE(blue_win) + econ_w * MSE(econ)
+
+The policy CE is masked: logits of taken/banned/unavailable champs are
+-inf (enforced by the model), so the softmax only normalizes over legal
+moves. Value is blue-win BCE (side-neutral: red queries mirror slots).
+
+Usage:
+    python policy/train.py --epochs 15                      # full run
+    python policy/train.py --limit-drafts 2000 --epochs 2 \\
+        --no-wandb --run-name smoke                         # smoke
+
+Stages:
+  0 = heads + ban_context + state_embed only (encoder frozen)
+  1 = + unfreeze encoder cross_team (optional, --unfreeze-stage 1)
+  2 = + unfreeze encoder intra_team (optional, --unfreeze-stage 2)
+  Embeddings stay frozen throughout (they carry soloQ vocab semantics).
+"""
+import argparse
+import glob
+import json
+import math
+import os
+import sys
+import time
+from pathlib import Path
+
+import torch
+import torch.nn.functional as F
+from torch.utils.data import DataLoader
+
+HERE = Path(__file__).resolve().parent            # .../solo_queue/model/policy
+MODEL_DIR = HERE.parent                           # .../model
+ROOT = MODEL_DIR.parents[1]                           # .../lol draft analysis
+PRO_DIR = ROOT / "data" / "pro play"
+SOLOQ_PROC_DIR = ROOT / "data" / "solo queue" / "process matchdata"
+PRETRAIN_CKPT_GLOB = str(MODEL_DIR / "checkpoints" /
+                         "masking-soloqueue" / "*.pt")
+# The one soloQ-pretrained checkpoint kept in the repo (see STATUS.md),
+# renamed `masking-soloqueue` when the other families were pruned.
+# `--init-ckpt auto` resolves to the same file.
+DEFAULT_INIT = str(MODEL_DIR / "checkpoints" / "masking-soloqueue" / "best.pt")
+IGNORE_INDEX = -100
+N_MOVES = 20
+
+
+def _load_module_by_path(name, path):
+    spec = __import__("importlib").util.spec_from_file_location(
+        name, str(path))
+    mod = __import__("importlib").util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# Insert the repo ROOT so that `model` resolves to the `model/` namespace
+# package (enabling `from solo_queue.model.pretraining...`), then drop this script's own
+# directory from sys.path. As a top-level entry it contains `model.py`, which
+# would shadow the `model/` package (a regular module always beats a namespace
+# portion) and break `from solo_queue.model.pretraining...`. The class imports below are
+# fully-qualified submodules, not `from solo_queue.model import X`.
+sys.path.insert(0, str(ROOT))
+sys.path[:] = [p for p in sys.path if p != str(HERE)]
+from solo_queue.model.pretraining.base_model import SiameseBase  # noqa: E402
+from solo_queue.model.pretraining.base_model import attr_matrix_for_config  # noqa: E402
+from solo_queue.model.pretraining.base_model import load_encoder_state  # noqa: E402
+from solo_queue.model.policy.model import PolicyValueModel  # noqa: E402
+
+PRO_PIPE = _load_module_by_path("pro_pipeline", PRO_DIR / "pipeline.py")
+PRO_DATA = _load_module_by_path("pro_datasets", PRO_DIR / "datasets.py")
+EP = _load_module_by_path("eval_protocol", PRO_DIR / "eval_protocol.py")
+SQ_PIPE = _load_module_by_path("soloq_pipeline",
+                               SOLOQ_PROC_DIR / "pipeline.py")
+
+
+def parse_args(argv=None):
+    ap = argparse.ArgumentParser(description="Policy-value Stage 2")
+    # data
+    ap.add_argument("--limit-drafts", type=int, default=0)
+    ap.add_argument("--half-life", type=float, default=75.0)
+    ap.add_argument("--rehearse-frac", type=float, default=0.0,
+                    help="share of soloQ masked batches (0=off; encoder "
+                         "is frozen so rehearsal is optional)")
+    # model/init
+    ap.add_argument("--init-ckpt", default=DEFAULT_INIT,
+                    help="soloQ checkpoint path or 'auto'")
+    ap.add_argument("--state-dim", type=int, default=64)
+    ap.add_argument("--head-dropout", type=float, default=0.0)
+    ap.add_argument("--n-econ", type=int, default=0,
+                    help="width of the aux economy regression; 0 = off "
+                         "(default). The head scored econ_skill -0.15 and "
+                         "nothing downstream consumes it")
+    ap.add_argument("--no-patch", action="store_true",
+                    help="disable patch conditioning (ablation; default on)")
+    # data sampling / augmentation
+    ap.add_argument("--prefix-mode", choices=("random", "all"),
+                    default="random",
+                    help="random = 1 prefix per game per epoch (default, "
+                         "20x cheaper epoch and no near-duplicate repeats); "
+                         "all = 20 examples/game (old behaviour)")
+    ap.add_argument("--swap-aug", dest="swap_aug", action="store_true",
+                    default=True,
+                    help="mirror blue<->red with p=0.5 (default on)")
+    ap.add_argument("--no-swap-aug", dest="swap_aug", action="store_false",
+                    help="disable blue/red mirror augmentation")
+    # losses
+    ap.add_argument("--value-weight", type=float, default=0.0,
+                    help="weight on win BCE; 0 = no value head at all "
+                         "(default). This head measured test win_auc 0.4969 "
+                         "and is worse than a constant once the draft fills - "
+                         "use solo_queue/model/finetune/value.py for V instead")
+    ap.add_argument("--econ-weight", type=float, default=0.1)
+    # optimisation
+    ap.add_argument("--epochs", type=int, default=100,
+                    help="passes over the game list. With --prefix-mode "
+                         "random an epoch is 20x cheaper than the old "
+                         "20-examples/game epoch, so 100 epochs is roughly "
+                         "the optimizer-step budget of a 5-epoch run of "
+                         "--prefix-mode all")
+    ap.add_argument("--unfreeze-stage", type=int, default=0,
+                    help="0=encoder frozen (default), 1=+cross, 2=+intra")
+    ap.add_argument("--batch-size", type=int, default=512)
+    ap.add_argument("--lr", type=float, default=1e-3)
+    ap.add_argument("--lr-enc", type=float, default=1e-5)
+    ap.add_argument("--weight-decay", type=float, default=0.01)
+    ap.add_argument("--grad-clip", type=float, default=1.0)
+    ap.add_argument("--warmup-frac", type=float, default=0.05)
+    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--device", default="cuda" if torch.cuda.is_available()
+                    else "cpu")
+    ap.add_argument("--no-wandb", action="store_true")
+    ap.add_argument("--wandb-project", default="lol-draft-policy")
+    ap.add_argument("--run-name", default="")
+    ap.add_argument("--out-dir", default="",
+                    help="write the run here instead of ckpt/run_<ts>_<name>. "
+                         "Used to give the kept artefacts a stable, "
+                         "self-describing name (solo_queue/model/checkpoints/nextpick-policy).")
+    ap.add_argument("--log-every", type=int, default=50)
+    ap.add_argument("--eval-every", type=int, default=5,
+                    help="epochs between val evals. Random prefix mode has "
+                         "20x more epochs than the old mode, so evaluating "
+                         "every epoch would cost more than training")
+    return ap.parse_args(argv)
+
+
+def pick_init_ckpt(spec):
+    """Resolve --init-ckpt: explicit path, or 'auto' = best val top5."""
+    if spec != "auto":
+        payload = torch.load(str(spec), map_location="cpu",
+                             weights_only=False)
+        return str(spec), payload
+    best, best_score = None, -1.0
+    for path in sorted(glob.glob(PRETRAIN_CKPT_GLOB)):
+        try:
+            payload = torch.load(path, map_location="cpu",
+                                 weights_only=False)
+        except Exception:  # noqa: BLE001
+            continue
+        score = float(payload.get("metrics", {}).get("champ_top5", -1.0))
+        if score > best_score:
+            best, best_score = (path, payload), score
+    if best is None:
+        raise FileNotFoundError("no checkpoint under %s"
+                                % PRETRAIN_CKPT_GLOB)
+    return best
+
+
+def build_encoder(payload, n_patches=0):
+    cfg = payload["config"]
+    enc = SiameseBase(
+        num_champs=cfg["num_champs"], embed_dim=cfg["embed_dim"],
+        num_heads=cfg["num_heads"],
+        num_intra_layers=cfg["num_intra"],
+        num_cross_layers=cfg["num_cross"], dropout=cfg.get("dropout", 0.0),
+        attr_matrix=attr_matrix_for_config(cfg), n_patches=n_patches)
+    # The pretrained checkpoint may carry the opt-in value path (pma.*,
+    # win_head.*); the policy builds its own value head, so drop those keys
+    # instead of failing on "unexpected keys". The patch table is tolerated
+    # too: the finetune (or soloQ) trunk predates / differs in patch
+    # conditioning and may carry no patch_lookup, while the encoder's own
+    # zero-initialised table is the intended starting point.
+    load_encoder_state(enc, payload["model"], allow_missing_patch=True)
+    return enc, cfg
+
+
+def load_pro_rows(args):
+    rows, stats = PRO_PIPE.build_rows(limit=args.limit_drafts)
+    PRO_PIPE.assign_weights(rows, args.half_life)
+    # Within-patch split (train = head of each patch, val/test = tail) so the
+    # patch id is a *seen* input at test - the only split on which a patch
+    # embedding can be measured. Under split_series_by_date every test patch is
+    # unseen and the patch id is UNK at test, which made patch conditioning
+    # untestable and inflated val (val was 81.5% patches-seen vs 100% unseen at
+    # test). `patch_honest_val` is meaningless once val and test share the same
+    # condition, so it is disabled.
+    # `limit` truncates the scan, so a smoke run cannot expect to hold the
+    # pinned test series out; relax the pin for it only.
+    splits = PRO_PIPE.split_within_patch(rows,
+                                         strict_pin=not args.limit_drafts)
+    args.patch_honest_val = False
+    return rows, splits
+
+
+def load_soloq_rows():
+    """Patch 16.20 soloQ rows for rehearsal (optional)."""
+    payload = torch.load(str(SOLOQ_PROC_DIR / "drafts_16.20.pt"),
+                         map_location="cpu", weights_only=False)
+    return payload["rows"], payload["patch"]
+
+
+def fit_econ_stats(rows, indices, n_econ=6):
+    """Mean/std of raw econ targets on train rows with has_econ.
+
+    `n_econ` selects a PREFIX of the 6 raw targets (gold10 b/r, gold15
+    b/r, xp10 b/r) to match the width of the econ head. Without the
+    slice, `acc` was allocated as zeros(n_econ) but accumulated a
+    6-vector, so any --n-econ other than 0 or 6 raised a size mismatch.
+    """
+    acc, cnt = torch.zeros(n_econ), 0
+    acc2 = torch.zeros(n_econ)
+    for i in indices:
+        row = rows[i]
+        if not row.get("has_econ"):
+            continue
+        v = torch.tensor(PRO_DATA.econ_targets(row))[:n_econ]
+        acc += v
+        acc2 += v * v
+        cnt += 1
+    cnt = max(1, cnt)
+    mean = acc / cnt
+    var = (acc2 / cnt - mean * mean).clamp_min(1e-6)
+    return mean, var.sqrt()
+
+
+def policy_loss(out, batch):
+    """CE on next-move champion, with -inf legality masking already applied.
+
+    Handles the edge case where the target champion was masked (shouldn't
+    happen after the unavailable-on-bans fix, but guards against NaN).
+    """
+    cl = out["policy_logits"]
+    tc = batch["target_champ"]
+    # Safety: if any target logit is -inf/nan, replace with a large
+    # negative so CE is finite (the model still gets penalized).
+    tgt_logits = cl.gather(1, tc[:, None]).squeeze(1)
+    bad = ~torch.isfinite(tgt_logits)
+    if bool(bad.any()):
+        cl = cl.clone()
+        cl[bad.unsqueeze(1).expand_as(cl) & (cl < 0)] = -1e4
+        cl[bad, tc[bad]] = 0.0  # give target a neutral logit
+    return F.cross_entropy(cl, tc)
+
+
+def value_loss(out, batch):
+    """BCE on blue-win logit; zero when the head is off."""
+    if "value_logit" not in out:
+        return next(iter(out.values())).sum() * 0.0
+    if batch["win_label"].numel() == 0:
+        return out["value_logit"].sum() * 0.0
+    return F.binary_cross_entropy_with_logits(
+        out["value_logit"].squeeze(-1), batch["win_label"].float())
+
+
+def econ_loss(out, batch, econ_mean, econ_std):
+    """MSE on standardized econ, masked to has_econ rows.
+
+    build_prefix always emits all 6 raw targets, so slice the target to
+    the head's width: --n-econ may select a prefix of them.
+    """
+    if "econ_pred" not in out:
+        return next(iter(out.values())).sum() * 0.0
+    if "econ_target" not in batch or "has_econ" not in batch:
+        return out["econ_pred"].sum() * 0.0
+    if int(batch["has_econ"].sum()) == 0:
+        return out["econ_pred"].sum() * 0.0
+    n = out["econ_pred"].shape[1]
+    tgt = (batch["econ_target"][:, :n] - econ_mean) / econ_std
+    err = (out["econ_pred"] - tgt) ** 2
+    w = batch["has_econ"].unsqueeze(1)
+    return (err * w).sum() / (w.sum() * err.shape[1])
+
+
+def _value_str(m):
+    """Optional value/econ suffix for log lines.
+
+    Both heads are off by default now, so the reporting has to degrade to
+    nothing instead of KeyError - and a missing metric must never print as
+    a 0.0 that reads like a measurement.
+    """
+    parts = []
+    if "win_auc" in m:
+        parts.append("win_auc %.4f brier %.4f skill %+.4f"
+                     % (m["win_auc"], m["win_brier"],
+                        m.get("win_skill", float("nan"))))
+    if "econ_rmse" in m:
+        parts.append("econ_rmse %.3f skill %+.3f"
+                     % (m["econ_rmse"], m.get("econ_skill", float("nan"))))
+    return (" | " + " ".join(parts)) if parts else ""
+
+
+def batch_auc(logits, labels):
+    """AUC via rank statistics; 0.5 on degenerate."""
+    finite = ~torch.isnan(logits)
+    logits, labels = logits[finite], labels[finite]
+    pos = logits[labels == 1]
+    neg = logits[labels == 0]
+    if pos.numel() == 0 or neg.numel() == 0:
+        return 0.5
+    wins = (pos[:, None] > neg[None, :]).float().sum()
+    ties = (pos[:, None] == neg[None, :]).float().sum()
+    return float((wins + 0.5 * ties) / (pos.numel() * neg.numel()))
+
+
+@torch.no_grad()
+def evaluate(model, loaders, args, device, econ_mean, econ_std,
+             move_rank=None, rep=None, base_rep=None):
+    """Val: next-move top-k accuracy, win AUC, econ RMSE, popularity baselines.
+
+    `move_rank` (from EP.move_popularity_ranks, fit on TRAIN) adds the
+    baseline on identical examples. The baseline-relative score
+    `rel_top5 = top5 / base_top5` is what checkpoint selection uses: the raw
+    top-5 moves with the window's difficulty, so on a harder window it selects
+    the wrong epoch. Measured on this corpus the baseline alone goes 0.1903
+    (val) -> 0.1243 (test).
+
+    Pass `rep` (an EP.RankReport) to also accumulate every example's rank with
+    its patch / league / move index / ban-vs-pick, which is what
+    `EP.stratified` turns into the per-slice report. `base_rep` accumulates the
+    same slices for the train-fitted move table, so every slice shows its `rel`.
+    """
+    model.eval()
+    # Next-move metrics
+    top = {1: 0.0, 5: 0.0, 10: 0.0}
+    base_top = {1: 0.0, 5: 0.0, 10: 0.0}
+    ban_top = {1: 0.0, 5: 0.0}
+    pick_top = {1: 0.0, 5: 0.0}
+    n_total = 0
+    n_ban = 0
+    n_pick = 0
+    loss_sum = 0.0
+    # Value metrics
+    val_logits, val_labels = [], []
+    econ_err, econ_n = 0.0, 0
+    # Econ drift accounting: gold/xp at 10/15 min inflate patch over patch,
+    # so a model that predicts the TRAIN mean perfectly still scores
+    # RMSE ~1.5 on a split 3-6 patches later. Track the residual bias and
+    # the target variance so econ_rmse can be read against a constant
+    # predictor instead of against zero.
+    econ_pred_sum, econ_tgt_sum, econ_tgt_sq, econ_cnt = 0.0, 0.0, 0.0, 0
+
+    for batch in loaders["val"]:
+        batch = {k: v.to(device) if torch.is_tensor(v) else v
+                 for k, v in batch.items()}
+        out = model(batch)
+        cl = out["policy_logits"]
+        tc = batch["target_champ"]
+        # Rank of truth
+        truth_logit = cl.gather(1, tc[:, None]).squeeze(1)
+        ranks = (cl > truth_logit[:, None]).sum(1)  # rank of truth, 0=top-1
+        is_ban = batch["is_ban"].bool()
+
+        n = tc.numel()
+        for k in top:
+            top[k] += float((ranks < k).sum())
+        if move_rank is not None:
+            m_idx = batch["move_idx"].tolist()
+            for k in base_top:
+                base_top[k] += sum(
+                    1 for m, c in zip(m_idx, tc.tolist())
+                    if move_rank[m][c] < k)
+        # Split by ban vs pick
+        if bool(is_ban.any()):
+            for k in ban_top:
+                ban_top[k] += float((ranks[is_ban] < k).sum())
+            n_ban += int(is_ban.sum())
+        if bool((~is_ban).any()):
+            for k in pick_top:
+                pick_top[k] += float((ranks[~is_ban] < k).sum())
+            n_pick += int((~is_ban).sum())
+        if rep is not None:
+            metas = batch.get("meta") or [{}] * int(ranks.numel())
+            patches = [md.get("patch") for md in metas]
+            leagues = [md.get("league") for md in metas]
+            kinds = ["ban" if b else "pick" for b in is_ban.tolist()]
+            rep.add(ranks.tolist(), patches, leagues,
+                    batch["move_idx"].tolist(), kinds)
+            if base_rep is not None and move_rank is not None:
+                base_rep.add([move_rank[m][c] for m, c in
+                              zip(batch["move_idx"].tolist(), tc.tolist())],
+                             patches, leagues, batch["move_idx"].tolist(),
+                             kinds)
+
+        loss_sum += float(policy_loss(out, batch)) * n
+        n_total += n
+
+        if "value_logit" in out:
+            val_logits.append(out["value_logit"].squeeze(-1).float().cpu())
+            val_labels.append(batch["win_label"].cpu())
+        # build_prefix now always emits econ_target/has_econ (the econ
+        # head used to have no labels at all), so gate on the head
+        # existing too, or n_econ=0 runs would KeyError here.
+        if "econ_pred" in out and "has_econ" in batch \
+                and int(batch["has_econ"].sum()):
+            n = out["econ_pred"].shape[1]
+            tgt = (batch["econ_target"][:, :n] - econ_mean) / \
+                econ_std.to(batch["econ_target"].device)
+            keep = batch["has_econ"].bool()
+            w = batch["has_econ"].unsqueeze(1)
+            # Mask the numerator by has_econ as well as the denominator.
+            # Rows without econ labels have econ_target = zeros, which
+            # standardizes to roughly -16 and squares to ~256: summing
+            # those into the numerator while excluding them from the
+            # count made econ_rmse meaningless (~1.5-2.6 for any model,
+            # including one that just predicts the mean).
+            err = ((out["econ_pred"] - tgt) ** 2) * w
+            econ_err += float(err.sum())
+            econ_n += int(keep.sum()) * err.shape[1]
+            econ_pred_sum += float(out["econ_pred"][keep].double().sum())
+            econ_tgt_sum += float(tgt[keep].double().sum())
+            econ_tgt_sq += float((tgt[keep].double() ** 2).sum())
+            econ_cnt += int(keep.sum()) * err.shape[1]
+
+    out_m = {}
+    out_m["policy_loss"] = loss_sum / max(1, n_total)
+    for k in top:
+        out_m["top%d" % k] = top[k] / max(1, n_total)
+    if move_rank is not None:
+        for k in base_top:
+            out_m["base_top%d" % k] = base_top[k] / max(1, n_total)
+        # the selection score: comparable across windows of different difficulty
+        out_m["rel_top5"] = EP.baseline_relative(
+            out_m["top5"], out_m["base_top5"])
+    out_m["ban_top1"] = ban_top[1] / max(1, n_ban)
+    out_m["ban_top5"] = ban_top[5] / max(1, n_ban)
+    out_m["pick_top1"] = pick_top[1] / max(1, n_pick)
+    out_m["pick_top5"] = pick_top[5] / max(1, n_pick)
+    out_m["n_total"] = n_total
+    out_m["n_ban"] = n_ban
+    out_m["n_pick"] = n_pick
+
+    # Value metrics - only when a value head was trained, and always next
+    # to the constant-predictor baseline so the number cannot flatter
+    # itself (the old report had win_brier with nothing to compare it to).
+    has_value = bool(val_logits)
+    if has_value:
+        val_logits = torch.cat(val_logits)
+        val_labels = torch.cat(val_labels)
+        out_m["win_auc"] = batch_auc(val_logits, val_labels)
+        out_m["win_brier"] = float(
+            ((torch.sigmoid(val_logits) - val_labels.float()) ** 2).mean())
+        out_m["win_base_rate"] = float(val_labels.float().mean())
+        out_m["win_brier_const"] = float(
+            ((out_m["win_base_rate"] - val_labels.float()) ** 2).mean())
+        if out_m["win_brier_const"] > 0:
+            out_m["win_skill"] = 1.0 - out_m["win_brier"] / \
+                out_m["win_brier_const"]
+    if econ_n:
+        out_m["econ_rmse"] = (econ_err / econ_n) ** 0.5
+    # Decompose MSE = var(residual) + bias^2. The bias is the patch drift,
+    # which no draft-only model can predict. `econ_rmse_const` is what the
+    # best constant predictor scores on this split, so econ_rmse_centered
+    # < econ_rmse_const means the head has real signal. econ_skill is the
+    # resulting R^2. Nothing is emitted when the head is off, so a 0.0 can
+    # never be mistaken for a measurement.
+    if econ_cnt:
+        mse = econ_err / econ_cnt
+        bias = econ_pred_sum / econ_cnt - econ_tgt_sum / econ_cnt
+        var_t = max(1e-9, econ_tgt_sq / econ_cnt
+                    - (econ_tgt_sum / econ_cnt) ** 2)
+        centered = max(0.0, mse - bias ** 2)
+        out_m["econ_rmse_centered"] = centered ** 0.5
+        out_m["econ_rmse_const"] = var_t ** 0.5
+        out_m["econ_skill"] = 1.0 - centered / var_t
+    if has_value:
+        out_m["n_win"] = int(val_labels.numel())
+
+    return out_m
+
+
+def compute_move_popularity(rows, indices, num_champs):
+    """Popularity baseline: for each move position (0..19), the
+    weighted-frequency rank of champions at that move position."""
+    from collections import Counter
+    move_counts = [Counter() for _ in range(N_MOVES)]
+    for i in indices:
+        row = rows[i]
+        w = float(row.get("weight", 1.0))
+        for m_idx, (kind, team, champ, role) in enumerate(row["moves"]):
+            move_counts[m_idx][int(champ)] += w
+
+    move_rank = []
+    for m_idx in range(N_MOVES):
+        c = move_counts[m_idx]
+        order = sorted(range(num_champs),
+                      key=lambda x: (-float(c.get(x, 0.0)), x))
+        rank = torch.empty(num_champs, dtype=torch.long)
+        rank[torch.tensor(order)] = torch.arange(num_champs)
+        move_rank.append(rank)
+    return move_rank, move_counts
+
+
+@torch.no_grad()
+def evaluate_with_baseline(model, loader, rows, train_indices,
+                           num_champs, args, device):
+    """Extended eval with popularity baseline comparison."""
+    model.eval()
+    move_rank, move_counts = compute_move_popularity(
+        rows, train_indices, num_champs)
+    move_rank = [r.to(device) for r in move_rank]
+
+    top = {1: 0.0, 5: 0.0, 10: 0.0}
+    base_top = {1: 0.0, 5: 0.0, 10: 0.0}
+    n_total = 0
+
+    for batch in loader:
+        batch = {k: v.to(device) if torch.is_tensor(v) else v
+                 for k, v in batch.items()}
+        out = model(batch)
+        cl = out["policy_logits"]
+        tc = batch["target_champ"]
+        truth_logit = cl.gather(1, tc[:, None]).squeeze(1)
+        ranks = (cl > truth_logit[:, None]).sum(1)
+
+        for i in range(tc.numel()):
+            m_idx = int(batch["move_idx"][i])
+            br = move_rank[m_idx][tc[i]].item()
+            for k in top:
+                if int(ranks[i]) < k:
+                    top[k] += 1
+            for k in base_top:
+                if br < k:
+                    base_top[k] += 1
+            n_total += 1
+
+    out_m = {}
+    for k in top:
+        out_m["top%d" % k] = top[k] / max(1, n_total)
+        out_m["base_top%d" % k] = base_top[k] / max(1, n_total)
+    out_m["n_total"] = n_total
+    return out_m
+
+
+def run_wandb(args):
+    if args.no_wandb:
+        return None
+    try:
+        import wandb
+        return wandb.init(project=args.wandb_project,
+                          name=args.run_name or None,
+                          config=vars(args),
+                          # never `HERE`: a `wandb/` dir there shadows the package
+                          dir=str(HERE / "wandb_runs"),
+                          settings=wandb.Settings(init_timeout=60))
+    except Exception as exc:  # noqa: BLE001
+        print("wandb disabled: %s" % exc)
+        return None
+
+
+def save_ckpt(path, model, args, cfg, metrics, step, extra):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"model": model.state_dict(),
+               "config": {"num_champs": cfg["num_champs"],
+                          "embed_dim": cfg["embed_dim"],
+                          "num_heads": cfg["num_heads"],
+                          "num_intra": cfg["num_intra"],
+                          "num_cross": cfg["num_cross"],
+                          "dropout": cfg.get("dropout", 0.0),
+                          "state_dim": args.state_dim,
+                          "n_econ": args.n_econ,
+                          "head_dropout": args.head_dropout,
+                          # Needed to rebuild the model at inference:
+                          # sizes state_embed.patch_embed and maps a
+                          # patch string to its row.
+                          "n_patches": extra.get("n_patches", 0),
+                          "patch_vocab": extra.get("patch_vocab")},
+               "metrics": metrics, "step": step,
+               "init_ckpt": extra["init_ckpt"],
+               "unfreeze_stage": args.unfreeze_stage,
+               "patch": extra.get("patch"),
+               "econ_mean": extra.get("econ_mean"),
+               "econ_std": extra.get("econ_std")}
+    torch.save(payload, str(path))
+
+
+def train(args):
+    torch.manual_seed(args.seed)
+    device = torch.device(args.device)
+    amp = device.type == "cuda"
+
+    # Load encoder
+    ckpt_spec, payload = pick_init_ckpt(args.init_ckpt)
+    print("init encoder <- %s (val top5 %.4f)" %
+          (ckpt_spec, float(payload.get("metrics", {})
+                            .get("champ_top5", -1))))
+    rows, splits = load_pro_rows(args)
+    print("pro rows %d (train %d / val %d / test %d)" %
+          (len(rows), len(splits["train"]), len(splits["val"]),
+           len(splits["test"])))
+
+    # Patch vocabulary over all rows (metadata, not labels - see
+    # build_patch_vocab). Index 0 is UNK so the next patch at inference
+    # time maps to a learned fallback instead of crashing.
+    patch_vocab, patch_index = PRO_DATA.build_patch_vocab(rows)
+    if args.no_patch:
+        n_patches = 0
+        print("patch conditioning: OFF (ablation)")
+    else:
+        n_patches = len(patch_vocab) + 1
+        print("patch conditioning: ON (%d patches %s..%s + UNK)"
+              % (len(patch_vocab), patch_vocab[0], patch_vocab[-1]))
+
+    encoder, cfg = build_encoder(payload, n_patches=n_patches)
+    embed_dim = cfg["embed_dim"]
+
+    model = PolicyValueModel(
+        encoder, embed_dim=embed_dim, state_dim=args.state_dim,
+        n_econ=args.n_econ, dropout=args.head_dropout,
+        n_patches=n_patches,
+        # --value-weight 0 means no value head at all, so the checkpoint
+        # carries no value_head.* keys and nothing reports win_auc.
+        with_value=args.value_weight > 0,
+    ).to(device)
+
+    # Freeze encoder per --unfreeze-stage
+    if args.unfreeze_stage == 0:
+        model.set_freeze_encoder(True)
+    else:
+        model.set_freeze_encoder(False)
+        # Partial unfreeze: freeze embeddings always
+        for p in model.encoder.embed.parameters():
+            p.requires_grad = False
+        if args.unfreeze_stage == 1:
+            for p in model.encoder.intra_team.parameters():
+                p.requires_grad = False
+        # stage 2: everything except embeddings trains
+
+    econ_mean, econ_std = torch.zeros(args.n_econ), torch.ones(args.n_econ)
+    if args.n_econ > 0:
+        econ_mean, econ_std = fit_econ_stats(
+            rows, splits["train"], args.n_econ)
+    emu, esd = econ_mean.to(device), econ_std.to(device)
+
+    # Train dataset: one prefix per game per epoch + blue/red mirror.
+    # Val/test: every prefix, no augmentation, so metrics stay
+    # comparable to earlier runs (62,880 test examples).
+    tr_ds = PRO_DATA.ProNextMoveDataset(
+        rows, splits["train"], num_champs=cfg["num_champs"],
+        patch_index=patch_index, prefix_mode=args.prefix_mode,
+        swap_aug=args.swap_aug, seed=args.seed)
+    va_ds = PRO_DATA.ProNextMoveDataset(
+        rows, splits["val"], num_champs=cfg["num_champs"],
+        patch_index=patch_index, prefix_mode="all", swap_aug=False)
+    te_ds = PRO_DATA.ProNextMoveDataset(
+        rows, splits["test"], num_champs=cfg["num_champs"],
+        patch_index=patch_index, prefix_mode="all", swap_aug=False)
+    print("train examples/epoch %d (prefix_mode=%s, swap_aug=%s)"
+          % (len(tr_ds), args.prefix_mode, args.swap_aug))
+
+    # Per-move popularity baseline, fit on train only. Used for the
+    # baseline-relative selection score.
+    move_rank = EP.move_popularity_ranks(rows, splits["train"],
+                                         cfg["num_champs"])
+    print("baseline: per-move popularity over %d train drafts"
+          % len(splits["train"]))
+
+    # Weighted sampler for recency. `weights()` is aligned with
+    # __len__, so in random-prefix mode it is one weight per game.
+    train_weights = tr_ds.weights()
+    if max(train_weights) - min(train_weights) > 1e-6:
+        from torch.utils.data import WeightedRandomSampler
+        g = torch.Generator().manual_seed(args.seed)
+        sampler = WeightedRandomSampler(
+            train_weights, num_samples=len(tr_ds),
+            replacement=True, generator=g)
+        tr_loader = DataLoader(tr_ds, batch_size=args.batch_size,
+                              sampler=sampler,
+                              collate_fn=PRO_DATA.pro_collate,
+                              num_workers=0,
+                              pin_memory=torch.cuda.is_available())
+    else:
+        tr_loader = DataLoader(tr_ds, batch_size=args.batch_size,
+                              shuffle=True,
+                              collate_fn=PRO_DATA.pro_collate,
+                              num_workers=0,
+                              pin_memory=torch.cuda.is_available())
+
+    va_loader = DataLoader(va_ds, batch_size=args.batch_size,
+                           shuffle=False,
+                           collate_fn=PRO_DATA.pro_collate,
+                           num_workers=0,
+                           pin_memory=torch.cuda.is_available())
+    te_loader = DataLoader(te_ds, batch_size=args.batch_size,
+                           shuffle=False,
+                           collate_fn=PRO_DATA.pro_collate,
+                           num_workers=0,
+                           pin_memory=torch.cuda.is_available())
+
+    # Optional soloQ rehearsal
+    sq_epoch, sq_it = 0, None
+    if args.rehearse_frac > 0:
+        sq_rows, sq_patch = load_soloq_rows()
+        print("rehearsal pool: %d soloQ drafts (%s)" % (len(sq_rows), sq_patch))
+
+        def sq_loader(epoch):
+            ds = SQ_PIPE.SoloQDraftDataset(sq_rows,
+                                           num_champs=cfg["num_champs"],
+                                           seed=args.seed + 200, epoch=epoch)
+            return DataLoader(ds, batch_size=args.batch_size, shuffle=True,
+                              collate_fn=SQ_PIPE.soloq_collate,
+                              num_workers=0,
+                              pin_memory=torch.cuda.is_available())
+    else:
+        sq_rows = None
+
+    # Optimizer: two param groups -- heads at --lr, encoder at --lr-enc.
+    #
+    # Split by object identity. The previous filter used
+    # `p is not model.encoder`, but a Parameter is never identical to
+    # the encoder Module, so that test was always True and the encoder
+    # landed in BOTH groups. It only stayed hidden at --unfreeze-stage 0
+    # because frozen encoder params have requires_grad=False and were
+    # filtered out; any stage > 0 raised "some parameters appear in more
+    # than one parameter group".
+    #
+    # The encoder's own champ_head/role_head are dead in this model
+    # (forward only calls encoder._encode), so keep them out of the
+    # encoder group rather than feeding the optimizer unused weights.
+    enc_owned = list(model.encoder.parameters())
+    dead_ids = set()
+    for _name in ("champ_head", "role_head"):
+        _sub = getattr(model.encoder, _name, None)
+        if _sub is not None:
+            dead_ids.update(id(p) for p in _sub.parameters())
+    enc_ids = {id(p) for p in enc_owned}
+
+    head_params = [p for p in model.parameters()
+                   if p.requires_grad and id(p) not in enc_ids]
+    enc_params = [p for p in enc_owned
+                  if p.requires_grad and id(p) not in dead_ids]
+
+    # Invariant: groups must be disjoint and cover every trainable
+    # parameter (except the deliberately unused encoder heads). This is
+    # the check that would have caught the duplicate-group bug.
+    grouped = head_params + enc_params
+    _ids = [id(p) for p in grouped]
+    assert len(_ids) == len(set(_ids)), \
+        "parameter appears in more than one optimizer group"
+    _trainable = {id(p) for p in model.parameters() if p.requires_grad}
+    assert not (_trainable - set(_ids) - dead_ids), \
+        "trainable parameter missing from optimizer"
+
+    groups = [{"params": head_params, "lr": args.lr}]
+    if enc_params:
+        groups.append({"params": enc_params, "lr": args.lr_enc})
+    opt = torch.optim.AdamW(groups, weight_decay=args.weight_decay)
+    print("optimizer: %d head params @ lr %.1e, %d encoder params @ lr %.1e"
+          % (len(head_params), args.lr, len(enc_params), args.lr_enc))
+
+    total_steps = len(tr_loader) * args.epochs
+    warm = max(1, int(total_steps * args.warmup_frac))
+    print("schedule: %d steps/epoch x %d epochs = %d steps (warmup %d)"
+          % (len(tr_loader), args.epochs, total_steps, warm))
+
+    def lr_lambda(step):
+        if step < warm:
+            return (step + 1) / warm
+        t = min(1.0, (step - warm) / max(1, total_steps - warm))
+        return 0.05 + 0.95 * 0.5 * (1.0 + math.cos(math.pi * t))
+
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
+    scaler = torch.cuda.amp.GradScaler(enabled=amp)
+
+    run = run_wandb(args)
+    run_dir = Path(args.out_dir) if args.out_dir else \
+        HERE / "ckpt" / ("run_" + time.strftime("%Y%m%d_%H%M%S") +
+                         (("_" + args.run_name) if args.run_name else ""))
+    run_dir.mkdir(parents=True, exist_ok=True)
+    print("checkpoints ->", run_dir)
+
+    global_step, best_top5, best_auc, best_sel = 0, -1.0, -1.0, -1.0
+    t0 = time.time()
+    rehearse_gen = torch.Generator().manual_seed(args.seed + 999)
+
+    for epoch in range(1, args.epochs + 1):
+        model.train()
+        # Redraw which prefix each game contributes (random mode only).
+        # Must happen before the loader is iterated.
+        tr_ds.set_epoch(epoch)
+        for i, batch in enumerate(tr_loader):
+            batch = {k: v.to(device, non_blocking=True)
+                     if torch.is_tensor(v) else v
+                     for k, v in batch.items()}
+            opt.zero_grad(set_to_none=True)
+            with torch.cuda.amp.autocast(enabled=amp):
+                out = model(batch)
+                p_loss = policy_loss(out, batch)
+                v_loss = value_loss(out, batch)
+                loss = p_loss + args.value_weight * v_loss
+                if args.n_econ > 0 and "econ_pred" in out:
+                    e_loss = econ_loss(out, batch, emu, esd)
+                    loss = loss + args.econ_weight * e_loss
+
+            # Optional rehearsal (encoder must be unfrozen for it to matter)
+            if args.rehearse_frac > 0 and not model._encoder_frozen and \
+                    sq_rows is not None and \
+                    (torch.rand((), generator=rehearse_gen).item()
+                     < args.rehearse_frac):
+                try:
+                    rb = next(sq_it)
+                except (StopIteration, TypeError):
+                    sq_epoch += 1
+                    sq_it = iter(sq_loader(sq_epoch))
+                    rb = next(sq_it)
+                rb = {k: v.to(device, non_blocking=True)
+                      for k, v in rb.items()}
+                with torch.cuda.amp.autocast(enabled=amp):
+                    rout = model.encoder(rb)
+                    from solo_queue.model.pretraining.base_model import NUM_REAL_CHAMPS
+                    m = rb["is_masked"]
+                    if bool(m.any()):
+                        cl = F.cross_entropy(
+                            rout["champ_logits"][m],
+                            rb["champ_labels"][m])
+                        rm = rb["role_labels"] != IGNORE_INDEX
+                        lr_ = F.cross_entropy(
+                            rout["role_logits"][rm],
+                            rb["role_labels"][rm])
+                        loss = loss + cl + 0.3 * lr_
+
+            if not torch.isfinite(loss):
+                raise RuntimeError(
+                    "non-finite loss at epoch %d step %d"
+                    % (epoch, global_step))
+            scaler.scale(loss).backward()
+            scaler.unscale_(opt)
+            torch.nn.utils.clip_grad_norm_(
+                [p for p in model.parameters() if p.requires_grad],
+                args.grad_clip)
+            scaler.step(opt)
+            scaler.update()
+            sched.step()
+            global_step += 1
+            if global_step % args.log_every == 0:
+                msg = {"train/loss": float(loss),
+                       "train/policy_loss": float(p_loss),
+                       "train/value_loss": float(v_loss),
+                       "train/lr": sched.get_last_lr()[0]}
+                if run is not None:
+                    import wandb
+                    wandb.log(msg, step=global_step)
+                print("ep %d step %d loss %.4f (p %.4f v %.4f) lr %.2e" %
+                      (epoch, global_step, float(loss), float(p_loss),
+                       float(v_loss), sched.get_last_lr()[0]))
+
+        if epoch % args.eval_every == 0:
+            metrics = evaluate(model, {"val": va_loader}, args,
+                               device, emu, esd, move_rank)
+            metrics["epoch"] = epoch
+            if run is not None:
+                import wandb
+                wandb.log({"val/" + k: v for k, v in metrics.items()},
+                          step=global_step)
+            print("val ep %d: top1 %.4f top5 %.4f top10 %.4f "
+                  "ban@5 %.4f pick@5 %.4f | base@5 %.4f rel %.2fx%s "
+                  "(%.0fs)" %
+                  (epoch, metrics["top1"], metrics["top5"],
+                   metrics["top10"], metrics["ban_top5"],
+                   metrics["pick_top5"], metrics.get("base_top5", float("nan")),
+                   metrics.get("rel_top5", float("nan")),
+                   _value_str(metrics), time.time() - t0))
+
+            extra = {"init_ckpt": ckpt_spec,
+                     "patch": payload.get("patch"),
+                     "econ_mean": econ_mean, "econ_std": econ_std,
+                     "n_patches": n_patches, "patch_vocab": patch_vocab}
+            # Select on the baseline-relative score, not the raw top-5:
+            # raw top-5 tracks the window's difficulty, so a harder window
+            # picks the wrong epoch.
+            sel = metrics.get("rel_top5", metrics["top5"])
+            if sel > best_sel:
+                best_sel = sel
+                best_top5 = metrics["top5"]
+                save_ckpt(run_dir / "best_policy.pt", model, args, cfg,
+                          metrics, global_step, extra)
+            if metrics.get("win_auc", -1.0) > best_auc:
+                best_auc = metrics["win_auc"]
+                save_ckpt(run_dir / "best_value.pt", model, args, cfg,
+                          metrics, global_step, extra)
+            save_ckpt(run_dir / "latest.pt", model, args, cfg,
+                      dict(metrics), global_step, extra)
+
+    # Test report
+    report = {"protocol": {"split": "within-patch (train=head, val=tail); test = the pinned TEST_SERIES",
+                           "patch_honest_val": getattr(args, "patch_honest_val",
+                                                      None),
+                           "focus_patch": EP.FOCUS_PATCH,
+                           "selection": "rel_top5 (val)",
+                           "n_val": len(splits["val"]),
+                           "n_test": len(splits["test"]),
+                           "n_train": len(splits["train"])}}
+    # Strong null: the per-move frequency table of the test split itself,
+    # leave-one-out. The train-era table is stale on a new patch, so this is
+    # the bar that decides whether the policy beats "just use this patch's
+    # move frequencies".
+    self_ref = EP.self_move_topk(rows, splits["test"], cfg["num_champs"],
+                                 k=(1, 5))
+    report["same_patch_reference"] = dict(self_ref, split="test")
+    for name in ("best_policy.pt", "best_value.pt"):
+        path = run_dir / name
+        if not path.exists():
+            continue
+        blob = torch.load(str(path), map_location="cpu", weights_only=False)
+        model.load_state_dict(blob["model"])
+        rep = EP.RankReport(ks=(1, 5, 10))
+        base_rep = EP.RankReport(ks=(1, 5, 10))
+        tm = evaluate(model, {"val": te_loader}, args, device, emu, esd,
+                      move_rank, rep, base_rep)
+        report[name] = tm
+        report[name]["stratified"] = EP.stratified(
+            rep, base_rep=base_rep, focus=EP.FOCUS_PATCH,
+            self_ref=self_ref,
+            label="test next-move (prefix -> next ban/pick)")
+        print("TEST %s: top1 %.4f top5 %.4f base@5 %.4f rel %.2fx%s"
+              % (name, tm["top1"], tm["top5"], tm.get("base_top5", float("nan")),
+                 tm.get("rel_top5", float("nan")), _value_str(tm)))
+        print(EP.format_stratified(report[name]["stratified"], indent=2))
+    with open(run_dir / "test_report.json", "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=1)
+    print("done: best policy top5 %.4f%s (%s)"
+          % (best_top5,
+             "" if best_auc < 0 else ", best win AUC %.4f" % best_auc,
+             run_dir))
+    if run is not None:
+        import wandb
+        wandb.finish()
+    return best_top5, best_auc
+
+
+def main():
+    args = parse_args()
+    best_top5, best_auc = train(args)
+    out = HERE / "last_run.json"
+    with open(out, "w", encoding="utf-8") as f:
+        json.dump({"best_val_top5": best_top5,
+                   "best_val_win_auc": best_auc if best_auc >= 0 else None,
+                   "args": vars(args)}, f, indent=1)
+    print("wrote", out)
+
+
+if __name__ == "__main__":
+    main()

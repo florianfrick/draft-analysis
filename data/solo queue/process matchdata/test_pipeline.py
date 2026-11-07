@@ -3,7 +3,7 @@
 - test_real_* : run against the actual matchdata corpus (patch 16.20).
   They build the champ mapping (expect 173 champs), scan shards, check
   filters/slot order, and validate a real DataLoader batch with the
-  model contract validator (imported from model/tests, not duplicated).
+  model contract validator (imported from solo_queue/model/tests, not duplicated).
 - test_masking_* : fast synthetic checks of apply_masking edge cases.
 """
 import sys
@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(HERE.parent.parent.parent / "model" / "tests"))
+sys.path.insert(0, str(HERE.parent.parent.parent / "solo_queue" / "model" / "tests"))
 
 import pipeline as P
 from test_soloq_contract import validate_batch_dict

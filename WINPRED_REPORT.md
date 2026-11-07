@@ -22,7 +22,7 @@ evaluation protocol, and the negative results below.
 
 ## 1. What was built
 
-`model/winpred/`, self-contained (nothing outside the folder changed,
+`pro/model/winpred/`, self-contained (nothing outside the folder changed,
 `STATUS.md` deliberately untouched so the branch merges or drops as a unit).
 Input is a **finished 10-pick board** — no bans, no prefixes, no masking, no
 partial drafts. Output is one logit for blue.
@@ -177,12 +177,12 @@ Nothing else from this branch is worth a second attempt.
 
 ## 6. Where the evidence is
 
-- `model/winpred/README.md` §1–§19 — every number above, with its interval, in
+- `pro/model/winpred/README.md` §1–§19 — every number above, with its interval, in
   the section that measured it.
-- `model/winpred/reports/*.json` — the raw output of every run, including the
+- `pro/model/winpred/reports/*.json` — the raw output of every run, including the
   ones that lost.
-- `python model/winpred/choice_test.py` — the decisive test, 10 min on CPU.
-- `pytest model/winpred` — 50 tests, including the ones that pin the traps in §4.
+- `python pro/model/winpred/choice_test.py` — the decisive test, 10 min on CPU.
+- `pytest pro/model/winpred` — 50 tests, including the ones that pin the traps in §4.
 
 The whole branch runs on CPU; a full sweep is minutes and a training run is
 under an hour. Nothing here is expensive to re-check, which is the main argument
