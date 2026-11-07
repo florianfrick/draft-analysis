@@ -62,16 +62,7 @@ Both frontend defaults are pro-track (`frontend/server.py`):
 - **role board / masked completion** — `masking-proonly-randomvalsplit-through-wlds-ig-tes`
 - **next move** — `nextpick-bans-aware-through-wlds-ig-tes` (pro-only policy + `ban_side`, `ban_fearless`, `counter_rank`)
 
-The next-move default changed on 2026-11-07 from the 3-member
-`nextpick-proto-ensemble` to the ban-aware arm: same corpus and split, three
-flags on, **+0.60 pp top-5 over its own control** (0.5056 vs 0.4995, p 4.3e-8).
-That is a *val* number on one seed — the ensemble's +1.33 pp was measured on the
-439 draft rows neither it nor its predecessor had trained on, so the two are not
-comparable and must not be added (`pro/model/bans/README.md`, `STATUS.md` §7).
-The ensemble is still selectable in the UI; its members are fixed at three and
-evicting one on a single seed would void the number that describes it.
-
-The measured case for it (`STATUS.md` §7, pinned Worlds 2026 test split):
+The measured case for the pro track (`STATUS.md` §7, pinned Worlds 2026 test split):
 
 | task | solo-queue-trained | pro-trained |
 |---|---|---|
@@ -83,6 +74,15 @@ is the weakest encoder in its own family, and fine-tuning it on pro drafts only
 ties the from-scratch pro model on 70 slots. That is why the pro recipe is the
 one that gets maintained and the solo-queue track is kept as the reference
 point for the question "does the pretraining help at all".
+
+The next-move default changed again on 2026-11-07, from the 3-member
+`nextpick-proto-ensemble` to the ban-aware arm: same corpus and split, three
+flags on, **+0.60 pp top-5 over its own control** (0.5056 vs 0.4995, p 4.3e-8).
+That is a *val* number on one seed — the ensemble's +1.33 pp was measured on the
+439 draft rows neither it nor its predecessor had trained on, so the two are not
+comparable and must not be added (`pro/model/bans/README.md`, `STATUS.md` §7).
+The ensemble is still selectable in the UI; its members are fixed at three and
+evicting one on a single seed would void the number that describes it.
 
 ## Setup (keys + data stay local, never committed)
 
