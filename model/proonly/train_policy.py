@@ -66,6 +66,21 @@ def parse_args(argv=None):
     ap.add_argument("--num-heads", type=int, default=8)
     ap.add_argument("--dropout", type=float, default=0.1)
     ap.add_argument("--state-dim", type=int, default=64)
+    # ---- ban-awareness (branch exp/bans). All off = the shipped model, so a
+    # run with these omitted is a control that must reproduce the baseline.
+    ap.add_argument("--ban-side", dest="ban_side", action="store_true",
+                    default=False,
+                    help="per-ban side embedding, derived from (slot, "
+                         "first_pick): your ban and the enemy's ban stop "
+                         "being one fact")
+    ap.add_argument("--ban-fearless", dest="ban_fearless", action="store_true",
+                    default=False,
+                    help="fearless pool as ban-path tokens + a pool-size "
+                         "summary in the state vector")
+    ap.add_argument("--counter-rank", type=int, default=0,
+                    help="rank of the output-side champion x gone-champion "
+                         "interaction; 0 = off (the ban-blind baseline). "
+                         "~11k params at 32 with D=256.")
     ap.add_argument("--patch-emb", dest="patch_emb", action="store_true",
                     default=True)
     ap.add_argument("--no-patch-emb", dest="patch_emb", action="store_false")
@@ -243,15 +258,26 @@ def train(args):
     model = PolicyValueModel(
         encoder, embed_dim=encoder.embed.champ_lookup.embedding_dim,
         state_dim=args.state_dim, n_econ=0, dropout=args.dropout,
-        n_patches=n_patches, with_value=False).to(device)
+        n_patches=n_patches, with_value=False,
+        ban_side=args.ban_side, ban_fearless=args.ban_fearless,
+        counter_rank=args.counter_rank).to(device)
     model.set_freeze_encoder(False)
     print("model: %.2fM params, lr head %.0e / enc %.0e, device %s"
           % (C.param_count(model) / 1e6, args.lr, lr_enc, device))
+    print("ban-awareness: side %s, fearless %s, counter rank %d"
+          % ("ON" if args.ban_side else "off",
+             "ON" if args.ban_fearless else "off", args.counter_rank))
+
+    # Built once and shared by all three loaders: it is a per-series lookup
+    # over the whole corpus, and rebuilding it per split would both cost time
+    # and - worse - let the three loaders disagree about a pool.
+    fearless_roles = PRO_DATA.build_fearless_roles(rows)
 
     def loader(idxs, mode, shuffle, seed):
         ds = PRO_DATA.ProNextMoveDataset(
             rows, idxs, num_champs=num_champs, patch_index=patch_index,
-            prefix_mode=mode, swap_aug=(args.swap_aug and shuffle), seed=seed)
+            prefix_mode=mode, swap_aug=(args.swap_aug and shuffle), seed=seed,
+            fearless_roles=fearless_roles)
         return ds, DataLoader(ds, batch_size=args.batch_size, shuffle=shuffle,
                               collate_fn=PRO_DATA.pro_collate, num_workers=0,
                               pin_memory=torch.cuda.is_available())
@@ -300,7 +326,14 @@ def train(args):
                "num_cross": len(encoder.cross_team),
                "num_heads": args.num_heads, "dropout": args.dropout,
                "state_dim": args.state_dim, "n_patches": n_patches,
-               "n_econ": 0, "with_value": False, "attr_dim": 0}
+               "n_econ": 0, "with_value": False, "attr_dim": 0,
+               # The ban-awareness switches have to live in the checkpoint:
+               # every downstream rebuild (infer, compare, the probe) sizes
+               # modules from this dict, and a missing flag there means a
+               # model that loads without complaint and scores differently.
+               "ban_side": bool(args.ban_side),
+               "ban_fearless": bool(args.ban_fearless),
+               "counter_rank": int(args.counter_rank)}
 
     best = -1.0
     global_step = 0
@@ -369,6 +402,9 @@ def train(args):
     report = {"protocol": {
         "corpus": args.corpus, "patch_emb": bool(args.patch_emb),
         "n_patches": n_patches, "init_ckpt": args.init_ckpt,
+        "ban_side": bool(args.ban_side),
+        "ban_fearless": bool(args.ban_fearless),
+        "counter_rank": int(args.counter_rank),
         "split": C.split_description(args.val_split, bool(splits["test"])),
         "val_scope": args.val_scope,
         "val_split": args.val_split,

@@ -53,11 +53,18 @@ import torch
 
 HERE = Path(__file__).resolve().parent
 MODEL_DIR = HERE.parent
-for _p in (str(HERE), str(MODEL_DIR)):        # `model` -> policy/model.py
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+# ROOT goes FIRST, not merely on the path: this file is imported as bare
+# `infer` by test_infer.py, which puts `model/policy/` at sys.path[0] and would
+# otherwise resolve `model` to `model/policy/model.py` - a module, not the
+# package - breaking `model.pretraining`. `model/` and `model/policy/` stay on
+# the path for the legacy shortcuts.
+for _p in (str(HERE), str(MODEL_DIR), str(MODEL_DIR.parent)):
+    if _p in sys.path:
+        sys.path.remove(_p)
+    sys.path.insert(0, _p)
 
 from model import PolicyValueModel                             # noqa: E402
+from model.policy.model import FEARLESS_SLOTS                  # noqa: E402
 from model.pretraining.soloq_model import (SoloQPretrainedModel, CHAMP_PAD_ID,   # noqa: E402
                          ROLE_FLEX_ID, NUM_ROLES, load_encoder_state,
                          attr_matrix_for_config)
@@ -217,11 +224,32 @@ def _policy_batch(board, move_idx, kind, team, patch_id=PATCH_UNK_ID):
     def full(value, dtype=torch.long):
         return torch.full((B,), value, dtype=dtype, device=dev)
 
+    # Fearless pool as tokens, so a ban_fearless checkpoint sees the pool
+    # instead of only having it masked away. The board carries the pool as a
+    # [B,C] bool mask; turn it into ascending ids PAD-padded to FEARLESS_SLOTS.
+    # Role is FLEX because the board has no roles for those champions - which
+    # is exactly why the model does not read pool roles (see
+    # `PolicyValueModel._gone_tokens`). A checkpoint without the pool path
+    # ignores these keys entirely.
+    unavail = board["unavailable"]
+    pad_id = int(board["num_champs"]) + 1
+    idx = torch.arange(unavail.shape[1], dtype=torch.long, device=dev)
+    idx = idx.unsqueeze(0).expand(B, -1)
+    fearless_ids = torch.where(unavail, idx,
+                               torch.full_like(idx, pad_id)).sort(1).values
+    if fearless_ids.shape[1] < FEARLESS_SLOTS:
+        fearless_ids = torch.nn.functional.pad(
+            fearless_ids, (0, FEARLESS_SLOTS - fearless_ids.shape[1]),
+            value=pad_id)
+    else:
+        fearless_ids = fearless_ids[:, :FEARLESS_SLOTS]
+
     return {
         "champ_ids": board["champ_ids"],
         "role_ids": board["role_ids"],
         "pad_mask": board["pad_mask"],
         "ban_ids": board["ban_ids"],
+        "fearless_ids": fearless_ids,
         "taken_mask": board["taken"] | board["unavailable"],
         "unavailable_mask": board["unavailable"],
         "move_idx": full(move_idx),
@@ -234,6 +262,28 @@ def _policy_batch(board, move_idx, kind, team, patch_id=PATCH_UNK_ID):
 
 
 # ------------------------------------------------------------------- models
+def _policy_class(cfg):
+    """Which class a checkpoint's config needs.
+
+    A prototype arm can have a wider policy head (`slot_mask`), an extra prior
+    term (`prior_bias`) or an auxiliary head (`block_head`); `PolicyValueModel`
+    would load it with `strict=False` and then raise on the size mismatch, or -
+    worse - load a *subset* and quietly serve a different model. The class is
+    therefore chosen from the config, not guessed from the state dict.
+
+    `log_prior` is a registered buffer, so a `prior_bias` checkpoint carries its
+    table and nothing has to be recomputed at serving time.
+    """
+    flags = (cfg.get("block_head"), cfg.get("slot_mask"), cfg.get("prior_bias"))
+    if not any(flags):
+        return PolicyValueModel, flags
+    try:                       # ROOT on sys.path (frontend, entry scripts)
+        from model.proto.policy import ProtoPolicy
+    except ImportError:        # bare `python model/policy/infer.py`
+        from proto.policy import ProtoPolicy
+    return ProtoPolicy, flags
+
+
 def load_policy_model(path, device="cpu", payload=None):
     """Policy checkpoint -> (PolicyValueModel in eval mode, config).
 
@@ -264,11 +314,27 @@ def load_policy_model(path, device="cpu", payload=None):
     with_value = cfg.get("with_value")
     if with_value is None:
         with_value = any(k.startswith("value_head.") for k in blob["model"])
-    model = PolicyValueModel(
+    cls, (block_head, slot_mask, prior_bias) = _policy_class(cfg)
+    extra = {} if cls is PolicyValueModel else {
+        "block_head": bool(block_head), "slot_mask": bool(slot_mask),
+        "prior_bias": bool(prior_bias)}
+    model = cls(
         enc, embed_dim=cfg["embed_dim"], state_dim=cfg["state_dim"],
         n_econ=cfg.get("n_econ", 0), dropout=cfg.get("head_dropout", 0.0),
-        n_patches=cfg.get("n_patches", 0),
-        with_value=with_value)
+        n_patches=cfg.get("n_patches", 0), with_value=with_value, **extra,
+        # Ban-awareness switches, read from the checkpoint. A checkpoint
+        # written before branch exp/bans has none of these keys, so it
+        # rebuilds the original module set and loads exactly as it did.
+        **({} if cls is not PolicyValueModel else {
+            "ban_side": bool(cfg.get("ban_side", False)),
+            "ban_fearless": bool(cfg.get("ban_fearless", False)),
+            "counter_rank": int(cfg.get("counter_rank", 0) or 0)}))
+    # `prior_bias` registers a placeholder table (1, 1, C) and the trainer
+    # replaces it with the real (patch, move, champ) one, so the checkpoint's
+    # buffer is wider than a fresh module's. Size it from the checkpoint
+    # before loading instead of recomputing a table that is already inside it.
+    if "log_prior" in blob["model"]:
+        model.log_prior = torch.zeros_like(blob["model"]["log_prior"])
     missing, unexpected = model.load_state_dict(blob["model"], strict=False)
     if missing or unexpected:
         raise RuntimeError("policy ckpt mismatch: %s / %s"
@@ -280,27 +346,77 @@ def load_policy_model(path, device="cpu", payload=None):
 
 # ---------------------------------------------------------------- predictor
 class PolicyPredictor:
-    """Next-move recommendations from a policy checkpoint.
+    """Next-move recommendations from one policy checkpoint or an ensemble.
 
     One entry point: `next_move(...)` returns the policy's distribution for
     the move the board is actually on, ban or pick.
+
+    `ckpt_path` may be a list of checkpoints. More than one is an ENSEMBLE:
+    the members' policy logits are averaged before the softmax, which is the
+    exact quantity that was measured (`model/proto/evaluate.py --ensemble`,
+    `model/proto/compare_shipped.py`). Averaging probabilities instead would
+    be a different, unmeasured model.
     """
 
     kind = "policy"
 
-    def __init__(self, ckpt_path, device="cpu", payload=None):
+    def __init__(self, ckpt_path, device="cpu", payload=None, label=None):
         self.device = torch.device(device)
-        self.model, self.cfg = load_policy_model(ckpt_path, self.device,
-                                                 payload=payload)
+        paths = [Path(p) for p in
+                 (ckpt_path if isinstance(ckpt_path, (list, tuple))
+                  else [ckpt_path])]
+        self.models, self.cfgs = [], []
+        for i, p in enumerate(paths):
+            m, cfg = load_policy_model(p, self.device,
+                                       payload=payload if i == 0 else None)
+            self.models.append(m)
+            self.cfgs.append(cfg)
+        self.cfg = self.cfgs[0]
         self.num_champs = int(self.cfg["num_champs"])
-        self.ckpt_path = str(ckpt_path)
+        self.n_patches = int(self.cfg.get("n_patches", 0))
+        self.patch_vocab = list(self.cfg.get("patch_vocab") or [])
+        self.members = [str(p) for p in paths]
+        # A manifest is the artefact the UI selects and labels; fall back to
+        # the single member's path so `model_info` still has something to show.
+        self.ckpt_path = str(label or paths[0])
         self.metric = "next-move top5"
         metrics = (payload or {}).get("metrics", {})
         top5 = metrics.get("top5")
         self.val_top5 = float(top5) if top5 is not None else None
         self.epoch = metrics.get("epoch")
-        self.n_patches = int(self.cfg.get("n_patches", 0))
-        self.patch_vocab = list(self.cfg.get("patch_vocab") or [])
+        if len(self.models) > 1:
+            self._check_members()
+
+    @property
+    def model(self):
+        """Single-model view: member 0 (all members share the label space)."""
+        return self.models[0]
+
+    @model.setter
+    def model(self, value):
+        # `test_infer.stub()` builds a predictor with `object.__new__` and
+        # assigns `.model`; keeping the member list in sync means the single
+        # and ensemble paths can never disagree about which module is in use.
+        if getattr(self, "models", None):
+            self.models[0] = value
+        else:
+            self.models = [value]
+
+    def _check_members(self):
+        """Refuse to average models that do not agree on the label space.
+
+        Two members with different champion counts or different patch
+        vocabularies would average logits over *different classes*: the sum is
+        shape-compatible when only the vocab differs, so it would silently
+        return a wrong answer instead of failing.
+        """
+        for m, cfg in zip(self.models[1:], self.cfgs[1:]):
+            if int(cfg["num_champs"]) != self.num_champs:
+                raise ValueError("ensemble members disagree on num_champs")
+            if list(cfg.get("patch_vocab") or []) != self.patch_vocab:
+                raise ValueError(
+                    "ensemble members disagree on patch_vocab: a patch id "
+                    "would mean a different patch in each member")
 
     def patch_id_for(self, patch_id):
         """Client-supplied patch id -> a row this checkpoint actually has.
@@ -341,6 +457,34 @@ class PolicyPredictor:
 
     # -- internals ----------------------------------------------------
     @torch.no_grad()
+    def policy_logits(self, batch):
+        """Mean of the members' policy logits - the ENSEMBLE CONTRACT.
+
+        Every consumer goes through this: `next_move`, the breakdown page's
+        per-move scoring. `evaluate.py --ensemble` and `compare_shipped.py`
+        measured exactly this average; averaging probabilities or voting
+        would be a different, unmeasured model.
+        """
+        out = self.models[0](batch)["policy_logits"]
+        for m in self.models[1:]:
+            out = out + m(batch)["policy_logits"]
+        return out / len(self.models) if len(self.models) > 1 else out
+
+    @torch.no_grad()
+    def _role_logits(self, batch):
+        """Role-head logits, averaged over the ensemble members.
+
+        The role head is display-only here (it places picks on the role
+        board), but averaging it costs nothing and avoids the inconsistency
+        of an ensemble that answers the next move with three models and the
+        role assignment with one.
+        """
+        out = self.models[0].encoder(batch, compute_heads=True)["role_logits"]
+        for m in self.models[1:]:
+            out = out + m.encoder(batch, compute_heads=True)["role_logits"]
+        return out / len(self.models) if len(self.models) > 1 else out
+
+    @torch.no_grad()
     def _fill_roles(self, board):
         """Set role_ids from the encoder's role head; -> per-slot probs.
 
@@ -355,7 +499,7 @@ class PolicyPredictor:
             "pad_mask": board["pad_mask"],
             "is_masked": torch.zeros_like(board["champ_ids"], dtype=torch.bool),
         }
-        role_logits = self.model.encoder(batch, compute_heads=True)["role_logits"]
+        role_logits = self._role_logits(batch)
         probs = torch.softmax(role_logits.float(), dim=-1)
         best = probs.argmax(dim=-1)
         board["role_ids"] = torch.where(~board["pad_mask"], best,
@@ -413,8 +557,8 @@ class PolicyPredictor:
                     "patch_id": pid, "n_unavailable": n_unavail}
         probs = self._fill_roles(board)
         kind, team = move_plan(first_pick)[move_idx]
-        logits = self.model(_policy_batch(board, move_idx, kind, team,
-                                          patch_id=pid))["policy_logits"][0]
+        batch = _policy_batch(board, move_idx, kind, team, patch_id=pid)
+        logits = self.policy_logits(batch)[0]
         p = torch.softmax(logits.float(), dim=-1)
         top = p.topk(min(k, self.num_champs))
         suggestions = [{"idx": int(i), "prob": float(v)}

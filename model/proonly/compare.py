@@ -136,21 +136,33 @@ def policy_ranks(ckpt, rows, splits, args, device):
     model = C.PolicyValueModel(
         enc, embed_dim=cfg["embed_dim"], state_dim=cfg.get("state_dim", 64),
         n_econ=0, dropout=cfg.get("dropout", 0.0),
-        n_patches=cfg.get("n_patches", 0), with_value=False)
+        n_patches=cfg.get("n_patches", 0), with_value=False,
+        # Read from the checkpoint, never defaulted: a ban-aware checkpoint
+        # rebuilt without its flags has modules the state dict cannot fill,
+        # and the missing-key check below would only catch the ones it
+        # happens to name.
+        ban_side=bool(cfg.get("ban_side", False)),
+        ban_fearless=bool(cfg.get("ban_fearless", False)),
+        counter_rank=int(cfg.get("counter_rank", 0) or 0))
     state = payload["model"]
     # A checkpoint from the soloQ pipeline may carry value/econ heads this
     # comparison does not build. Anything else missing is a real failure.
     own = set(model.state_dict())
     keep = {k: v for k, v in state.items() if k in own}
     missing = [k for k in own - set(keep)
-               if k.startswith(("encoder.", "policy_head.", "state_embed."))]
+               if k.startswith(("encoder.", "policy_head.", "state_embed.",
+                                "ban_context.", "counter."))]
     if missing:
         raise RuntimeError("checkpoint lacks policy weights: %s" % missing[:6])
     model.load_state_dict(keep, strict=False)
     model.to(device).eval()
     ds = PRO_DATA.ProNextMoveDataset(
         rows, splits[args.split], num_champs=cfg["num_champs"],
-        patch_index=patch_index, prefix_mode="all", swap_aug=False)
+        patch_index=patch_index, prefix_mode="all", swap_aug=False,
+        # The pool must be built from the whole corpus, not this split: a
+        # val row's fearless pool comes from earlier games of its series,
+        # which are train rows.
+        fearless_roles=PRO_DATA.build_fearless_roles(rows))
     loader = DataLoader(ds, batch_size=512, shuffle=False,
                         collate_fn=PRO_DATA.pro_collate)
     ranks, games, patches = [], [], []
