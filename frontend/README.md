@@ -29,8 +29,11 @@ Binds `127.0.0.1` only. `--ckpt <path>` pins the **role model** (default:
 `pro/model/checkpoints/masking-proonly-randomvalsplit-through-wlds-ig-tes/best.pt`;
 if it is absent, the `best.pt` with the highest val champ-top5 across both
 stores, `solo_queue/model/checkpoints/*/` and `pro/model/checkpoints/*/`),
-`--policy-ckpt <path>` pins the **next-move model**
-(default: `pro/model/checkpoints/nextpick-bans-aware-through-wlds-ig-tes/best.pt`),
+`--policy-ckpt <path>` pins the **next-move model** (default: the LLM
+reranker folder `pro/model/checkpoints/llm-lora-rerank5/` when this machine can
+run it, otherwise the ban-aware head
+`pro/model/checkpoints/nextpick-bans-aware-through-wlds-ig-tes/best.pt` — see
+"The LLM reranker" below for why that is conditional),
 `--no-policy` skips it entirely, and `--device cuda` for GPU inference (CPU
 default keeps the GPU free).
 
@@ -39,8 +42,9 @@ no test split). The `masking-proonly` originals are still listed in the dropdown
 and are the only ones with a pinned-test score (`STATUS.md` §7); the refresh has
 none by construction.
 
-The next-move default is the **ban-aware arm** (2026-11-07): the same pro-only
-recipe as the `-randomvalsplit-` role model, with `ban_side`, `ban_fearless` and
+The next-move fallback — and the shortlist the reranker chooses from — is the
+**ban-aware arm** (2026-11-07): the same pro-only recipe as the
+`-randomvalsplit-` role model, with `ban_side`, `ban_fearless` and
 `counter_rank=32` on, so the ban block — including which side made each ban and
 which champions the fearless pool has already removed — is a model input rather
 than something to infer from the absent champions. Against a control that
@@ -50,8 +54,9 @@ checkpoint's own `config`, not passed by the frontend, so an older checkpoint
 still rebuilds unchanged.
 
 `nextpick-proto-ensemble/ensemble.json` is still selectable but no longer the
-default: three pro-only policy arms whose policy logits are averaged before the
-softmax. Its +1.33 pp top-5 (bootstrap [+0.64, +2.07], p = 2.6e-4; +0.94 pp
+default (nothing is, since the reranker took the slot): three pro-only policy
+arms whose policy logits are averaged before the softmax. Its +1.33 pp top-5
+(bootstrap [+0.64, +2.07], p = 2.6e-4; +0.94 pp
 top-1) was measured on the 439 draft rows neither it nor the checkpoint it
 replaced had trained on — a different set from the ban-aware arm's val number,
 so the two are not comparable and must not be added. The members alone are
