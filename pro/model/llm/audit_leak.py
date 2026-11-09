@@ -10,7 +10,7 @@ number to report until two things are ruled out:
 
 Both are checked against the real corpus, not a fixture.
 
-    python -m model.llm.audit_leak
+    python -m pro.model.llm.audit_leak
 """
 import sys
 from collections import Counter

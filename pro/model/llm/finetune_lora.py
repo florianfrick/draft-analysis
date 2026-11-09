@@ -33,9 +33,10 @@ sys.path.insert(0, str(ROOT))
 from pro.model.llm import build as B          # noqa: E402
 from pro.model.llm import common as C        # noqa: E402
 from pro.model.llm import data as D          # noqa: E402
+from pro.model.llm import rerank as R        # noqa: E402
 from pro.model.llm import train_util as TU   # noqa: E402
 from pro.model.llm.metrics import Accumulator, chance_levels  # noqa: E402
-from pro.model.llm.prompt import assemble    # noqa: E402
+from pro.model.llm.prompt import assemble, candidate_first_ids  # noqa: E402
 
 
 def parse_args(argv=None):
@@ -63,6 +64,13 @@ def parse_args(argv=None):
     p.add_argument("--n-soft", type=int, default=10)
     p.add_argument("--context", default="soft+text",
                    choices=["soft+text", "soft"])
+    p.add_argument("--prompt-format", default=None,
+                   choices=["v1", "v2", "v3", "v4"],
+                   help="v2 labels the turn and the pick's lane; v1 is the "
+                        "format every number before 2026-11-08 was measured "
+                        "on; v4 adds the candidate list and is implied by "
+                        "--rerank. Default: v4 with --rerank, else %s"
+                        % C.PROMPT_FORMAT)
     p.add_argument("--lora-r", type=int, default=16)
     p.add_argument("--lora-alpha", type=int, default=32)
     p.add_argument("--lora-dropout", type=float, default=0.05)
@@ -71,21 +79,68 @@ def parse_args(argv=None):
     p.add_argument("--no-4bit", action="store_true")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--log-every", type=int, default=10)
+    p.add_argument("--val-every", type=int, default=0,
+                   help="also validate every N steps (0 = epoch end only); a mid-run val can save a checkpoint, so a long run that turns bad is visible instead of only at the end")
     p.add_argument("--limit-train-steps", type=int, default=0)
     p.add_argument("--limit-val-batches", type=int, default=0)
     p.add_argument("--out-dir", default="")
+    p.add_argument("--init-adapter", default="",
+                   help="start from this saved adapter with a FRESH optimizer "
+                        "and schedule (a new cycle); r/alpha/dropout then come "
+                        "from the adapter, not the flags")
+    p.add_argument("--resume", default="",
+                   help="continue a run from its out-dir: restores projector, "
+                        "adapter, optimizer, schedule and step. `--epochs` "
+                        "larger than the saved run extends it")
     p.add_argument("--tag", default="")
+    p.add_argument("--rerank", type=int, default=0,
+                   help="K > 0 trains the reranker: the answer is restricted "
+                        "to the next-pick head's top-K candidates")
+    p.add_argument("--pairs", default="",
+                   help="reranker training pairs, from `rerank --build-pairs`")
+    p.add_argument("--moves-per-game", type=int, default=1,
+                   help="reranker only: usable moves drawn per game per epoch")
+    p.add_argument("--head", default=str(R.HEAD_CKPT))
+    p.add_argument("--val-split", default="llmval",
+                   choices=["common", "llmval", "headheld"],
+                   help="common = the 478 games held out from both models, "
+                        "the only set a cross-model number can use")
     return p.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(argv)
+    if args.prompt_format is None:
+        args.prompt_format = "v4" if args.rerank else C.PROMPT_FORMAT
+    if args.rerank and args.prompt_format != "v4":
+        raise SystemExit("--rerank needs --prompt-format v4: the candidate "
+                         "list is what the answer is constrained to")
+    if args.rerank and not args.pairs:
+        raise SystemExit("--rerank needs --pairs (rerank --build-pairs "
+                         "--split common --build-pairs <path>)")
+    # Resolved before anything is built: the adapter has to be attached at
+    # construction time, and the optimizer is created from the module it
+    # attaches to, so a resume that arrives later would restore Adam moments
+    # onto a different parameter list.
+    resume_state = None
+    if args.resume:
+        rdir, resume_state = TU.load_resume(args.resume)
+        args.init_adapter = str(rdir / "adapter")
+        args.init_projector = str(rdir / "projector.pt")
+        print("resuming from %s (step %d, epoch %d done)"
+              % (rdir, resume_state["step"], resume_state["epoch"]),
+              flush=True)
     torch.manual_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     rows = C.load_rows(args.corpus)
     split = C.split_rows(rows)
     keys, patch_index = D.make_patch_index(rows)
+    n_unk, worst = C.patch_coverage(rows, patch_index)
+    if n_unk:
+        print("patch: %d drafts (%.2f%%) are newer than the encoder's table "
+              "-> UNK %s" % (n_unk, 100.0 * n_unk / len(rows),
+                             [w[0] for w in worst][:4]), flush=True)
     names = C.champ_names()
     print("corpus %d drafts | train %d val %d | patches %d"
           % (len(rows), len(split["train"]), len(split["val"]), len(keys)),
@@ -97,24 +152,44 @@ def main(argv=None):
         pick = torch.randperm(len(train_idx), generator=g)[:args.max_train]
         train_idx = [train_idx[i] for i in sorted(pick.tolist())]
 
-    tr_ds = D.train_dataset(rows, train_idx, patch_index, seed=args.seed)
-    va_ds = D.eval_dataset(rows, split["val"], patch_index, seed=args.seed,
-                           val_games=args.val_games)
+    if args.rerank:
+        blob = json.loads(Path(args.pairs).read_text())
+        if int(blob.get("k", 0)) != args.rerank:
+            raise SystemExit("pairs were built for k=%s but --rerank is %d"
+                             % (blob.get("k"), args.rerank))
+        tr_ds = D.PairDataset(rows, blob["pairs"], patch_index,
+                              per_game=args.moves_per_game, seed=args.seed)
+        _, eval_idx = R.split_games(rows, args.val_split)
+        va_ds = D.eval_dataset(rows, eval_idx, patch_index, seed=args.seed,
+                               val_games=0)
+        print("rerank k=%d | %d usable pairs over %d games | %d eval games"
+              % (args.rerank, len(blob["pairs"]), len(tr_ds.games),
+                 len(eval_idx)), flush=True)
+    else:
+        tr_ds = D.train_dataset(rows, train_idx, patch_index, seed=args.seed)
+        if args.val_split == "llmval":
+            va_ds = D.eval_dataset(rows, split["val"], patch_index,
+                                   seed=args.seed, val_games=args.val_games)
+        else:
+            _, eval_idx = R.split_games(rows, args.val_split)
+            va_ds = D.eval_dataset(rows, eval_idx, patch_index,
+                                   seed=args.seed, val_games=0)
     tr_ld = DataLoader(tr_ds, batch_size=args.batch_size, shuffle=True,
                        collate_fn=D.collate, num_workers=0, drop_last=True)
     va_ld = DataLoader(va_ds, batch_size=args.eval_batch_size, shuffle=False,
                        collate_fn=D.collate, num_workers=0)
     print("train games %d | val states %d" % (len(tr_ds), len(va_ds)),
           flush=True)
-
     enc, cfg, _ = C.build_frozen_encoder(args.encoder, device=device)
+    C.assert_patch_compat(cfg, patch_index)
 
     llm = B.load_llm(args.model, quantize=not args.no_4bit,
                      device=device.index or 0)
     B.freeze(llm)
     llm = B.attach_lora(llm, r=args.lora_r, alpha=args.lora_alpha,
                         dropout=args.lora_dropout,
-                        quantized=not args.no_4bit)
+                        quantized=not args.no_4bit,
+                        adapter_path=args.init_adapter)
     if not args.no_checkpointing:
         B.enable_checkpointing(llm)
     d_llm = llm.get_input_embeddings().weight.shape[1]
@@ -129,9 +204,54 @@ def main(argv=None):
 
     if args.init_projector:
         blob = B.load_projector(model, args.init_projector)
+        ck_fmt = (blob.get("args") or {}).get("prompt_format")
+        if ck_fmt and ck_fmt != args.prompt_format:
+            # v4 *is* v2 plus one appended line (the board lines are
+            # byte-identical, and test_v4_is_v2_plus_one_candidate_line pins
+            # that), so a v2 projector is the correct initialisation for a
+            # reranker - the soft tokens still describe the same board. Any
+            # other mismatch is the failure this guard exists for.
+            if args.rerank and ck_fmt == "v2":
+                print("note: %s was warmed up on v2; v4 only appends the "
+                      "candidate line, so its projector is the right start"
+                      % args.init_projector, flush=True)
+            else:
+                raise SystemExit(
+                    "%s was warmed up with prompt_format=%s but this run uses "
+                    "%s. The projector learned to read that text; starting from "
+                    "it with different text is worse than starting from "
+                    "scratch. Pass --prompt-format %s or a matching projector."
+                    % (args.init_projector, ck_fmt, args.prompt_format, ck_fmt))
         print("projector initialised from %s (val %s)"
               % (args.init_projector,
                  json.dumps(blob.get("val", {}))[:160]), flush=True)
+
+    head = None
+    if args.rerank:
+        head, _head_cfg = R.load_head(args.head, device)
+        head.eval()
+        print("rerank: k=%d from %s"
+              % (args.rerank, Path(args.head).parent.name), flush=True)
+    n_vocab = int(model.llm.get_input_embeddings().weight.shape[0])
+
+    def make_prompt(batch, samples):
+        """-> (prompt, keep). The candidates come from the same batch the LLM
+        sees, so side-swap augmentation and the rendered text cannot disagree -
+        there is no cache to fall out of sync with an augmented row."""
+        cands = None
+        if head is not None:
+            cid, cp = R.candidates(head(batch)["policy_logits"], args.rerank)
+            cands = [[(int(c), float(p)) for c, p in zip(a, b)]
+                     for a, b in zip(cid.tolist(), cp.tolist())]
+        prompt = assemble(tok, samples, names, context=args.context,
+                          loss_on_eos=args.loss_on_eos, device=device,
+                          prompt_format=args.prompt_format, candidates=cands)
+        keep = None
+        if cands is not None:
+            keep = R.keep_mask(
+                candidate_first_ids(tok, names, cands).to(device),
+                prompt["ans_ids"][:, 0], n_vocab)
+        return prompt, keep
 
     groups, counts = TU.describe_trainables(model, args.projector_lr,
                                             args.llm_lr)
@@ -152,7 +272,54 @@ def main(argv=None):
 
     history, best = [], {"ce": float("inf")}
     step = 0
-    for epoch in range(args.epochs):
+    start_epoch = 0
+    if resume_state is not None:
+        opt.load_state_dict(resume_state["opt"])
+        sched.load_state_dict(resume_state["sched"])
+        step = int(resume_state["step"])
+        start_epoch = int(resume_state["epoch"]) + 1
+        print("restored optimizer/schedule at step %d | %d of %d steps left"
+              % (step, total - step, total), flush=True)
+        if start_epoch >= args.epochs:
+            print("  nothing to do: --epochs %d but %d epochs are already "
+                  "done. Pass a larger --epochs to extend the run."
+                  % (args.epochs, start_epoch), flush=True)
+            return None
+    last = {"step": -1, "val": None}
+
+    def run_val(epoch, step, label):
+        """Evaluate, record, and checkpoint if this is the best val ce so far.
+
+        A full-corpus epoch is ~4 h and the only save happens on improvement,
+        so without a periodic call a run that degrades is invisible until it
+        ends. `model.train()` is restored here because `TU.evaluate` leaves
+        the model in eval mode. A step that was already validated (mid-epoch
+        val landing exactly on the last step) is not evaluated twice.
+        """
+        nonlocal best
+        if last["step"] == step:
+            return last["val"]
+        val = TU.evaluate(model, va_ld, tok, names, args, device,
+                          limit=args.limit_val_batches,
+                          prompt_fn=make_prompt if head is not None else None)
+        print("== %s | step %d | val %s"
+              % (label, step,
+                 json.dumps({k: (round(v, 4) if isinstance(v, float) else v)
+                             for k, v in val.items()})), flush=True)
+        history.append({"epoch": epoch, "step": step, "label": label,
+                        "val": val})
+        if val["ce"] == val["ce"] and val["ce"] < best["ce"]:
+            best = dict(val, epoch=epoch, step=step)
+            model.llm.save_pretrained(str(out_dir / "adapter"))
+            B.save_projector(model, out_dir / "projector.pt",
+                             extra={"args": vars(args),
+                                    "calibration": model.calibration,
+                                    "val": val})
+            print("   best so far (ce %.4f) -> saved" % val["ce"], flush=True)
+        last["step"], last["val"] = step, val
+        model.train()
+        return val
+    for epoch in range(start_epoch, args.epochs):
         tr_ds.set_epoch(epoch)
         model.train()
         model.encoder.eval()
@@ -160,9 +327,8 @@ def main(argv=None):
         opt.zero_grad(set_to_none=True)
         for i, (batch, samples) in enumerate(tr_ld):
             batch = D.to_device(batch, device)
-            prompt = assemble(tok, samples, names, context=args.context,
-                              loss_on_eos=args.loss_on_eos, device=device)
-            out = model(batch, prompt)
+            prompt, keep = make_prompt(batch, samples)
+            out = model(batch, prompt, keep=keep)
             (out["loss"] / args.grad_accum).backward()
             per = {k: v for k, v in out.items()
                    if k not in ("loss", "n_tokens")}
@@ -183,22 +349,15 @@ def main(argv=None):
                              s["exact"], s["ft_top1"], s["ft_top5"],
                              time.time() - t0), flush=True)
                     run.reset()
+                if args.val_every and step % args.val_every == 0:
+                    run_val(epoch, step, "mid")
                 if args.limit_train_steps and step >= args.limit_train_steps:
                     break
-        val = TU.evaluate(model, va_ld, tok, names, args, device,
-                          limit=args.limit_val_batches)
-        print("== epoch %d | train ce %.3f | val %s"
-              % (epoch, epoch_run.summary()["ce"],
-                 json.dumps({k: (round(v, 4) if isinstance(v, float) else v)
-                             for k, v in val.items()})), flush=True)
-        history.append({"epoch": epoch, "step": step, "val": val})
-        if val["ce"] == val["ce"] and val["ce"] < best["ce"]:
-            best = dict(val, epoch=epoch, step=step)
-            model.llm.save_pretrained(str(out_dir / "adapter"))
-            B.save_projector(model, out_dir / "projector.pt",
-                             extra={"args": vars(args),
-                                    "calibration": model.calibration,
-                                    "val": val})
+        print("== epoch %d | train ce %.3f"
+              % (epoch, epoch_run.summary()["ce"]), flush=True)
+        run_val(epoch, step, "epoch %d" % epoch)
+        TU.save_resume(out_dir, model, opt, sched, step, epoch,
+                       extra={"args": vars(args)})
         if args.limit_train_steps and step >= args.limit_train_steps:
             break
 
@@ -209,6 +368,7 @@ def main(argv=None):
             "model": args.model, "encoder": args.encoder,
             "init_projector": args.init_projector,
             "corpus": args.corpus, "context": args.context,
+            "prompt_format": args.prompt_format,
             "lora_r": args.lora_r, "lora_alpha": args.lora_alpha,
             "lora_dropout": args.lora_dropout,
             "projector_lr": args.projector_lr, "llm_lr": args.llm_lr,

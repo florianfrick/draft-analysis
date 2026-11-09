@@ -10,6 +10,7 @@ keep. Measured on this card, eval at batch 8 is ~3x the throughput of training
 at batch 4.
 """
 import time
+from pathlib import Path
 
 import torch
 
@@ -18,7 +19,10 @@ from pro.model.llm.metrics import Accumulator
 from pro.model.llm.prompt import assemble
 
 
-def evaluate(model, loader, tok, names, args, device, limit=0):
+def evaluate(model, loader, tok, names, args, device, limit=0, prompt_fn=None):
+    """Score `loader`. `prompt_fn(batch, samples) -> (prompt, keep)` lets a
+    caller supply the reranker's candidate list; the default is the plain
+    prompt, so every existing call site is unchanged."""
     model.eval()
     acc = Accumulator()
     t0 = time.time()
@@ -27,9 +31,14 @@ def evaluate(model, loader, tok, names, args, device, limit=0):
             if limit and i >= limit:
                 break
             batch = D.to_device(batch, device)
-            prompt = assemble(tok, samples, names, context=args.context,
-                              loss_on_eos=args.loss_on_eos, device=device)
-            out = model(batch, prompt)
+            if prompt_fn is not None:
+                prompt, keep = prompt_fn(batch, samples)
+            else:
+                prompt = assemble(tok, samples, names, context=args.context,
+                                  loss_on_eos=args.loss_on_eos, device=device,
+                                  prompt_format=args.prompt_format)
+                keep = None
+            out = model(batch, prompt, keep=keep)
             acc.update({k: v for k, v in out.items()
                         if k not in ("loss", "n_tokens")}, prompt)
     s = acc.summary()
@@ -62,3 +71,45 @@ def describe_trainables(model, projector_lr, llm_lr):
 
 def make_optimizer(groups, weight_decay=0.0):
     return torch.optim.AdamW(groups, weight_decay=weight_decay)
+
+
+# ---------------------------------------------------------------------- resume
+def save_resume(out_dir, model, opt, sched, step, epoch, extra=None):
+    """Write everything needed to continue this run into `<out_dir>/resume/`.
+
+    Weights and optimizer state go in the same directory on purpose. The "best"
+    checkpoint is a different artefact - it is whatever scored best, possibly
+    hundreds of steps ago - and pairing its weights with an optimizer whose Adam
+    moments belong to a later step is worse than not resuming at all. The
+    projector is written in `save_projector` format so `--init-projector`
+    accepts it too: one file, two uses.
+    """
+    from pro.model.llm import build as B
+
+    d = Path(out_dir) / "resume"
+    d.mkdir(parents=True, exist_ok=True)
+    B.save_projector(model, d / "projector.pt",
+                     extra={"args": (extra or {}).get("args"),
+                            "calibration": model.calibration})
+    llm = getattr(model, "llm", None)
+    if llm is not None and getattr(llm, "peft_config", None):
+        llm.save_pretrained(str(d / "adapter"))
+    torch.save({"opt": opt.state_dict(), "sched": sched.state_dict(),
+                "step": step, "epoch": epoch,
+                "args": (extra or {}).get("args") or {}},
+               str(d / "state.pt"))
+    return d
+
+
+def load_resume(path):
+    """-> (resume dir, state). Accepts a run dir or its `resume/` subdir."""
+    d = Path(path)
+    if (d / "resume" / "state.pt").exists():
+        d = d / "resume"
+    if not (d / "state.pt").exists():
+        raise SystemExit("%s has no state.pt - nothing to resume from "
+                         "(was the run interrupted before its first epoch?)"
+                         % d)
+    st = torch.load(str(d / "state.pt"), map_location="cpu",
+                    weights_only=False)
+    return d, st

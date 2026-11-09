@@ -29,11 +29,12 @@ the pure-channel variant stays measurable.
 
 **The target is the champion name, exactly as asked.** Worth knowing before
 the run: only 22 of the 173 names are a single token under this tokenizer, and
-there are 136 distinct first tokens (24 collisions covering 37 names), so "a
-1:1 mapping to discrete entity tokens" is not what the tokenizer offers - the
-target is a 2-5 token sequence. the metrics therefore report both per-token
-accuracy and whole-name exact match, and `first_token_rank` is reported as a
-136-way number and never compared to the policy head's 173-way one.
+there are 136 distinct first tokens (24 collision groups covering 61 names, the
+largest standing for 6 champions), so "a 1:1 mapping to discrete entity tokens"
+is not what the tokenizer offers - the target is a 1-5 token sequence. the
+metrics therefore report both per-token accuracy and whole-name exact match, and
+`first_token_rank` is reported as a 136-way number and never compared to the
+policy head's 173-way one.
 """
 import torch
 
@@ -49,24 +50,31 @@ EOS = "<|im_end|>"
 
 
 def build_text(sample, names, context="soft+text", answer=None,
-               extra_instruction=None):
+               extra_instruction=None, prompt_format=None, candidates=None):
     """-> (pre_placeholder_text, post_placeholder_text, answer_text).
 
     `answer_text` is empty when `answer` is None (the generation prompt).
     Splitting the three pieces lets the caller tokenize them separately, which
     is what guarantees every target token is a whole token rather than one
     straddling the prompt/answer boundary.
+
+    `prompt_format` selects the board rendering (`common.render_state`): `v2`
+    is the default and labels the turn and the lane; `v1` reproduces the text
+    every number recorded before 2026-11-08 was measured on; `v4` adds the
+    candidate list and needs `candidates` = [(champ_id, prob), ...] for *this*
+    row, which the caller gets from the next-pick head.
     """
     if context == "soft":
         state = ""
     else:
-        state = render_state(sample, names)
+        state = render_state(sample, names, prompt_format=prompt_format,
+                             candidates=candidates)
     parts = []
     if state:
         parts.append(state)
     if extra_instruction:
         parts.append(extra_instruction)
-    parts.append(task_line(sample))
+    parts.append(task_line(sample, prompt_format=prompt_format))
     body = "\n".join(parts) + "\n" + ANSWER_CUE
     ans_text = "" if answer is None else ANSWER_PREFIX + answer
     return PREFIX, body, ans_text
@@ -95,7 +103,8 @@ def tokenize_answer(tok, answer_text):
 
 
 def assemble(tok, samples, names, context="soft+text", with_answers=True,
-             loss_on_eos=False, extra_instruction=None, device=None):
+             loss_on_eos=False, extra_instruction=None, device=None,
+             prompt_format=None, candidates=None):
     """Batch -> token ids, the placeholder index and the scored positions.
 
     `names` is the champion name table; the per-row answer is looked up here
@@ -129,11 +138,14 @@ def assemble(tok, samples, names, context="soft+text", with_answers=True,
     eos_ids = tok(EOS, add_special_tokens=False)["input_ids"]
 
     seqs, scored, n_ans, starts, ph_idx = [], [], [], [], None
-    for s in samples:
+    for i, s in enumerate(samples):
         ans_name = names[int(s["target_champ"])] if with_answers else None
         prefix, body, ans = build_text(s, names, context=context,
                                        answer=ans_name,
-                                       extra_instruction=extra_instruction)
+                                       extra_instruction=extra_instruction,
+                                       prompt_format=prompt_format,
+                                       candidates=(candidates[i]
+                                                   if candidates else None))
         ids, p = tokenize_prompt(tok, prefix, body)
         ph_idx = p
         tail = []
@@ -172,6 +184,33 @@ def assemble(tok, samples, names, context="soft+text", with_answers=True,
     if device is not None:
         out = {k: (v.to(device) if torch.is_tensor(v) else v)
                for k, v in out.items()}
+    return out
+
+
+def candidate_first_ids(tok, names, candidates):
+    """Per row: the first-token ids of its candidate names -> [B, k], -1 pad.
+
+    The reranker's answer is a champion *name*, so constraining it to the list
+    means constraining its **first token** to the candidates' first tokens.
+    Collisions make this a constraint over groups rather than over names: 24
+    first-token groups cover 61 of the 173 champions, so two candidates can
+    share a first token. That is harmless - both are legal answers and the
+    following tokens separate them - but it means the mask's width is at most
+    k and sometimes less, so callers must not assume k distinct columns.
+
+    `-1` marks padding, not "no candidate": every row in a reranker batch has
+    the same k candidates, so the padding only appears when k exceeds the
+    longest list.
+    """
+    rows = []
+    for cand in candidates:
+        ids = [tok(ANSWER_PREFIX + names[int(c)], add_special_tokens=False)
+               ["input_ids"][0] for c, _p in cand]
+        rows.append(ids)
+    k = max(1, max(len(r) for r in rows)) if rows else 1
+    out = torch.full((len(rows), k), -1, dtype=torch.long)
+    for i, ids in enumerate(rows):
+        out[i, :len(ids)] = torch.tensor(ids, dtype=torch.long)
     return out
 
 

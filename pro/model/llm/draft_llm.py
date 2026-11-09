@@ -8,7 +8,7 @@
 
 Why the logits are gathered instead of returned for the whole sequence: the
 vocabulary is 248,320, so a [B, L, V] tensor is ~100 MB per row and would be
-the single largest allocation in the step. Only the 2-5 answer positions are
+the single largest allocation in the step. Only the 1-5 answer positions are
 ever read, so the LM head is applied to a gathered [B, K, d] slice. That is
 the difference between fitting in 8 GB and not.
 
@@ -110,6 +110,12 @@ class DraftLLM(nn.Module):
     and `cand_owner` [M, C] says which champions each one stands for. Both are
     derived from the tokenizer and the name table, never hand-written, so the
     metric cannot drift from what the model is actually asked to emit.
+
+    `cand_mask` [V] is the same set as a boolean over the vocabulary, because
+    `ft_top*` renormalises over the M candidates and therefore cannot see the
+    thing a free decoder would emit first: a token that is not a name prefix at
+    all. `top1_offlist` is that fraction, and it is the honest gap between the
+    teacher-forced readout and "what would this model actually say".
     """
 
     def __init__(self, encoder, projector, llm, cand_first, cand_owner,
@@ -121,6 +127,10 @@ class DraftLLM(nn.Module):
         self.n_soft = n_soft
         self.register_buffer("cand_first", cand_first, persistent=False)
         self.register_buffer("cand_owner", cand_owner, persistent=False)
+        mask = torch.zeros(int(llm.get_input_embeddings().weight.shape[0]),
+                           dtype=torch.bool)
+        mask[cand_first] = True
+        self.register_buffer("cand_mask", mask, persistent=False)
         self.trunk = _trunk(llm)
 
     # ---------------------------------------------------------------- pieces
@@ -145,7 +155,21 @@ class DraftLLM(nn.Module):
         return torch.cat([attn[:, :p], attn.new_ones((B, self.n_soft)),
                           attn[:, p + 1:]], dim=1)
 
-    def forward(self, enc_batch, prompt, compute_metrics=True):
+    def forward(self, enc_batch, prompt, compute_metrics=True, keep=None):
+        """`keep` [B, V] bool is the reranker's decode constraint.
+
+        It masks the **first** answer position to the candidate list's first
+        tokens *before* the log-softmax, so the loss is a proper k-way
+        cross-entropy over the candidates rather than a full-vocabulary one
+        with a smaller argmax set. The remaining answer tokens are untouched:
+        they spell out which of the k was chosen, and a first-token collision
+        between two candidates is resolved there.
+
+        `keep` must contain the target's first token or the loss is +inf; the
+        eval path therefore unions the target in, which keeps the denominator
+        intact and counts those rows as wrong - the honest reading, since a
+        decoder constrained to a list that lacks the answer cannot be right.
+        """
         soft = self.soft_tokens(enc_batch)
         E = self.inputs_embeds(prompt, soft)
         hidden = self.trunk(inputs_embeds=E,
@@ -156,6 +180,9 @@ class DraftLLM(nn.Module):
         sel = hidden.gather(
             1, pos.clamp(min=0).unsqueeze(-1).expand(-1, -1, hidden.shape[-1]))
         logits = self.llm.get_output_embeddings()(sel)   # [B,K,V]
+        if keep is not None:
+            logits = logits.clone()
+            logits[:, 0] = logits[:, 0].masked_fill(~keep, float("-inf"))
         logp = logits.float().log_softmax(dim=-1)
 
         target = prompt["ans_ids"]
@@ -174,7 +201,7 @@ class DraftLLM(nn.Module):
     def _metrics(self, logp, tok_ll, target, valid, enc_batch):
         """Teacher-forced numbers, all restricted to the answer positions.
 
-        `ft_top*` is a **96-way** number (the distinct first tokens of the 173
+        `ft_top*` is a **136-way** number (the distinct first tokens of the 173
         names), not a 173-way one - see the module docstring of prompt.py.
         `*_legal` drops candidates whose every champion is already taken or
         fearless-unavailable, which is the only way to ask "would it have said
@@ -182,10 +209,17 @@ class DraftLLM(nn.Module):
         """
         pred = logp.argmax(dim=-1)                    # [B,K]
         hit = (pred == target) & valid
+        # The first token a free decoder would emit, over the full vocabulary.
+        # `ft_top*` below renormalises over the 136 name prefixes and so cannot
+        # see an off-list argmax; this is the gap between the teacher-forced
+        # readout and what the model would actually start saying.
+        full0 = logp[:, 0].argmax(dim=-1)             # [B]
+        off = ~self.cand_mask[full0]                  # [B]
         out = {
             "ce": float(-(tok_ll * valid).sum() / valid.sum().clamp_min(1)),
             "tok_acc": float(hit.sum().float() / valid.sum().clamp_min(1)),
             "exact": float((hit | ~valid).all(dim=1).float().mean()),
+            "top1_offlist": float(off.float().mean()),
         }
 
         first = logp[:, 0][:, self.cand_first]        # [B,M] over candidates
@@ -201,7 +235,8 @@ class DraftLLM(nn.Module):
         # Per-row values so a caller can slice (ban vs pick, per phase) without
         # re-running the model. Small - one scalar per row per key.
         out["row"] = {"exact": (hit | ~valid).all(dim=1).float(),
-                      "rank": rank.float(), "n_tok": valid.sum(dim=1)}
+                      "rank": rank.float(), "n_tok": valid.sum(dim=1),
+                      "off": off.float()}
 
         cand_ill = self._cand_illegal(enc_batch)      # [B,M] bool or None
         if cand_ill is not None:
@@ -220,15 +255,33 @@ class DraftLLM(nn.Module):
             out["row"]["ill1"] = ill_sorted[:, 0].float()
             out["row"]["ill5"] = ill_sorted[:, :5].any(dim=1).float()
 
+            # ---------------------------------------------------------------
+            # Decode-time legality. This is what a *decoder* scores, not what
+            # the teacher-forced readout scores: a generator that knows the
+            # rules masks every candidate whose champions are all taken or
+            # fearless-picked, and renormalises over the rest. Scored on ALL
+            # rows, unlike `ft_*_legal` below, because a masked decoder cannot
+            # emit an illegal champion at all - restricting the denominator to
+            # the rows where the label happens to be legal would flatter it.
+            #
+            # It costs nothing to train for: `ft_top*` are the unmasked
+            # numbers, so the delta between them is exactly the free gain from
+            # masking, and no weight changes.
+            legal_rank = self._rank(first.masked_fill(cand_ill, -1e4), tgt)
+            out["ft_top1_masked"] = float((legal_rank == 0).float().mean())
+            out["ft_top5_masked"] = float((legal_rank < 5).float().mean())
+            out["ft_rank_masked"] = float(legal_rank.float().mean())
+            out["row"]["masked_rank"] = legal_rank.float()
+
             # Only rows whose true answer survives the legality filter can be
             # scored: a champion picked earlier in the series is still legal
             # to *ban* (the corpus has 8 such bans), so masking it would
             # punish the model for the filter, not for the prediction.
             ok = ~cand_ill.gather(1, tgt.unsqueeze(1)).squeeze(1)
             if int(ok.sum()) > 0:
-                rank = self._rank(first.masked_fill(cand_ill, -1e4), tgt)
-                out["ft_top1_legal"] = float((rank == 0).float()[ok].mean())
-                out["ft_top5_legal"] = float((rank < 5).float()[ok].mean())
+                out["ft_top1_legal"] = float(
+                    (legal_rank == 0).float()[ok].mean())
+                out["ft_top5_legal"] = float((legal_rank < 5).float()[ok].mean())
                 out["legal_n"] = int(ok.sum())
         return out
 
@@ -247,15 +300,43 @@ class DraftLLM(nn.Module):
 
     def _cand_illegal(self, enc_batch):
         """[B,M] True where *every* champion behind that first token is
-        already taken or fearless-unavailable."""
+        already gone.
+
+        The rule is the policy head's training rule (`_apply_legality`):
+        `taken_mask` (banned or picked this game) is always illegal, and a
+        fearless-picked champion is illegal on **pick** moves only - a champion
+        picked in an earlier series game can still be banned in this one, and
+        the corpus has 8 ban moves whose target is exactly such a champion.
+        Masking those would charge the model for the filter, not the
+        prediction.
+
+        `infer._policy_batch` is deliberately stricter and passes
+        `taken | unavailable` for bans too; that is a serving choice, not the
+        rule, so it is not what the decode-time mask here implements.
+        """
         taken = enc_batch.get("taken_mask")
         if taken is None:
             return None
+        ill = taken
         unavail = enc_batch.get("unavailable_mask")
-        ill = taken if unavail is None else (taken | unavail)
-        owned = self.cand_owner.float()                # [M,C]
-        n_ill = ill.float() @ owned.T                  # [B,M]
+        if unavail is not None:
+            is_pick = ~enc_batch["is_ban"].bool()        # [B] True = pick
+            ill = ill | (unavail & is_pick.unsqueeze(1))
+        owned = self.cand_owner.float()                  # [M,C]
+        n_ill = ill.float() @ owned.T                    # [B,M]
         return n_ill >= owned.sum(dim=1).unsqueeze(0)
+
+    def legal_first_mask(self, enc_batch):
+        """[B,M] bool, True where that first token may be emitted.
+
+        This is the mask a decoder applies before argmax/sampling. It is the
+        public entry point for it: `_cand_illegal` is kept as the negation
+        because the metrics ask the opposite question ("did it recommend
+        something gone"), and inverting at one site is cheaper to read than a
+        boolean flag threaded through both.
+        """
+        ill = self._cand_illegal(enc_batch)
+        return None if ill is None else ~ill
 
     def trainable_parameters(self):
         return [p for p in self.parameters() if p.requires_grad]

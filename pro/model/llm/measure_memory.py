@@ -17,7 +17,7 @@ The gap between `allocated` and `reserved` is fragmentation, and the gap
 between `reserved` and `nvidia-smi` is the CUDA context plus other processes -
 neither is visible to `memory_allocated`.
 
-    bash pro/model/llm/run.sh python -m model.llm.measure_memory --batch-sizes 1 2 4 8
+    bash pro/model/llm/run.sh python -m pro.model.llm.measure_memory --batch-sizes 1 2 4 8
 """
 import argparse
 import subprocess

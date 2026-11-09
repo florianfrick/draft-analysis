@@ -15,7 +15,7 @@ Two things can make a frozen 4B look clairvoyant when it is not:
 This prints, for real eval rows, the top-5 at `pos` and at `pos-1`, plus the
 metrics for `--context soft+text` and `--context soft`.
 
-    python -m model.llm.audit_positions --projector pro/model/checkpoints/llm-warmup-segfix/projector.pt
+    python -m pro.model.llm.audit_positions --projector pro/model/checkpoints/llm-warmup-segfix/projector.pt
 """
 import argparse
 import sys

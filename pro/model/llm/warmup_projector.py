@@ -16,8 +16,8 @@ Reported per split, all on the answer positions:
   ce       mean CE per answer token (the training objective)
   tok_acc  fraction of answer tokens right under teacher forcing
   exact    fraction of rows where the *whole* name is right
-  ft_top1/5  96-way first-token readout (see prompt.py: only 96 distinct first
-           tokens exist for 173 names, so this is NOT comparable to the
+  ft_top1/5  136-way first-token readout (see prompt.py: only 136 distinct
+           first tokens exist for 173 names, so this is NOT comparable to the
            policy head's 173-way top-5)
   *_legal  the same after removing champions that are taken or fearless
            unavailable, on the rows where the true answer survives the filter
@@ -41,6 +41,7 @@ from pro.model.llm import build as B          # noqa: E402
 from pro.model.llm import common as C        # noqa: E402
 from pro.model.llm import data as D          # noqa: E402
 from pro.model.llm.metrics import Accumulator, chance_levels  # noqa: E402
+from pro.model.llm import train_util as TU    # noqa: E402
 from pro.model.llm.prompt import assemble    # noqa: E402
 
 
@@ -68,6 +69,11 @@ def parse_args(argv=None):
     p.add_argument("--projector-dropout", type=float, default=0.0)
     p.add_argument("--context", default="soft+text",
                    choices=["soft+text", "soft"])
+    p.add_argument("--prompt-format", default=C.PROMPT_FORMAT,
+                   choices=["v1", "v2", "v3"],
+                   help="v2 labels the turn and the pick's lane; "
+                        "v1 is the format every number before "
+                        "2026-11-08 was measured on")
     p.add_argument("--loss-on-eos", action="store_true")
     p.add_argument("--no-checkpointing", action="store_true")
     p.add_argument("--no-4bit", action="store_true")
@@ -76,6 +82,14 @@ def parse_args(argv=None):
     p.add_argument("--limit-train-steps", type=int, default=0)
     p.add_argument("--limit-val-batches", type=int, default=0)
     p.add_argument("--out-dir", default="")
+    p.add_argument("--init-projector", default="",
+                   help="start from these projector weights with a FRESH "
+                        "optimizer and schedule (a new cycle)")
+    p.add_argument("--resume", default="",
+                   help="continue a run from its out-dir: restores weights, "
+                        "optimizer, schedule and step. `--epochs` larger than "
+                        "the saved run extends it, because the cosine is "
+                        "recomputed over the new total and the LR comes back up")
     p.add_argument("--tag", default="")
     p.add_argument("--debug-mem", action="store_true",
                    help="print allocator state at each point inside a step")
@@ -92,7 +106,8 @@ def evaluate(model, loader, tok, names, args, device, limit=0):
                 break
             batch = D.to_device(batch, device)
             prompt = assemble(tok, samples, names, context=args.context,
-                              loss_on_eos=args.loss_on_eos, device=device)
+                              loss_on_eos=args.loss_on_eos, device=device,
+                              prompt_format=args.prompt_format)
             out = model(batch, prompt)
             acc.update({k: v for k, v in out.items()
                         if k not in ("loss", "n_tokens")}, prompt)
@@ -117,6 +132,11 @@ def main(argv=None):
     rows = C.load_rows(args.corpus)
     split = C.split_rows(rows)
     keys, patch_index = D.make_patch_index(rows)
+    n_unk, worst = C.patch_coverage(rows, patch_index)
+    if n_unk:
+        print("patch: %d drafts (%.2f%%) are newer than the encoder's table "
+              "-> UNK %s" % (n_unk, 100.0 * n_unk / len(rows),
+                             [w[0] for w in worst][:4]), flush=True)
     names = C.champ_names()
     print("corpus %d drafts | train %d val %d test %d | patches %d"
           % (len(rows), len(split["train"]), len(split["val"]),
@@ -140,6 +160,7 @@ def main(argv=None):
              * args.grad_accum, len(va_ds)), flush=True)
 
     enc, cfg, _ = C.build_frozen_encoder(args.encoder, device=device)
+    C.assert_patch_compat(cfg, patch_index)
     print("encoder D=%d params %.2fM (frozen)"
           % (cfg["embed_dim"], C.param_count(enc) / 1e6), flush=True)
 
@@ -187,7 +208,38 @@ def main(argv=None):
 
     history, best = [], {"ce": float("inf")}
     step = 0
-    for epoch in range(args.epochs):
+    start_epoch = 0
+    if args.resume:
+        d, st = TU.load_resume(args.resume)
+        B.load_projector(model, d / "projector.pt")
+        opt.load_state_dict(st["opt"])
+        sched.load_state_dict(st["sched"])
+        step = int(st["step"])
+        # The saved epoch is the one that *finished*, so training restarts on
+        # the next one. Resume is epoch-granular: a crash costs the epoch in
+        # flight, not the run.
+        start_epoch = int(st["epoch"]) + 1
+        print("resumed from %s at step %d (epoch %d done) | %d of %d steps "
+              "left" % (d, step, st["epoch"], total - step, total), flush=True)
+        if start_epoch >= args.epochs:
+            print("  nothing to do: --epochs %d but %d epochs are already "
+                  "done. Pass a larger --epochs to extend the run."
+                  % (args.epochs, start_epoch), flush=True)
+            return None
+    elif args.init_projector:
+        blob = B.load_projector(model, args.init_projector)
+        ck_fmt = (blob.get("args") or {}).get("prompt_format")
+        if ck_fmt and ck_fmt != args.prompt_format:
+            raise SystemExit(
+                "%s was warmed up with prompt_format=%s but this run uses %s. "
+                "The projector learned to read that text; starting from it "
+                "with different text is worse than starting from scratch."
+                % (args.init_projector, ck_fmt, args.prompt_format))
+        print("projector initialised from %s (val %s)"
+              % (args.init_projector,
+                 json.dumps(blob.get("val", {}))[:120]), flush=True)
+
+    for epoch in range(start_epoch, args.epochs):
         tr_ds.set_epoch(epoch)
         # Set the *parts* to train rather than the whole model to train and
         # then back: `model.train()` walks every descendant, including the
@@ -202,7 +254,8 @@ def main(argv=None):
         for i, (batch, samples) in enumerate(tr_ld):
             batch = D.to_device(batch, device)
             prompt = assemble(tok, samples, names, context=args.context,
-                              loss_on_eos=args.loss_on_eos, device=device)
+                              loss_on_eos=args.loss_on_eos, device=device,
+                              prompt_format=args.prompt_format)
             out = model(batch, prompt)
             if args.debug_mem:
                 torch.cuda.synchronize()
@@ -253,6 +306,10 @@ def main(argv=None):
                              extra={"args": vars(args),
                                     "calibration": model.calibration,
                                     "val": val})
+        # Written for every epoch, not only when the run improves: "continue
+        # from here" has to mean here, not "from the best epoch".
+        TU.save_resume(out_dir, model, opt, sched, step, epoch,
+                       extra={"args": vars(args)})
         if args.limit_train_steps and step >= args.limit_train_steps:
             break
 
@@ -262,6 +319,7 @@ def main(argv=None):
             "stage": "projector warmup (encoder + LLM frozen)",
             "model": args.model, "encoder": args.encoder,
             "corpus": args.corpus, "context": args.context,
+            "prompt_format": args.prompt_format,
             "n_soft": args.n_soft, "projector_hidden": args.hidden,
             "loss_on_eos": args.loss_on_eos,
             "batch_size": args.batch_size, "grad_accum": args.grad_accum,

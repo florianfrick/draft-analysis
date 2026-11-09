@@ -10,6 +10,12 @@
 #   bash pro/model/llm/run.sh python -m pro.model.llm.warmup_projector --epochs 1
 #   bash pro/model/llm/run.sh python -m pro.model.llm.finetune_lora --epochs 1
 #
+# The mount is the REPO ROOT, not this folder: `common.py` puts the repo root on
+# `sys.path` so it can import `solo_queue.model.pretraining`, and the packages
+# are addressed as `pro.model.llm.*`. Mounting `pro/` instead (what `../..` gave
+# before the folder moved from `model/llm` to `pro/model/llm`) makes both fail
+# with `No module named 'pro'`.
+#
 # `expandable_segments:True` is not a micro-optimisation here, it is the
 # difference between 0.64 s/step and 5.6 s/step. The caching allocator's
 # default size-bucket scheme fragments badly against this workload's variable
@@ -19,7 +25,7 @@
 # Override with PYTORCH_CUDA_ALLOC_CONF=... in the environment if you want to
 # compare.
 set -euo pipefail
-cd "$(dirname "$0")/../.."
+cd "$(dirname "$0")/../../.."
 
 # Git Bash rewrites `/workspace` into a Windows path before docker sees it, so
 # the container-side paths below must be exempted from MSYS path conversion.

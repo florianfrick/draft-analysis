@@ -93,7 +93,7 @@ CACHE_PATH = BASE_DIR / "pro_drafts.pt"
 # single cache keyed by CSV signature would rescan back and forth every time a
 # script alternates between the two corpora.
 CACHE_PATH_ALL = BASE_DIR / "pro_drafts_all.pt"
-CACHE_VERSION = 3  # v3: prior_picks + data-driven fearless flag
+CACHE_VERSION = 4  # v4: corpus freeze raised to 2026-11-08
 
 # Corpus freeze. Every number in STATUS.md is measured on the
 # drafts that existed up to this date, which is also the last date in both
@@ -116,7 +116,17 @@ CACHE_VERSION = 3  # v3: prior_picks + data-driven fearless flag
 # corpus grew 46,875 -> 46,879. Raising the freeze again is the same deliberate
 # act as above: every number recorded under the old freeze is a number about a
 # 46,875-draft corpus, and the checkpoints that carry them are still on disk.
-CORPUS_MAX_DATE = "2026-11-04 23:59:59"
+#
+# 2026-11-04 -> 2026-11-08 23:59:59 (the export was refreshed on 2026-11-08).
+# +33 drafts, 2026-11-05..11-08, on patches 16.20 and **16.22**. 16.22 is newer
+# than anything the frozen encoder was trained on (its patch table ends at
+# 16.20), so those rows reach the encoder as PATCH_UNK_ID. That is only safe
+# because `datasets.build_patch_vocab` reserves index 0 for exactly this case
+# and the LLM path builds its index from the checkpoint's own table rather than
+# from the corpus - see `llm/data.py::make_patch_index`. Corpus 46,882 ->
+# 46,915. Note the 3 drafts the same refresh added *before* the old freeze were
+# already in the 46,882 cache, so this raise is +33, not +36.
+CORPUS_MAX_DATE = "2026-11-08 23:59:59"
 
 # The test split: three series, 7 games, all patch 16.20, all played on the
 # last day of Worlds 2026 (2026-10-31). Pinned by `series_id` rather than by

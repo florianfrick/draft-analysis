@@ -27,9 +27,12 @@ def load_llm(model_id, quantize=True, device=0, dtype=torch.bfloat16):
     """Text-only Qwen3.5 in 4-bit (default) or bf16.
 
     `Qwen3_5ForCausalLM` is used rather than the checkpoint's own
-    `Qwen3_5ForConditionalGeneration`: the vision tower is ~0.6 GB of weights
-    that a text-only soft-prompt task never touches, and dropping it is what
-    makes the frozen warmup fit at all.
+    `Qwen3_5ForConditionalGeneration`: the checkpoint is multimodal, and the
+    vision tower (0.33B params, 0.67 GB bf16 = 7.2 % of the file) plus the MTP
+    head (0.12B, 2.6 %) are weights a text-only soft-prompt task never touches.
+    Measured from the safetensors headers, and confirmed by the resident size:
+    the text trunk is 4.21B params, which is 3.06 GB in nf4 + bf16 embeddings,
+    against the 3.14 GB the build actually allocates.
     """
     from transformers import BitsAndBytesConfig, Qwen3_5ForCausalLM
     kwargs = dict(device_map={"": device}, dtype=dtype)
@@ -60,19 +63,31 @@ def freeze(llm):
     return llm
 
 
-def attach_lora(llm, r=16, alpha=32, dropout=0.05, quantized=True):
+def attach_lora(llm, r=16, alpha=32, dropout=0.05, quantized=True,
+                adapter_path=""):
     """QLoRA adapters on the attention and MLP projections.
 
     `prepare_model_for_kbit_training` casts the norms to fp32, turns the cache
     off and freezes the base - it is what makes a 4-bit base trainable at all.
     It also requires a *quantized* model, so it is skipped when the caller
     loaded bf16 (`--no-4bit`), where a plain `freeze` already did the same job.
+
+    `adapter_path` loads an existing adapter *instead of* a fresh one, which is
+    how a finished run is continued for another cycle without re-deriving it.
+    The r/alpha/dropout arguments are then ignored: the shapes come from the
+    saved adapter, and a mismatch would be a different model, not a resume.
     """
-    from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+    from peft import (LoraConfig, PeftModel, get_peft_model,
+                      prepare_model_for_kbit_training)
     if quantized:
         llm = prepare_model_for_kbit_training(
             llm, use_gradient_checkpointing=True,
             gradient_checkpointing_kwargs={"use_reentrant": False})
+    if adapter_path:
+        model = PeftModel.from_pretrained(llm, adapter_path,
+                                          is_trainable=True)
+        model.enable_input_require_grads()
+        return model
     cfg = LoraConfig(
         r=r, lora_alpha=alpha, lora_dropout=dropout, bias="none",
         task_type="CAUSAL_LM", target_modules=LORA_TARGETS)

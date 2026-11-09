@@ -2,10 +2,10 @@
 
 Every number here is a ratio of two counts summed over the whole split, never
 a mean of per-batch means: batches differ in how many answer tokens they carry
-(2-5 per row) and in how many rows survive the legality filter, so averaging
+(1-5 per row) and in how many rows survive the legality filter, so averaging
 per-batch ratios would weight a 4-token batch the same as a 2-token one.
 
-`ft_top*` is a 96-way number and is kept in its own block so it can never be
+`ft_top*` is a 136-way number and is kept in its own block so it can never be
 read next to the policy head's 173-way top-5 by accident.
 """
 from collections import defaultdict
@@ -41,7 +41,8 @@ class Accumulator:
         B = int(batch["n_ans"].shape[0])
         n_tok = int(batch["n_ans"].sum())
         for k in ("exact", "ft_top1", "ft_top5", "ft_rank",
-                  "top1_illegal", "top5_illegal"):
+                  "ft_top1_masked", "ft_top5_masked", "ft_rank_masked",
+                  "top1_illegal", "top5_illegal", "top1_offlist"):
             if k in metrics:
                 self.add(k, metrics[k] * B, B)
         for k in ("ce", "tok_acc"):
@@ -58,8 +59,11 @@ class Accumulator:
     def summary(self):
         out = {k: self.ratio(k) for k in ("ce", "tok_acc", "exact",
                                           "ft_top1", "ft_top5", "ft_rank",
+                                          "ft_top1_masked", "ft_top5_masked",
+                                          "ft_rank_masked",
                                           "ft_top1_legal", "ft_top5_legal",
-                                          "top1_illegal", "top5_illegal")}
+                                          "top1_illegal", "top5_illegal",
+                                          "top1_offlist")}
         # `rows` and `tokens` were added as add(key, count, 1), so the total is
         # in `num`; reading `den` reports the number of *batches* (500 for a
         # 4,000-state eval), which is the kind of off-by-a-denominator that

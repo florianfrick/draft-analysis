@@ -6,7 +6,7 @@ has reserved from the driver (`reserved`).  On WDDM those diverge: `reserved`
 can creep past physical VRAM, after which every step pays for the spill and
 step time is no longer a property of the batch.
 
-    python -m model.llm.bench_step --model Qwen/Qwen3.5-4B --batch-size 4 \
+    python -m pro.model.llm.bench_step --model Qwen/Qwen3.5-4B --batch-size 4 \
         --steps 16 --context soft+text
 """
 import argparse
