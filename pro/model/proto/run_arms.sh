@@ -5,7 +5,10 @@
 # Selection is on val exact top-5 (the trainer does that internally); the test
 # split is only read once per arm by pro/model/proto/evaluate.py, after the fact.
 set -u
-cd "$(dirname "$0")/../.."
+# repo root: `../..` was right when this lived at `model/proto`, and lands on
+# `pro/` now that it lives at `pro/model/proto`. Docker Compose would still find
+# the parent compose file from there, so this only ever half-worked.
+cd "$(dirname "$0")/../../.."
 
 INIT=${INIT:-pro/model/proto/runs/masked-pro/best.pt}
 EP=${EP:-36}

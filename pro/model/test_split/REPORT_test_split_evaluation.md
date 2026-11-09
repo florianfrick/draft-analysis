@@ -75,7 +75,7 @@ What the split can do is catch a model that is broken or badly fitted - a next-m
 ## Reproduce
 
 ```bash
-docker compose run --rm -T dev python pro/pro/model/test_split/eval_test_split.py
-docker compose run --rm -T dev python pro/pro/model/test_split/render_test_split.py
-docker compose run --rm -T dev python -m pytest pro/pro/model/test_split/test_test_split.py -q
+docker compose run --rm -T dev python pro/model/test_split/eval_test_split.py
+docker compose run --rm -T dev python pro/model/test_split/render_test_split.py
+docker compose run --rm -T dev python -m pytest pro/model/test_split/test_test_split.py -q
 ```

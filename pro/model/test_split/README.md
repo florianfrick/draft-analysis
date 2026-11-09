@@ -49,9 +49,11 @@ it. Everything was re-measured on 2026-11-03 (`STATUS.md` §7).
 
 ## What is compared
 
-One checkpoint per model class, all under `model/checkpoints/<name>/`. The
-directory name is the contract — `frontend/server._ckpt_roles` reads the prefix
-to decide which UI slot may load it.
+One checkpoint per model class, all under `<track>/model/checkpoints/<name>/` —
+`solo_queue/model/checkpoints/` for the three solo-queue artefacts,
+`pro/model/checkpoints/` for the two pro ones. The directory name is the
+contract — `frontend/server._ckpt_roles` reads the prefix to decide which UI
+slot may load it.
 
 | directory | training | answers |
 |---|---|---|

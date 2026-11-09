@@ -1,7 +1,7 @@
 {
   "_comment": [
     "Team name -> short code, used to build a checkpoint name that states which",
-    "series the training data ends on (model/proonly/common.py:through_suffix).",
+    "series the training data ends on (pro/model/proonly/common.py:through_suffix).",
     "Keys are the exact 'teamname' strings from the Oracle's Elixir exports.",
     "A team that is missing falls back to a deterministic initialism, so this",
     "file is a readability layer, not a dependency: 'Top Esports' would fall",

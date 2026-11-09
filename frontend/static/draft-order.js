@@ -3,7 +3,7 @@
  *
  * The plan itself is NOT duplicated here. GET /api/champions publishes
  * `move_plan` for both first-pick sides, built from
- * model/policy/infer.py:move_plan (which is checked against
+ * solo_queue/model/policy/infer.py:move_plan (which is checked against
  * data/pro play/pipeline.py:interleaved_moves). The client keeps one source
  * of truth and computes the next turn synchronously from the board.
  *

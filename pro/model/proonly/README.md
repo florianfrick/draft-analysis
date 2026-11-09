@@ -174,14 +174,14 @@ attribution is unresolved and the numbers live in `pro/model/bans/README.md`.
 | `train_policy.py` | stage 2 — next-pick, initialised from stage 1 |
 | `compare.py` | paired comparison of two checkpoints on identical rows (McNemar + game bootstrap + per-year) |
 | `test_proonly.py` | 23 tests: patch id reaches the encoder, checkpoints round-trip, both trainers resolve the same split, the team-code table and its fallback, the `-through-` name, `--val-scope latest`, the seeded random-per-patch draw, and that `compare.py --split shared` really is val for both protocols |
-| `ckpt/` | **local only** (git-ignored) — scratch runs from `--out-dir`-less invocations; the kept artefacts are in `model/checkpoints/` |
+| `ckpt/` | **local only** (git-ignored) — scratch runs from `--out-dir`-less invocations; the kept artefacts are in `pro/model/checkpoints/` |
 | `reports/` | every run's `test_report.json` and every paired comparison, committed |
 
 ## The checkpoints that are kept
 
 The pro-only runs no longer live in `pro/model/proonly/ckpt/`. On 2026-11-03 every
 checkpoint outside the soloQ pretrain was deleted and each model class was
-retrained once into `model/checkpoints/<name>/`, where the name states the
+retrained once into `pro/model/checkpoints/<name>/`, where the name states the
 inference and the stage:
 
 | directory | stage | what it answers |

@@ -90,6 +90,14 @@ the same path are equivalent.
 live smoke script that curls `http://127.0.0.1:8778` and executes at import, so
 pytest reports a collection error. Start the explorer first and run it directly.
 
+`pro/model/llm` is deliberately not in that loop: its tests build a Qwen
+tokenizer, and `transformers` lives in the derived image, not in `lol-draft:dev`.
+Run them through the folder's own wrapper:
+
+```bash
+bash pro/model/llm/run.sh python -m pytest pro/model/llm/test_llm_prompt.py -q
+```
+
 ## Long runs
 
 `docker compose run --rm` attaches to the foreground, which is what you want for

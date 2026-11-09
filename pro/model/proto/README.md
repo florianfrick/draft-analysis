@@ -2,7 +2,7 @@
 
 Purpose: rank ideas fast, on a split with enough test rows to actually rank
 them, using the evaluation agreed on 2026-11-05 (exact move **and** block
-partner). Nothing here writes to `model/checkpoints/` and nothing here edits
+partner). Nothing here writes to `pro/model/checkpoints/` and nothing here edits
 `STATUS.md`; an idea that survives this directory is allowed to touch the kept
 pipelines.
 
@@ -192,7 +192,7 @@ docker compose run --rm -T dev python -c "
 import sys, importlib.util; sys.path.insert(0,'.')
 s=importlib.util.spec_from_file_location('pp','data/pro play/pipeline.py')
 P=importlib.util.module_from_spec(s); s.loader.exec_module(P)
-from model.proto import split as S
+from pro.model.proto import split as S
 rows,_=P.build_rows(); S.save(S.build(rows, soloq_n=384356)[1])"
 
 # encoder, then arms (each ~9-17 min on one GPU)
