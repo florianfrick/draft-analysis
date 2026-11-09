@@ -68,6 +68,62 @@ path is not special-cased to the default.
 Through Docker, pass `--host 0.0.0.0` (a published port arrives on the
 container's `eth0`, not its loopback) — see `DOCKER.md` §"The frontend".
 
+### The LLM reranker (2026-11-09)
+
+`--policy-ckpt pro/model/checkpoints/llm-lora-rerank5` (or the folder itself)
+serves a different next-move model: the head still produces the shortlist, and a
+LoRA-tuned Qwen3.5-4B chooses from it. It is **the default when it can run**, and
+the head when it cannot — see below, because "can run" is not a preference.
+
+```bash
+bash pro/model/llm/run.sh python frontend/server.py --host 0.0.0.0 \
+     --port 8777 --device cuda
+```
+
+That wrapper is required, not stylistic: the reranker needs `transformers`,
+`peft` and `bitsandbytes` (only in the derived `lol-draft:llm` image) and CUDA
+(4.2B in 4-bit is ~4.5 GB of VRAM; on CPU a request takes minutes). Run the
+frontend with the plain interpreter and the model is still *listed*, disabled,
+with the reason under the picker — `rerank.unavailable_reason()` decides that,
+and `/api/checkpoints` reports it as `rerank.available`.
+
+| | head alone | LLM rerank |
+|---|---|---|
+| top-1, 478 games held out from both | 19.14 % | **35.31 %** |
+| ceiling (the head's own recall@5) | — | 51.85 % |
+| parameters in the loop | 2.49 M | 4.2 B |
+| one request, steady state | ms | **0.7 s** |
+| startup | instant | ~107 s (27 s load + 58 s kernel warmup) |
+
+The warmup is why the first click is not 53 s: Triton compiles the hybrid
+attention kernels and `causal_conv1d` falls back to its reference implementation
+on the first forward. It runs inside the constructor and prints its cost.
+
+Two things it does that a head cannot, both of which change what the panel
+shows:
+
+* **It needs the lane of the coming pick.** The prompt asks for "the best Red
+  Side pick for *Top* lane", so the panel grows a lane selector whenever the
+  board does not decide the lane (four lanes filled ⇒ forced). `lane_source` in
+  the response says `board` / `user` / `default`, and only `default` is marked
+  "assumed" in the UI.
+* **It can disagree with the head**, which is the point: on a Red-to-pick board
+  asked for Bot it returns Ezreal 73.8 % where the head's top-1 was Nautilus
+  10.8 % — two ADCs at the top of a list the head filled with a support, a
+  toplaner and a support. Chips show the LLM's k-way probability and carry the
+  head's own number in the tooltip, because 31 % of 173 champions and 31 % of
+  five candidates are not the same claim. They are *ordered* by that
+  probability too — the chips are read left to right as a ranking, so the
+  answering model's order is the one on screen; the three candidates the LLM
+  never scored keep the head's order behind it.
+
+The reranker is not a checkpoint *file* but a folder (`projector.pt` is its entry
+point, `adapter/` its LoRA). Discovery offers a folder only when it can actually
+answer — it needs `adapter/` and a `report.json` whose `protocol.prompt_format`
+is `v4`, the format that carries the candidate list. That is what keeps a
+checkout with a dozen warmup and probe runs from offering all of them; the
+excluded ones are skipped with a reason (`server._llm_servable`).
+
 ## Choosing a model
 
 The header shows both slots (label, kind, val metric each) with a `role` +
@@ -87,6 +143,7 @@ The header shows both slots (label, kind, val metric each) with a `role` +
    |---|---|---|
    | `masking-` | role model | masked completion + the role board |
    | `nextpick-` | next-move model | next-move ranking |
+   | `llm-` | next-move model | a **folder**, not a file: the LLM reranker (above) |
    | `value-` | neither | outcome head only, not servable |
 
    Paths from before the rename (and uploads) fall back to the old family rules,
@@ -122,16 +179,27 @@ model):
 ```json
 {"picks": ["Ezreal", null, "…"], "bans": ["Ashe", "…"],
  "first_pick": 0, "fearless": ["Vi", "…"],
- "patch_id": 106, "k": 8}
+ "patch_id": 106, "k": 8, "lane": 3}
 ```
 
 `fearless` is the series pool in the same id space as `picks`/`bans`; it is
 optional and defaults to empty, and it is excluded from the answer on both
 picks and bans. `patch_id` is a row of the loaded checkpoint's patch table
-(omitted → its `default_patch_id`, 16.20 on every kept checkpoint).
+(omitted → its `default_patch_id`, 16.20 on every kept checkpoint). `lane` is
+only read when the loaded next-move model sets `accepts_lane` — the reranker
+does, the head does not, and the server forwards the field conditionally rather
+than letting a stale key reach a model that would ignore it.
 
 → `{model, state{move_idx, kind, side, phase, first_pick, warning, complete,
-n_unavailable}, patch_id, patch, suggestions[{idx, prob, name}], roles}`.
+n_unavailable}, patch_id, patch, suggestions[{idx, prob, name}], roles,
+rerank}`. With the reranker loaded, `rerank` carries `{k, chosen, chosen_idx,
+lane, lane_name, lane_source, lane_assumed, lanes_open, head_top1_agrees,
+candidates[{idx, name, head_prob, prob, logp, chosen}]}` and each suggestion in
+the shortlist gains `llm_prob` + `llm_pick`. `prob` is always the answering
+model's own number, so the head's probability and the LLM's are never mixed in
+one field — a suggestion outside the shortlist simply has no `llm_prob`.
+`rerank` is `null` for a head, and `{error: …}` if the LLM fails at request
+time, in which case the head's ordering still stands.
 `patch_id` is the row the model actually used: an unknown or out-of-range
 request comes back as `0` (UNK) with `patch: null`.
 `GET /api/draft?i=` also returns `unavailable` (the real fearless pool, in the

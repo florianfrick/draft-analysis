@@ -6,6 +6,9 @@ let lastSlot = null;                       // slot just filled: wins a role
 let resp = null;                           // last /api/suggest (role model)
 let respSig = null;                        // board `resp` was computed for
 let presp = null;                          // last /api/next-move (policy)
+// The lane the coming pick is for, when the user overrides the model's guess.
+// Only the reranker uses it: the head answers a lane-free "best next champion".
+let NEXT_LANE = null;
 let prespSig = null;                       // board `presp` was computed for
 let pickerCtx = null;                      // {type, slot? , team?}
 let debounceT = null, wtFilterT = null;
@@ -55,6 +58,12 @@ function modelText(m, what) {
   if (ev && ev.top5 != null) {
     txt += ` · ${ev.label || 'held-out top-5'} ${(100 * ev.top5).toFixed(1)}%`
          + ` (${ev.n_drafts} drafts · ${m.ensemble.members.length} models)`;
+  } else if (m.rerank_eval && m.rerank_eval.kway != null) {
+    // A reranker's number is a k-way accuracy over the head's shortlist, not a
+    // top-5 over 173 champions, so it is labelled as what it is.
+    txt += ` · k-way ${(100 * m.rerank_eval.kway).toFixed(1)}%`
+         + ` of the head's top-${m.rerank_eval.k}`
+         + (m.rerank_eval.n ? ` (${m.rerank_eval.n} states)` : '');
   } else {
     txt += m.val_top5 == null ? ' · val top-5 n/a'
       : ` · val top-5 ${(100 * m.val_top5).toFixed(1)}%`;
@@ -95,7 +104,13 @@ async function refreshCheckpoints() {
       if (c.roles && !c.roles.includes(role)) return;
       const o = document.createElement('option');
       o.value = c.path;
-      o.textContent = c.label;
+      // An llm-* checkpoint needs CUDA and the LLM image. Offer it, but say so
+      // instead of letting the click fail - the server already knows why.
+      const off = c.available === false;
+      o.textContent = off ? c.label + ' — needs the LLM image'
+                          : c.label;
+      o.disabled = off;
+      if (c.reason) o.title = c.reason;
       sel.appendChild(o);
     });
     const cur = d.current && d.current[role];
@@ -110,6 +125,14 @@ async function refreshCheckpoints() {
   };
   fill('ckpt-select', 'masked', null);
   fill('policy-select', 'policy', '— none (role board only) —');
+  // One line under the picker rather than a failure per click: the reranker is
+  // the better model but it is a 4.2B one, and a CPU-only host cannot run it.
+  const note = document.getElementById('policy-note');
+  if (note) {
+    const r = d.rerank || {};
+    note.textContent = r.available === false ? 'LLM rerank unavailable: ' + (r.reason || '') : '';
+    note.classList.toggle('hidden', r.available !== false);
+  }
 }
 
 async function switchModel(url, opts, role) {
@@ -763,6 +786,10 @@ function closePicker() {
 
 function requestSuggest() {
   clearTimeout(debounceT);
+  // The lane belongs to one board state: once the board moves, the pick being
+  // asked for is a different one and a lane carried over would be applied to
+  // the wrong slot.
+  NEXT_LANE = null;
   const sig = boardSig();
   debounceT = setTimeout(() => runSuggest(sig), 120);
 }
@@ -794,6 +821,9 @@ async function runSuggest(sig) {
       picks: picks, bans: allBansFlat(), first_pick: currentFirstPick(),
       fearless: fearlessPool(),
       patch_id: currentPatchId(),
+      // Ignored by a plain nextpick-* head; the reranker needs it because the
+      // prompt asks for a champion in a named lane.
+      lane: NEXT_LANE,
       k: 8
     })
     : null;
@@ -851,11 +881,13 @@ function renderNextMove() {
   if (!fresh) {
     document.getElementById('nm-turn').innerHTML = '<b>updating…</b>';
     document.getElementById('nm-meta').textContent = '';
+    document.getElementById('nm-lane').innerHTML = '';
     document.getElementById('nm-chips').innerHTML = '';
     document.getElementById('nm-warning').classList.add('hidden');
     return;
   }
   const st = presp.state;
+  const rr = presp.rerank;
   const sideName = st.side === 0 ? 'Blue' : 'Red';
   document.getElementById('nm-turn').innerHTML = st.complete
     ? '<b>Draft complete</b>'
@@ -865,25 +897,83 @@ function renderNextMove() {
       + (presp.patch ? ` · patch ${presp.patch}` : '')
       + (st.n_unavailable ? ` · ${st.n_unavailable} fearless` : '');
   const warn = document.getElementById('nm-warning');
-  if (st.warning) {
-    warn.textContent = 'board warning: ' + st.warning;
+  // A failed rerank is not a failed answer: the head's list still stands, so
+  // it is reported next to the chips rather than replacing them.
+  const msgs = [];
+  if (st.warning) msgs.push('board warning: ' + st.warning);
+  if (rr && rr.error) msgs.push('rerank failed, showing the head: ' + rr.error);
+  if (msgs.length) {
+    warn.textContent = msgs.join(' · ');
     warn.classList.remove('hidden');
   } else {
     warn.classList.add('hidden');
   }
   const chips = document.getElementById('nm-chips');
   chips.innerHTML = '';
+  renderLanePick(rr, st);
   if (!st.complete) {
     (presp.suggestions || []).forEach(c => {
       const b = document.createElement('button');
-      b.className = 'nm-chip';
+      // `llm_pick` marks the reranker's choice. The number shown is the LLM's
+      // k-way probability when it scored the list - the head's own probability
+      // stays in the tooltip, because 31 % of 173 champions and 31 % of five
+      // candidates are not the same claim.
+      b.className = 'nm-chip' + (c.llm_pick ? ' llm-pick' : '');
+      const shown = c.llm_prob != null ? c.llm_prob : c.prob;
       b.innerHTML = imgTag(BY_IDX[c.idx])
         + `<span class="nm">${c.name}</span>`
-        + `<span class="p">${(100 * c.prob).toFixed(1)}%</span>`;
-      b.title = `${sideName} ${st.kind}: ${c.name}`;
+        + `<span class="p">${(100 * shown).toFixed(1)}%</span>`
+        + (c.llm_pick ? '<span class="nm-llm">LLM</span>' : '');
+      b.title = c.llm_prob != null
+        ? `${sideName} ${st.kind}: ${c.name} — head ${(100 * c.prob).toFixed(1)}%, LLM ${(100 * c.llm_prob).toFixed(1)}%`
+        : `${sideName} ${st.kind}: ${c.name}`;
       b.addEventListener('click', () => applyMove(st.kind, st.side, c.idx));
       chips.appendChild(b);
     });
+  }
+}
+
+// The lane of the coming pick is a decision, not a fact, until four lanes are
+// filled. When the reranker says it had to assume one, offer the open lanes so
+// the assumption can be corrected - the prompt literally says "for X lane".
+function renderLanePick(rr, st) {
+  const box = document.getElementById('nm-lane');
+  box.innerHTML = '';
+  if (!rr || rr.error || st.complete || st.kind !== 'pick') return;
+  const open = rr.lanes_open || [];
+  if (!open.length) return;
+  const names = ['Top', 'Jungle', 'Mid', 'Bot', 'Support'];
+  if (open.length === 1) {
+    box.textContent = `· lane ${names[open[0]]}`;
+    return;
+  }
+  const lab = document.createElement('span');
+  lab.textContent = '· lane ';
+  const sel = document.createElement('select');
+  sel.className = 'nm-lane-sel';
+  sel.title = 'the lane this pick is for — the model is asked for a champion in '
+    + 'that lane, and only the last pick of a side is forced';
+  open.forEach(r => {
+    const o = document.createElement('option');
+    o.value = String(r);
+    o.textContent = names[r];
+    sel.appendChild(o);
+  });
+  sel.value = String(rr.lane);
+  sel.addEventListener('change', () => {
+    NEXT_LANE = parseInt(sel.value, 10);
+    const sig = boardSig();
+    renderNextMove();               // blank the stale answer while it recomputes
+    runSuggest(sig);
+  });
+  box.appendChild(lab);
+  box.appendChild(sel);
+  if (rr.lane_assumed) {
+    const hint = document.createElement('span');
+    hint.className = 'nm-assumed';
+    hint.textContent = ' assumed';
+    hint.title = 'the board does not force this lane yet';
+    box.appendChild(hint);
   }
 }
 
@@ -893,6 +983,7 @@ function renderNextMoveError(msg) {
   box.classList.remove('hidden');
   document.getElementById('nm-turn').innerHTML = '<b>no suggestion</b>';
   document.getElementById('nm-meta').textContent = '';
+  document.getElementById('nm-lane').innerHTML = '';
   document.getElementById('nm-chips').innerHTML = '';
   const warn = document.getElementById('nm-warning');
   warn.textContent = msg;
@@ -911,9 +1002,11 @@ let EXPLAIN_SIG = null;    // board the explanation was fetched for
 
 function boardSig() {
   // The patch is part of the answer, not of the board: switching it must
-  // invalidate an in-flight reply exactly like a pick does.
+  // invalidate an in-flight reply exactly like a pick does. The lane is too -
+  // the reranker's answer is "the best champion *for this lane*".
   return JSON.stringify([picks, bans.blue, bans.red, currentFirstPick(),
-                         SERIES ? fearlessPool() : [], currentPatchId()]);
+                         SERIES ? fearlessPool() : [], currentPatchId(),
+                         NEXT_LANE]);
 }
 
 function hideExplain() {
@@ -928,6 +1021,11 @@ function explainBody(force) {
     bans: allBansFlat(),
     first_pick: currentFirstPick(),
     patch_id: currentPatchId(),   // the same row the next-move model used
+    // The panel's list and the prose must be the same list: same fearless
+    // pool, same lane. Without the lane the reranker would assume one and
+    // explain a champion the panel did not offer.
+    fearless: fearlessPool(),
+    lane: NEXT_LANE,
     k: 8,
     k_games: 5,
     force: !!force

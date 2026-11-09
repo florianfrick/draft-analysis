@@ -155,6 +155,47 @@ class DraftLLM(nn.Module):
         return torch.cat([attn[:, :p], attn.new_ones((B, self.n_soft)),
                           attn[:, p + 1:]], dim=1)
 
+    def _answer_logp(self, enc_batch, prompt, keep=None):
+        """-> [B, K, V] log-probabilities at the scored answer positions.
+
+        The one place the trunk is run, so training, eval and the reranker's
+        candidate scoring cannot drift apart. `keep` is applied to the first
+        answer position only (see `forward`).
+        """
+        soft = self.soft_tokens(enc_batch)
+        E = self.inputs_embeds(prompt, soft)
+        hidden = self.trunk(inputs_embeds=E,
+                            attention_mask=self.spliced_mask(prompt),
+                            use_cache=False).last_hidden_state
+
+        pos = splice_positions(prompt, self.n_soft)   # [B,K] spliced positions
+        sel = hidden.gather(
+            1, pos.clamp(min=0).unsqueeze(-1).expand(-1, -1, hidden.shape[-1]))
+        logits = self.llm.get_output_embeddings()(sel)   # [B,K,V]
+        if keep is not None:
+            logits = logits.clone()
+            logits[:, 0] = logits[:, 0].masked_fill(~keep, float("-inf"))
+        return logits.float().log_softmax(dim=-1)
+
+    @torch.no_grad()
+    def answer_scores(self, enc_batch, prompt, keep=None):
+        """Per-row score of the answer the prompt carries.
+
+        Serving needs the numbers `forward` throws away: the reranker builds one
+        row per candidate, so `first_logp` [B] is that candidate's log-prob at
+        the decision point (after `keep`) and `total_logp` [B] its whole name.
+        Picking the argmax of `first_logp` over the k rows is exactly what
+        `ft_top1` measured, which is why the served number and the reported one
+        are the same quantity.
+        """
+        logp = self._answer_logp(enc_batch, prompt, keep)
+        target = prompt["ans_ids"]
+        valid = target >= 0
+        tok_ll = logp.gather(-1, target.clamp(min=0).unsqueeze(-1)).squeeze(-1)
+        return {"first_logp": tok_ll[:, 0],
+                "total_logp": (tok_ll * valid).sum(dim=1),
+                "n_tok": valid.sum(dim=1)}
+
     def forward(self, enc_batch, prompt, compute_metrics=True, keep=None):
         """`keep` [B, V] bool is the reranker's decode constraint.
 
@@ -170,21 +211,7 @@ class DraftLLM(nn.Module):
         intact and counts those rows as wrong - the honest reading, since a
         decoder constrained to a list that lacks the answer cannot be right.
         """
-        soft = self.soft_tokens(enc_batch)
-        E = self.inputs_embeds(prompt, soft)
-        hidden = self.trunk(inputs_embeds=E,
-                            attention_mask=self.spliced_mask(prompt),
-                            use_cache=False).last_hidden_state
-
-        pos = splice_positions(prompt, self.n_soft)   # [B,K] spliced positions
-        sel = hidden.gather(
-            1, pos.clamp(min=0).unsqueeze(-1).expand(-1, -1, hidden.shape[-1]))
-        logits = self.llm.get_output_embeddings()(sel)   # [B,K,V]
-        if keep is not None:
-            logits = logits.clone()
-            logits[:, 0] = logits[:, 0].masked_fill(~keep, float("-inf"))
-        logp = logits.float().log_softmax(dim=-1)
-
+        logp = self._answer_logp(enc_batch, prompt, keep)
         target = prompt["ans_ids"]
         valid = target >= 0
         tok_ll = logp.gather(-1, target.clamp(min=0).unsqueeze(-1)).squeeze(-1)

@@ -157,6 +157,15 @@ MASKED_DEFAULT = PRO_CKPT_DIR / "masking-proonly-randomvalsplit-through-wlds-ig-
 # The two claims are on different sets (val vs 439 held-out rows) and are not
 # comparable.
 POLICY_DEFAULT = PRO_CKPT_DIR / "nextpick-bans-aware-through-wlds-ig-tes" / "best.pt"
+# The next-move default is the LLM reranker whenever this machine can serve it:
+# the head's shortlist chosen by the fine-tuned Qwen3.5-4B, 35.31 % k-way against
+# the head's 19.14 % top-1 on the 478 games held out from both (ceiling 51.85 %,
+# the head's own recall@5). It is a different resource class - 4.2B in 4-bit,
+# ~4.5 GB VRAM and a second or so per request, against a 2.49 M-parameter head -
+# so the default is conditional, not absolute: `main()` uses this when
+# rerank.unavailable_reason() is None and falls back to the head with the reason
+# printed when it is not. Nothing here is a promise that it is loaded.
+RERANK_DEFAULT = PRO_CKPT_DIR / "llm-lora-rerank5"
 # Still selectable in the dropdown and still pinned by the ensemble tests: a
 # `.json` manifest is a model, and `read_ensemble` + logit-averaging is the
 # contract the +1.33 pp was measured under. Do not "simplify" it to one .pt.
@@ -182,6 +191,8 @@ from solo_queue.model.pretraining.base_model import (SiameseBase,  # noqa: E402
                                            attr_matrix_for_config)
 from solo_queue.model.policy import infer  # noqa: E402  (next-move policy)
 import llm  # noqa: E402  (frontend/llm.py: retrieval + grounded explanation)
+from roles import assign_roles  # noqa: E402  (frontend/roles.py: lane solver)
+import rerank as rerank_mod  # noqa: E402  (frontend/rerank.py: LLM reranker)
 
 ROLE_ROWS = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"]
 N_SLOTS = 10
@@ -583,65 +594,13 @@ def peek_kind(payload):
 
 
 def _assign_roles(role_dists, filled, newest=None):
-    """One-to-one slot -> role assignment per team.
+    """Alias for `roles.assign_roles` - moved so the reranker can share it.
 
-    The role head is per-slot, so two picks on one team can argmax the same
-    role. A team's five roles are distinct, so collisions are resolved with
-    an exhaustive search over injective assignments (<=5 picks -> <=120
-    leaves).
-
-    `newest` (the slot just filled) is pinned to its own argmax first and
-    the rest are then optimised jointly. That ordering matters: a pure
-    sum-of-probabilities optimum happily leaves an older pick in a
-    contested role - pick Vi (JUNGLE .97) while Pantheon (JUNGLE .60, TOP
-    .30) is already there and the optimum keeps Pantheon in JUNGLE and
-    pushes Vi to TOP, so the board looks like it ignored the click. Pinning
-    the newest pick is lexicographic: the pick the user just made keeps the
-    role the model likes best for it, and the older ones move aside.
-
-    Returns a length-10 list of role ids (None for empty slots).
+    `server` imports the reranker, so the reranker cannot import `server` back
+    to reach this; it lives in its own module now. The name is kept because the
+    README and the tests refer to it.
     """
-    out = [None] * len(role_dists)
-    for team in (0, 1):
-        slots = [s for s in range(team * 5, team * 5 + 5)
-                 if filled[s] and role_dists[s]]
-        if not slots:
-            continue
-        if newest in slots:
-            first, rest = newest, [s for s in slots if s != newest]
-        else:
-            first, rest = None, slots
-        used = [False] * 5
-        if first is not None:
-            for cand in role_dists[first]:        # already prob-descending
-                r = cand["role"]
-                if 0 <= r < 5 and not used[r]:
-                    out[first] = r
-                    used[r] = True
-                    break
-        cur = {}
-        best = {"score": -1.0, "assign": {}}
-
-        def rec(i, score):
-            if i == len(rest):
-                if score > best["score"]:
-                    best["score"] = score
-                    best["assign"] = dict(cur)
-                return
-            for cand in role_dists[rest[i]]:
-                r = cand["role"]
-                if not (0 <= r < 5) or used[r]:
-                    continue
-                used[r] = True
-                cur[rest[i]] = r
-                rec(i + 1, score + cand["prob"])
-                used[r] = False
-                del cur[rest[i]]
-
-        rec(0, 0.0)
-        for s, r in best["assign"].items():
-            out[s] = r
-    return out
+    return assign_roles(role_dists, filled, newest=newest)
 
 
 class Predictor:
@@ -876,6 +835,14 @@ def model_info(pred):
     if ens:
         info["ensemble"] = {"members": ens.get("members", []),
                             "eval": ens.get("eval") or {}}
+    # A reranker's stored val number is a k-way accuracy over a 5-candidate
+    # list, so `val_top5` is None for it by construction (see rerank.py). It
+    # publishes its own block instead of borrowing a label that would read as
+    # 93 % top-5.
+    ev = getattr(pred, "rerank_eval", None)
+    if ev:
+        info["rerank_eval"] = ev
+        info["family"] = "llm-rerank"
     return info
 
 
@@ -892,6 +859,14 @@ def resolve_ckpt_path(spec, confine=True):
             p.relative_to(ROOT.resolve())
         except ValueError:
             raise ValueError("path outside project: %s" % spec)
+    if p.is_dir():
+        # An llm-* checkpoint is a folder and projector.pt is its entry point,
+        # so `--policy-ckpt .../llm-lora-rerank5` is a valid way to name it.
+        proj = p / "projector.pt"
+        if proj.is_file():
+            return proj
+        raise ValueError("%s is a directory with no projector.pt in it"
+                         % p.name)
     if p.suffix.lower() not in (".pt", ".json"):
         raise ValueError("expected a .pt checkpoint or an ensemble .json, "
                          "got %s" % p.name)
@@ -939,6 +914,7 @@ def _ckpt_roles(path, kind):
 
       masking-*    masked champion + role completion -> the role board
       nextpick-*   next-move ranking                -> the next-move panel
+      llm-*        head shortlist + LLM rerank       -> the next-move panel
       value-*      outcome head only                -> neither (not servable)
 
     Paths outside that layout (uploads, checkpoints from before the rename)
@@ -955,6 +931,11 @@ def _ckpt_roles(path, kind):
             return ["masked"]
         if name.startswith("nextpick-"):
             return ["policy"]
+        if name.startswith("llm-"):
+            # A reranker *is* a next-move model: it answers the same question,
+            # it just answers it with a 4B model choosing from the head's
+            # shortlist instead of the head's argmax.
+            return ["policy"]
         if name.startswith("value-"):
             return []
     # legacy families: still reachable via an upload of an old checkpoint
@@ -967,6 +948,36 @@ def _ckpt_roles(path, kind):
         if m:
             return ["masked"] if m.group(1) == "m" else ["policy"]
     return ["masked", "policy"]
+
+
+def _llm_servable(folder):
+    """Can this `llm-*` folder answer a next move? -> (bool, why not).
+
+    It needs an adapter (a projector alone is a warmup, not a model) and a v4
+    projector, because v4 is the only format that carries the candidate list the
+    reranker chooses from. Both facts are cheap: `adapter/` is a directory and
+    `report.json` is the small protocol dump the trainer already writes.
+    `torch.load`ing `projector.pt` for the same two answers would read ~11 MB
+    per folder at startup, which is the cost `list_checkpoints` exists to avoid.
+
+    This is what keeps the dropdown to real models: a checkout that has trained
+    a dozen warmup and probe runs should not offer all of them as next-move
+    models, and every one of them would fail on load.
+    """
+    if not (folder / "adapter").is_dir():
+        return False, "no adapter/ - a projector alone cannot answer"
+    rep = folder / "report.json"
+    if not rep.is_file():
+        return False, "no report.json - its prompt format is unknown"
+    try:
+        fmt = (json.loads(rep.read_text("utf-8")).get("protocol")
+               or {}).get("prompt_format")
+    except (OSError, ValueError):
+        return False, "report.json is unreadable"
+    if fmt != "v4":
+        return False, ("trained on prompt_format=%s; serving needs v4 (the "
+                       "candidate list)" % fmt)
+    return True, None
 
 
 def list_checkpoints():
@@ -983,6 +994,22 @@ def list_checkpoints():
             if pp.name == "latest.pt":
                 continue
             rel = _rel(hit)
+            if pp.name == "projector.pt":
+                # An llm-* checkpoint: the folder is the model, projector.pt is
+                # its entry point. Only folders that can actually answer are
+                # offered; see _llm_servable.
+                ok, why = _llm_servable(pp.parent)
+                if not ok:
+                    continue
+                reason = rerank_mod.unavailable_reason()
+                out.append({"path": rel, "kind": kind,
+                            "roles": _ckpt_roles(hit, kind),
+                            "label": "%s/%s (LLM rerank)"
+                                     % (pp.parent.name, pp.name),
+                            "family": "llm-rerank",
+                            "available": reason is None,
+                            "reason": reason})
+                continue
             label = ("%s/%s" % (pp.parent.name, pp.name)
                      if kind == "checkpoints"
                      else "[%s] %s/%s" % (kind, pp.parent.name, pp.name))
@@ -1013,6 +1040,19 @@ def make_predictor(path, device=None):
     cached = _MODEL_CACHE.get(key)
     if cached is not None:
         return cached
+    # An `llm-*` checkpoint is a folder whose projector.pt is the entry point.
+    # It is dispatched before the payload peek because a projector blob has no
+    # `model` key and would otherwise be misread as a pretraining checkpoint.
+    if Path(path).name == "projector.pt":
+        reason = rerank_mod.unavailable_reason()
+        if reason:
+            raise RuntimeError(
+                "%s is an LLM reranker and cannot be loaded here: %s"
+                % (Path(path).parent.name, reason))
+        pred = rerank_mod.RerankPredictor(Path(path).parent, device=device,
+                                          label=Path(path).parent.name)
+        _MODEL_CACHE[key] = pred
+        return pred
     if Path(path).suffix.lower() == ".json":
         members, ev, note = read_ensemble(path)
         pred = infer.PolicyPredictor(members, device=device, label=path)
@@ -1215,6 +1255,11 @@ class Handler(BaseHTTPRequestHandler):
                 "current": {slot: (model_info(APP[slot])["path"]
                                    if APP.get(slot) else None)
                             for slot in ("masked", "policy")},
+                # Why the llm-* entries may be unloadable here. Sent so the
+                # dropdown can say it once instead of the user discovering it by
+                # clicking Load and reading a traceback.
+                "rerank": {"available": rerank_mod.unavailable_reason() is None,
+                           "reason": rerank_mod.unavailable_reason()},
             })
             return
         if path.startswith("/api/"):
@@ -1296,15 +1341,38 @@ class Handler(BaseHTTPRequestHandler):
                 out[team][role] = lst
         self._send(200, out)
 
+    def _ask_next_move(self, pred, payload, picks_idx, bans_idx, first_pick,
+                       k=8, unavail_idx=None):
+        """One call into the loaded next-move model, lane included when asked.
+
+        Only the reranker asks which lane the coming pick is for - its prompt
+        reads "the best Red Side pick for *Top* lane". The head answers a
+        lane-free "best next champion" and raises on the extra keyword, so the
+        field is gated on the capability rather than on the class name.
+
+        `patch_id` defaults to the model's own default rather than to UNK: the
+        patch is a string in the prompt, and "Patch: None" is text no training
+        example ever contained.
+        """
+        pid = payload.get("patch_id")
+        pid = pred.default_patch_id() if pid is None else pid
+        extra = {}
+        if getattr(pred, "accepts_lane", False):
+            lane = payload.get("lane")
+            extra["lane"] = None if lane is None else int(lane)
+        return pred.next_move(picks_idx, bans_idx, first_pick=first_pick, k=k,
+                              unavailable=unavail_idx, patch_id=pid, **extra)
+
     def _handle_next_move(self):
-        """POST {picks, bans, first_pick, fearless, patch_id} -> next move.
+        """POST {picks, bans, first_pick, fearless, patch_id, lane} -> next move.
 
         `picks` is the UI's 10-slot pick-order board (riot ids or null),
         `bans` the flat ban list, `fearless` the champions picked in
-        earlier games of the same series, and `patch_id` a row of the
+        earlier games of the same series, `patch_id` a row of the
         loaded checkpoint's patch vocabulary (omitted -> the default
-        patch, usually 16.20). The board is mapped to indices here and
-        handed to infer.PolicyPredictor; every champion index it returns is
+        patch, usually 16.20) and `lane` the lane the coming pick is for
+        (read by the LLM reranker only). The board is mapped to indices here
+        and handed to infer.PolicyPredictor; every champion index it returns is
         translated back to a name so the client never needs the mapping.
 
         One answer per board: the ranked list for the side on the clock.
@@ -1327,11 +1395,10 @@ class Handler(BaseHTTPRequestHandler):
             picks_idx = [None if p is None else mapping[p] for p in picks]
             bans_idx = [mapping[b] for b in bans]
             unavail_idx = [mapping[f] for f in fearless]
-            pid = payload.get("patch_id")
-            pid = pred.default_patch_id() if pid is None else pid
-            res = pred.next_move(picks_idx, bans_idx, first_pick=first_pick,
-                                 k=int(payload.get("k", 8)),
-                                 unavailable=unavail_idx, patch_id=pid)
+            res = self._ask_next_move(pred, payload, picks_idx, bans_idx,
+                                      first_pick,
+                                      k=int(payload.get("k", 8)),
+                                      unavail_idx=unavail_idx)
         except (ValueError, KeyError, TypeError, IndexError,
                 json.JSONDecodeError) as exc:
             self._send(400, {"error": str(exc)})
@@ -1347,9 +1414,18 @@ class Handler(BaseHTTPRequestHandler):
             "patch_id": res["patch_id"],
             "patch": pred.patch_key_for(res["patch_id"]),
             "suggestions": [{"idx": c["idx"], "prob": c["prob"],
-                             "name": names[c["idx"]]}
+                             "name": names[c["idx"]],
+                             # Present only when the reranker chose from this
+                             # list: the chip then shows the LLM's k-way
+                             # probability and which one it picked.
+                             **({"llm_prob": c["llm_prob"],
+                                 "llm_pick": c["llm_pick"]}
+                                if "llm_prob" in c else {})}
                             for c in res["suggestions"]],
             "roles": res["roles"],
+            # None for a head-only model, and `{"error": ...}` when the rerank
+            # failed while the head's answer still stands.
+            "rerank": res.get("rerank"),
         })
 
     def _handle_explain(self):
@@ -1376,10 +1452,13 @@ class Handler(BaseHTTPRequestHandler):
             first_pick = 1 if int(payload.get("first_pick", 0)) else 0
             picks_idx = [None if p is None else mapping[p] for p in picks]
             bans_idx = [mapping[b] for b in bans]
-            pid = payload.get("patch_id")
-            pid = pred.default_patch_id() if pid is None else pid
-            res = pred.next_move(picks_idx, bans_idx, first_pick=first_pick,
-                                 k=int(payload.get("k", 5)), patch_id=pid)
+            unavail_idx = [mapping[f] for f in (payload.get("fearless") or [])]
+            # Same call as /api/next-move, so the prose describes the list the
+            # panel is showing - including the reranker's lane, which the panel
+            # sends along.
+            res = self._ask_next_move(pred, payload, picks_idx, bans_idx,
+                                      first_pick, k=int(payload.get("k", 5)),
+                                      unavail_idx=unavail_idx)
             index = pro_index()
         except (ValueError, KeyError, TypeError, IndexError,
                 json.JSONDecodeError) as exc:
@@ -1405,7 +1484,9 @@ class Handler(BaseHTTPRequestHandler):
             "red": [names[i] for i in picks_idx[5:] if i is not None],
             "champ_ids": [i for i in picks_idx if i is not None] + bans_idx,
         }
-        suggestions = [(names[c["idx"]], float(c["prob"]))
+        # The number the user is looking at on the chip: the answering model's
+        # own probability, which is the LLM's k-way one when it scored the list.
+        suggestions = [(names[c["idx"]], float(c.get("llm_prob", c["prob"])))
                        for c in res["suggestions"]]
         try:
             explained = llm.explain(
@@ -1420,8 +1501,17 @@ class Handler(BaseHTTPRequestHandler):
             "state": {k: res[k] for k in ("move_idx", "kind", "side", "phase",
                                           "first_pick", "warning", "complete")},
             "suggestions": [{"idx": c["idx"], "prob": c["prob"],
-                             "name": names[c["idx"]]}
+                             "name": names[c["idx"]],
+                             # Present only when the reranker chose from this
+                             # list: the chip then shows the LLM's k-way
+                             # probability and which one it picked.
+                             **({"llm_prob": c["llm_prob"],
+                                 "llm_pick": c["llm_pick"]}
+                                if "llm_prob" in c else {})}
                             for c in res["suggestions"]],
+            # None for a head-only model, and `{"error": ...}` when the rerank
+            # failed while the head's answer still stands.
+            "rerank": res.get("rerank"),
             "board": board,
         }
         out.update(explained)
@@ -1565,12 +1655,23 @@ def main():
         print("best pretraining ckpt: %s (val top-5 %s)" % (masked_ckpt, val))
     # Slot 2 - the next-move model (policy). Optional: the role board works
     # without it, and --no-policy runs the frontend masked-only.
+    #
+    # The default is the LLM reranker when this machine can serve it, and the
+    # head otherwise. That is a capability decision, not a preference: the
+    # reranker needs CUDA and the LLM image, and defaulting to it on a CPU-only
+    # host would make the next-move panel fail on the first click.
     policy_ckpt = None
     if not args.no_policy:
         if args.policy_ckpt:
             policy_ckpt = resolve_ckpt_path(args.policy_ckpt, confine=False)
-        elif POLICY_DEFAULT.is_file():
-            policy_ckpt = POLICY_DEFAULT
+        else:
+            reason = rerank_mod.unavailable_reason()
+            if RERANK_DEFAULT.is_dir() and reason is None:
+                policy_ckpt = RERANK_DEFAULT / "projector.pt"
+            elif POLICY_DEFAULT.is_file():
+                policy_ckpt = POLICY_DEFAULT
+                if RERANK_DEFAULT.is_dir():
+                    print("next-move:    LLM reranker not used (%s)" % reason)
 
     masked = load_predictor(masked_ckpt, device=args.device, role="masked")
     print("role model:   %s (%s)" % (masked_ckpt, masked.kind))

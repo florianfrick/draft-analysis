@@ -321,6 +321,18 @@ footer { padding: 8px 18px; border-top: 1px solid var(--line);
 .nm-chip:hover { border-color: var(--acc); }
 .nm-chip .ic { width: 30px; height: 30px; }
 .nm-chip .p { color: var(--muted); font-variant-numeric: tabular-nums; }
+/* The reranker's choice: the chip is the same button, marked so the head's
+   ranking is still readable underneath it. */
+.nm-chip.llm-pick { border-color: var(--acc); background: #2a3446; }
+.nm-llm {
+  font-size: 10px; letter-spacing: .04em; text-transform: uppercase;
+  padding: 1px 5px; border-radius: 4px; background: var(--acc); color: #11161f;
+}
+.nm-lane-sel {
+  background: #232a36; color: inherit; border: 1px solid var(--line);
+  border-radius: 6px; font-size: 12px; padding: 1px 4px;
+}
+.nm-assumed { color: var(--muted); font-size: 11px; }
 
 /* a next-move policy is role-free: the role board does not apply */
 body.no-role-model .role-row { display: none; }

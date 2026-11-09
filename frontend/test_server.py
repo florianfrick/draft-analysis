@@ -732,6 +732,92 @@ def test_next_move_reports_a_pick_move(app, httpd, policy_ckpt):
     assert "bans" not in d
 
 
+class _StubReranker:
+    """A reranker as the panel sees it: the head's list plus a choice.
+
+    Only the shape matters here - the real one needs CUDA and Qwen, and what
+    this file can test is whether the endpoint carries its two extra fields.
+    """
+
+    kind = "policy"
+    accepts_lane = True
+    val_top5 = None
+    epoch = 1
+    stage = None
+    metric = "LLM k-way"
+    rerank_eval = {"k": 5, "kway": 0.3531, "exact": 0.3465, "n": 439}
+    ckpt_path = str(S.PRO_CKPT_DIR / "llm-lora-rerank5" / "projector.pt")
+
+    def __init__(self):
+        self.lanes = []
+
+    def default_patch_id(self):
+        return 106
+
+    def patch_key_for(self, pid):
+        return "16.20"
+
+    def next_move(self, picks, bans, first_pick=0, k=8, unavailable=None,
+                  patch_id=None, lane=None):
+        self.lanes.append(lane)
+        return {
+            "move_idx": 6, "kind": "pick", "side": 0, "phase": "picks1",
+            "first_pick": first_pick, "warning": None, "complete": False,
+            "n_unavailable": 0, "patch_id": patch_id, "roles": [[]] * 10,
+            "suggestions": [
+                {"idx": 10, "prob": 0.42, "name": "A", "llm_prob": 0.55,
+                 "llm_pick": False},
+                {"idx": 11, "prob": 0.30, "name": "B", "llm_prob": 0.45,
+                 "llm_pick": True},
+                {"idx": 12, "prob": 0.10, "name": "C"},
+            ],
+            "rerank": {"k": 2, "chosen": "B", "chosen_idx": 11, "lane": lane,
+                       "lane_name": "Bot", "lane_source": "user",
+                       "lane_assumed": False, "lanes_open": [3, 4],
+                       "head_top1_agrees": False, "candidates": []},
+        }
+
+
+def test_next_move_carries_the_rerank_block_and_the_lane(app, httpd):
+    """The panel's contract: lane in, `rerank` + `llm_prob` out.
+
+    Both halves are easy to lose in a refactor - `lane` is the only field the
+    reranker reads that the head does not, and `rerank` is the only place the
+    UI learns which candidate the LLM chose. Without them the panel silently
+    renders the head's ranking with no LLM badge and no lane selector, which is
+    exactly the state this test was written after finding.
+    """
+    stub = _StubReranker()
+    app["policy"] = stub
+    body = json.dumps({"picks": [None] * 10,
+                       "bans": [11, 12, 13, 14, 15, 16],
+                       "first_pick": 0, "lane": 3, "k": 5})
+    status, d = _post(httpd, "/api/next-move", body)
+    assert status == 200, d
+    assert stub.lanes == [3], "the lane the client chose must reach the model"
+    assert d["rerank"]["lane"] == 3
+    assert d["rerank"]["chosen"] == "B"
+    assert d["rerank"]["lane_source"] == "user"
+    # the header reports the k-way number, never a borrowed "val top-5"
+    assert d["model"]["family"] == "llm-rerank"
+    assert d["model"]["val_top5"] is None
+    chips = {c["idx"]: c for c in d["suggestions"]}
+    assert chips[11]["llm_pick"] is True
+    assert chips[10]["llm_prob"] == 0.55
+    assert "llm_prob" not in chips[12], "outside the shortlist: head's number"
+
+
+def test_a_head_never_receives_the_lane(app, httpd, policy_ckpt):
+    """The panel sends `lane` unconditionally; a head raises on the keyword."""
+    S.load_predictor(Path(policy_ckpt))
+    body = json.dumps({"picks": [None] * 10,
+                       "bans": [11, 12, 13, 14, 15, 16],
+                       "first_pick": 0, "lane": 3})
+    status, d = _post(httpd, "/api/next-move", body)
+    assert status == 200, d
+    assert d["rerank"] is None
+
+
 # ---------------------------------------------------------------- patch id
 def test_champions_publishes_the_checkpoint_patch_table(app, httpd,
                                                         policy_ckpt):

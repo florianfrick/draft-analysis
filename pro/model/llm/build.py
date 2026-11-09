@@ -64,7 +64,7 @@ def freeze(llm):
 
 
 def attach_lora(llm, r=16, alpha=32, dropout=0.05, quantized=True,
-                adapter_path=""):
+                adapter_path="", trainable=True):
     """QLoRA adapters on the attention and MLP projections.
 
     `prepare_model_for_kbit_training` casts the norms to fp32, turns the cache
@@ -76,17 +76,24 @@ def attach_lora(llm, r=16, alpha=32, dropout=0.05, quantized=True,
     how a finished run is continued for another cycle without re-deriving it.
     The r/alpha/dropout arguments are then ignored: the shapes come from the
     saved adapter, and a mismatch would be a different model, not a resume.
+
+    `trainable=False` is the serving path: no gradient checkpointing (which
+    costs a second forward per layer for nothing when nothing is backwarded) and
+    `is_trainable=False` on the PeftModel, so no backward hooks are installed.
+    Loading an adapter as trainable to run inference with is not wrong, just
+    measurably slower and more memory for no gain.
     """
     from peft import (LoraConfig, PeftModel, get_peft_model,
                       prepare_model_for_kbit_training)
     if quantized:
         llm = prepare_model_for_kbit_training(
-            llm, use_gradient_checkpointing=True,
+            llm, use_gradient_checkpointing=trainable,
             gradient_checkpointing_kwargs={"use_reentrant": False})
     if adapter_path:
         model = PeftModel.from_pretrained(llm, adapter_path,
-                                          is_trainable=True)
-        model.enable_input_require_grads()
+                                          is_trainable=trainable)
+        if trainable:
+            model.enable_input_require_grads()
         return model
     cfg = LoraConfig(
         r=r, lora_alpha=alpha, lora_dropout=dropout, bias="none",
