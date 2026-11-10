@@ -106,6 +106,37 @@ the *facts*; the soft tokens carry the encoder's *judgement*, which is the part
 text cannot express. `--context soft` restores the pure-channel variant, so the
 question "does the channel work on its own" stays answerable.
 
+**What the soft block actually contributes (measured, `_probe_soft.py`).** The
+"judgement" half of that sentence is mostly not true, and it is worth knowing
+before building on it. Six arms on 2,400 identical rows of the shared val, same
+head, same shortlist, same first-token mask, paired McNemar against `normal`:
+
+| arm | what it changes | ft_top1 | delta | discordant | p |
+|---|---|---|---|---|---|
+| normal | - | 31.04 % | - | - | - |
+| perm | order of the ten | 31.29 % | +0.25 pp | 25/31 | 0.50 |
+| mean | one vector, ten times | 31.08 % | +0.04 pp | 67/68 | 1.00 |
+| shuffle | another board's tokens | 30.46 % | −0.58 pp | 54/40 | 0.18 |
+| pad | the projector's PAD embedding | 27.54 % | **−3.50 pp** | 167/83 | <0.001 |
+| zero | zeros (out of distribution) | 16.54 % | **−14.50 pp** | 465/117 | <0.001 |
+
+So: the block is **necessary but not informative**. Removing it (`pad`) costs
+3.5 pp, while replacing it with a *different board's* tokens costs 0.6 pp that
+is not distinguishable from noise, and collapsing the ten vectors to their own
+mean costs nothing at all. The block is read as a bag carrying a coarse
+"a real draft is in progress here" signal; the champions, lanes, bans and move
+index all reach the model through the **text**. `zero` is not evidence about
+content - a row of zeros is out of distribution for the trunk - which is why
+`pad` is the arm that answers the question.
+
+Three consequences. The ten-vector prefix can be **one** vector for free, which
+removes the slot-index alignment question entirely (needs the projector
+retrained, one warmup stage). Prompt annotation of the tokens cannot help:
+order is worth 0.25 pp. And anything that has to make the model *reason* about
+the board - user language included - is working against a channel that
+demonstrably under-uses the board's content, so it needs an explicit weight
+rather than a logit shift.
+
 **2. Fearless bans are structurally invisible to the soft prompt.** The encoder
 never receives `unavailable_mask` - it is a policy-stage input, applied as a
 logit mask (`solo_queue/model/policy/model.py:_apply_legality`). So the ten slot vectors
@@ -665,6 +696,7 @@ reranker should be an optional path rather than a replacement for the head.
 | `_name_stats.py` | tokenizer-only: the 173 names' token-length histogram and first-token collisions |
 | `_show_prompt.py` | prints a real prompt with a fearless pool, and how many rows have one |
 | `_show_example.py` | one train row end to end: tensors, prompt, ids, soft tokens, top-k, greedy generation |
+| `_probe_soft.py` | what the soft block contributes: perm / mean / shuffle / pad / zero, paired McNemar |
 | `audit_leak.py` | split overlap + target-in-board check on the real corpus |
 | `audit_label.py` | corrupt the target; does the prediction follow? |
 | `audit_positions.py` | which position actually predicts, and text vs soft split |
@@ -702,9 +734,10 @@ implemented; this is the honest map of what stands between here and there, and
 what the numbers in this file say about each step.
 
 **The conversational surface does not need a new model.** The board already
-reaches the reranker as text (the soft tokens are order-blind - permuting them
-moves 0.7 pp and 94 % of picks), so a user sentence enters the same channel.
-Two mechanical constraints decide whether it works:
+reaches the reranker as text - the soft block's *content* is worth under a point
+(see decision 1 above), so the text is where the champions live and a user
+sentence enters the same channel. Two mechanical constraints decide whether it
+works:
 
 - The reranker only *reorders the head's shortlist*, so a champion the user
   names but the head does not propose can never be returned. The shortlist must
@@ -713,6 +746,22 @@ Two mechanical constraints decide whether it works:
   the champions it does not mention. Movement on Kled alone is compliance;
   movement elsewhere is reasoning. `/api/draft-score` returns per-pick rank and
   probability, which is the instrument.
+
+**Intensity will not survive the argmax.** "I think Kled is incredible here"
+and "Kled is alright" are both, mechanically, the same thing: one more name in
+the candidate set. The readout is an argmax over k discrete candidates, the
+adapter has never seen user language, and every training pair is a row where the
+answer was already in the head's top-5 - so the learned prior is "the answer is
+one of these five, for draft reasons", and a user preference is out of
+distribution by construction. Three conditions on the same boards settle it
+(no mention / "alright" / "incredible"), reading P(Kled) and the rank of the
+champions it did *not* mention: flat P(Kled) means mention is a flag; rising
+P(Kled) with an unchanged answer means the argmax is discarding it; re-ranking
+of unnamed champions is the only outcome that justifies the feature. The
+design that does not depend on that answer is to have the LLM *classify* the
+utterance into {pin, boost, mention} plus a weight, and put the weight into the
+score as `log p = log p_head + lambda * log p_Kled` - insistence then matters by
+construction, and the UI can show the trade-off instead of hiding it.
 
 **Why "pretrain a foundation model on drafts" is the wrong lever.** Three
 results in this repo point the same way:
