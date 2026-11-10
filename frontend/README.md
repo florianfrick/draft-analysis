@@ -81,16 +81,21 @@ LoRA-tuned Qwen3.5-4B chooses from it. It is **the default when it can run**, an
 the head when it cannot — see below, because "can run" is not a preference.
 
 ```bash
-bash pro/model/llm/run.sh python frontend/server.py --host 0.0.0.0 \
-     --port 8777 --device cuda
+bash frontend/serve.sh                 # http://127.0.0.1:8777
+bash frontend/serve.sh --port 8780     # or PORT=8780
 ```
 
-That wrapper is required, not stylistic: the reranker needs `transformers`,
-`peft` and `bitsandbytes` (only in the derived `lol-draft:llm` image) and CUDA
-(4.2B in 4-bit is ~4.5 GB of VRAM; on CPU a request takes minutes). Run the
-frontend with the plain interpreter and the model is still *listed*, disabled,
-with the reason under the picker — `rerank.unavailable_reason()` decides that,
-and `/api/checkpoints` reports it as `rerank.available`.
+That script exists because three things must hold at once, and only one of them
+is a preference: the image needs `transformers`/`peft`/`bitsandbytes` (the
+derived `lol-draft:llm`, not the base `lol-draft:dev`), `python` must be that
+image's venv interpreter, and the port must be **published**. `docker compose
+run dev` (what `DOCKER.md` documents for the frontend) has none of the packages,
+and `pro/model/llm/run.sh` — the training wrapper — publishes no port, so a
+server started through it runs fine and is unreachable from the browser. Run the
+frontend on the host interpreter and the model is still *listed*, disabled, with
+the reason under the picker; `rerank.unavailable_reason()` decides that and
+`/api/checkpoints` reports it as `rerank.available`. Everything else — the role
+board, the head as next move — works exactly as before without any of this.
 
 | | head alone | LLM rerank |
 |---|---|---|
@@ -99,6 +104,10 @@ and `/api/checkpoints` reports it as `rerank.available`.
 | parameters in the loop | 2.49 M | 4.2 B |
 | one request, steady state | ms | **0.7 s** |
 | startup | instant | ~107 s (27 s load + 58 s kernel warmup) |
+
+It also needs CUDA: 4.2 B in 4-bit is ~4.5 GB of VRAM, and a CPU forward pass
+takes minutes — so `serve.sh` passes `--device cuda`, and the head fallback is
+not something you can wait out.
 
 The warmup is why the first click is not 53 s: Triton compiles the hybrid
 attention kernels and `causal_conv1d` falls back to its reference implementation

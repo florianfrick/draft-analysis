@@ -127,18 +127,28 @@ docker compose run --rm -T -p 127.0.0.1:8777:8777 dev \
     python frontend/server.py --host 0.0.0.0 --port 8777
 ```
 
-For the next-move UI, load a policy checkpoint; the header's patch selector
-defaults to 16.20 from that checkpoint's own patch table, so nothing else is
-needed:
+That is the **head-only** frontend. The `dev` image has no `transformers`, so the
+next-move slot loads the ban-aware policy head and the LLM reranker is listed but
+disabled. For the reranker — the default next-move model when it can run — use
+the `llm` service, which is the same checkout and mounts with the derived image
+and the venv's `python`:
 
 ```bash
-docker compose run --rm -T -p 127.0.0.1:8777:8777 dev \
-    python frontend/server.py --host 0.0.0.0 --port 8777
+bash frontend/serve.sh                 # http://127.0.0.1:8777
+bash frontend/serve.sh --port 8780     # publish spec and server agree
 ```
 
-That is the whole command: both slots default to the pro-only artefacts
-(`masking-proonly` for the role board, `nextpick-proonly` for the next move).
-To pin them explicitly, or to run the role board alone:
+`serve.sh` is the command above with `llm` instead of `dev` and `--device cuda`
+added. It exists because the pieces are easy to get half-right:
+`pro/model/llm/run.sh` is the *training* wrapper and publishes no port (a server
+started through it runs fine and is unreachable from the browser), and
+`bash -lc` inside the image resets `PATH`, so `python` becomes the system
+interpreter that has none of the packages. Startup is ~110 s (27 s load + kernel
+warmup), then ~0.5 s per request.
+
+Both slots default to the pro-only artefacts (`masking-proonly` for the role
+board; the reranker, else `nextpick-bans-aware`, for the next move), so the plain
+command needs no flags. To pin them explicitly, or to run the role board alone:
 
 ```bash
 docker compose run --rm -T -p 127.0.0.1:8777:8777 dev \

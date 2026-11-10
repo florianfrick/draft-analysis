@@ -79,6 +79,39 @@ def test_capability_report_is_a_string_or_none():
     assert reason is None or (isinstance(reason, str) and reason.strip())
 
 
+def test_the_unavailable_reason_names_a_command_that_works():
+    """The message is read by someone who cannot fix it from that screen.
+
+    Its first version said `bash pro/model/llm/run.sh python frontend/server.py`
+    - which runs, and publishes no port, so the browser could never reach it.
+    A remedy that cannot work is worse than no remedy, so the string has to
+    name the wrapper that does both jobs.
+    """
+    reason = R.unavailable_reason()
+    if reason is None:
+        pytest.skip("this machine can serve the reranker")
+    if "not installed" not in reason:
+        pytest.skip("a different failure mode: %s" % reason)
+    assert "frontend/serve.sh" in reason
+
+
+def test_serve_script_publishes_the_port_in_the_llm_image():
+    """`serve.sh` exists because the two obvious commands each miss one half.
+
+    `docker compose run dev` has no transformers; `pro/model/llm/run.sh` has
+    them but no `-p`. This asserts the script keeps doing both, and that the
+    compose service it targets still exists.
+    """
+    sh = (HERE / "serve.sh").read_text("utf-8")
+    assert "docker compose run" in sh
+    assert "-p \"127.0.0.1:${PORT}:${PORT}\"" in sh, "no published port"
+    assert "llm python frontend/server.py" in sh, "not the llm service"
+    assert "--host 0.0.0.0" in sh, "a published port lands on eth0, not loopback"
+    compose = (ROOT / "docker-compose.yml").read_text("utf-8")
+    assert "\n  llm:" in compose
+    assert "pro/model/llm/Dockerfile" in compose
+
+
 def test_the_llm_checkpoint_is_offered_in_the_policy_slot():
     """Discovery: the folder is a model, and it answers the next move."""
     import server as S

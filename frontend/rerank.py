@@ -80,10 +80,15 @@ def unavailable_reason():
         import peft          # noqa: F401
         import transformers  # noqa: F401
     except Exception as exc:           # noqa: BLE001
-        return ("transformers/peft/bitsandbytes are not installed here (%s). "
-                "Run the frontend in the LLM image: "
-                "bash pro/model/llm/run.sh python frontend/server.py ..."
-                % exc)
+        # Say which interpreter, not just which package. The two ways to land
+        # here are the host interpreter and the base/dev image (both have no
+        # transformers at all), and the fix is the same one command either way -
+        # `pro/model/llm/run.sh` is not it, because it publishes no port and the
+        # browser could not reach the server it starts.
+        return ("transformers/peft/bitsandbytes are not installed in this "
+                "interpreter (%s). This is the plain host/dev image, where the "
+                "reranker cannot run at all. Serve it from the LLM image "
+                "instead: bash frontend/serve.sh" % exc)
     if not torch.cuda.is_available():
         return ("no CUDA device: the reranker is a 4.2B model in 4-bit "
                 "(~4.5 GB VRAM). On CPU one request takes minutes, so it is "
