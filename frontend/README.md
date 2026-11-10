@@ -469,6 +469,31 @@ would tell the model that blue made the first three bans of an alternating
 block. `draftscore.chronological_bans` rebuilds the interleaving from the two
 lists; the other endpoints still take the flat list as they always have.
 
+**Where this is going (not built).** The draft-score panel and the local
+explanation exist to give the LLM something to *talk about* on a board the user
+did not ask it to change. The intended next step is the other direction:
+natural-language interaction that steers the suggestions — the user types
+"Kled looks good for Blue here, Red's jungler plus that ban points them at
+Olaf next", and the model (a) re-ranks with that in view and (b) answers in
+prose. Two facts from the current system set the shape of that work:
+
+- The reranker can only *reorder* the head's shortlist, so a champion the user
+  names but the head does not propose can never come out. Any interactive
+  version has to union the head's top-k with the named champions before
+  decoding, or the user will be told their idea was considered when it was
+  never a candidate.
+- The soft tokens are order-blind (`pro/model/llm/README.md`: permuting the ten
+  vectors changes 0.7 pp and 94 % of picks), so the board reaches the model as
+  *text*. That is good news for this feature — the user's sentence enters the
+  same channel the board already uses — and a warning that the model's use of
+  the board is shallow.
+
+The measurable question is therefore not "does it answer?" but **"does a
+sentence about Kled move the ranking of the champions it does not mention?"**
+Movement on Kled alone is compliance; movement elsewhere is reasoning.
+`/api/draft-score` already returns per-pick rank and probability, which is the
+instrument for that test.
+
 The panel shows, top to bottom: the numbered reasoning steps, the recommended
 pick (click it to apply the move), `why` / `their answer` / `risk`, the cited
 evidence resolved against the retrieval payload (teams, league, patch, what

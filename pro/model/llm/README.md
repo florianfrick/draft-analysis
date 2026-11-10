@@ -680,10 +680,10 @@ reranker should be an optional path rather than a replacement for the head.
 ## Next step
 
 **k=10, aimed at bans.** At k=5 the picks path is finished - 79 % conversion on a
-59.29 % ceiling - while bans sit at 53 % on a 44.41 % ceiling, so at this k the
+58.27 % ceiling - while bans sit at 53 % on a 42.75 % ceiling, so at this k the
 head is the ban bottleneck and the LLM cannot fix it. The arithmetic for k=10 is
-the reason to spend the run: picks 76.21 % x 0.79 = 60 % (+13 pp), bans
-62.43 % x 0.53 = 33 % (+9 pp), together ~47 % against the 69.32 % k=10 ceiling.
+the reason to spend the run: picks 75.51 % x 0.79 = 60 % (+14 pp), bans
+61.21 % x 0.53 = 32 % (+10 pp), together ~46 % against the 68.36 % k=10 ceiling.
 That holds only if conditional accuracy survives the extra five candidates,
 which is unmeasured - it needs above ~62 % to beat what is there now. Cheaper
 intermediate: one more epoch at k=5 (`--resume`), which is 1 h and tells us
@@ -692,3 +692,54 @@ whether 35.31 % is the plateau or the first point on a slope.
 After that, a bootstrapped CoT SFT dataset: sample reasoning traces from the
 stage-2 model, keep the ones that terminate in the correct champion, and train
 on those. That is written up in `STATUS.md` §9 / the handoff note in this folder.
+
+## Where a coach-style model would come from (not built)
+
+The intended long-run feature is conversational: the user types "Kled looks good
+for Blue here, Red's jungler plus that ban points them at Olaf next", and the
+model re-ranks with that in view and answers in prose. Nothing below is
+implemented; this is the honest map of what stands between here and there, and
+what the numbers in this file say about each step.
+
+**The conversational surface does not need a new model.** The board already
+reaches the reranker as text (the soft tokens are order-blind - permuting them
+moves 0.7 pp and 94 % of picks), so a user sentence enters the same channel.
+Two mechanical constraints decide whether it works:
+
+- The reranker only *reorders the head's shortlist*, so a champion the user
+  names but the head does not propose can never be returned. The shortlist must
+  be unioned with the named champions before decoding.
+- The measurable question is whether a sentence about Kled moves the ranking of
+  the champions it does not mention. Movement on Kled alone is compliance;
+  movement elsewhere is reasoning. `/api/draft-score` returns per-pick rank and
+  probability, which is the instrument.
+
+**Why "pretrain a foundation model on drafts" is the wrong lever.** Three
+results in this repo point the same way:
+
+- The head does not overfit its own train: 50.51 % val top-5 against a train
+  set it has seen 40 times. A model that is not capacity-bound does not get
+  better by getting bigger - it gets better with more *games*, and 46,915 is
+  small.
+- The win-prediction work (`pro/model/winpred/`) found the draft explains
+  little next to team strength, and that on soloQ a champion Bradley-Terry
+  prior captures nearly all of the draft signal (0.0031 nats). Most of what is
+  learnable from draft -> outcome is *champion strength*, i.e. a lookup table.
+- The +13 pp from the shortlist + first-token mask against +3.1 pp from
+  training says the pipeline is doing the work, not the model's knowledge.
+
+So an objective of "predict the next pick / predict gold@10 from the draft"
+reproduces what the head already does and saturates where it saturates. The
+capability in the example sentence - *why* Olaf next, given their jungler and
+that ban - is not in outcome labels at all. It lives in commentary, patch notes
+and coach talk, which is a **post-training** corpus on an existing LLM, not a
+pretraining corpus on draft tensors.
+
+**What that implies for the architecture.** Keep the encoder. It is 2.49 M
+parameters, answers in milliseconds, is calibrated enough to serve as a prior,
+and it is the only component that *generates* a candidate list - the LLM cannot
+(`probe_roleboard_gen.py`: zero-shot generation loses to a lookup table). The
+defensible target is a hybrid: the head proposes and constrains, the LLM reasons
+and explains, and the user's language steers both. Replacing the encoder is only
+worth it if the LLM is shown to beat it as a generator first, which is the
+opposite of what has been measured.

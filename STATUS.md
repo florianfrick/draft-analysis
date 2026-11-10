@@ -812,6 +812,13 @@ the paired protocol, so results stay comparable to §4.
    evaluations, milliseconds on a GPU. Report the value delta of the recommended
    move. Only then consider PUCT; full MCTS is unnecessary at depth 20.
 
+**Items 5 and 6 are declined (2026-11-10).** The value head is off the table: it
+did not work in the soloQ pipeline, it does not rank picks (§18: 0.5002
+[0.4974, 0.5028]), and the win-prediction branch found team strength dominates
+the draft. Nothing should be built to accommodate one — in particular, do not
+reorder or duplicate the pooled team halves for a value branch's benefit. The
+next-move head stays `with_value=False`.
+
 **What not to do.** Don't re-run patch conditioning on the date split. Don't
 scale the model up on 37k drafts (§6, measured). Don't add the patch vector to
 pick2 without a gate. Don't quote the pooled +19.6/+21.7 pp cross-pipeline gap as
@@ -863,6 +870,33 @@ something before it can be a label, or the model learns the LLM's taste. The
 cheapest honest version is a small hand-labelled set of drafts — the reviewer says
 which step actually mattered — and then the LLM is only used where it agrees with
 that set, which also gives the calibration the "what not to do" list demands.
+
+### Conversational steering — the long-run goal, not built
+
+**Wanted, not built, and deliberately out of scope for the current work.** The
+end state is that a user types "Kled looks good for Blue here, Red's jungler plus
+that ban points them at Olaf next" and the model re-ranks with that in view and
+answers in prose. The draft-score panel and the local explanation are the first
+step in that direction: they give the LLM something to talk about on a board the
+user did not ask it to change.
+
+The reasoning is written up in `pro/model/llm/README.md` ("Where a coach-style
+model would come from"), and it argues against the obvious plan. The three
+results that decide it are all already in this file: the head does not overfit
+its own train (50.51 % val top-5 against rows seen 40 times), so the constraint is
+games rather than parameters; the win-prediction work found most of the
+draft → outcome signal is champion strength (0.0031 nats, nearly all of it a
+Bradley-Terry prior); and the reranker's gain is +13 pp from format against
++3.1 pp from training. Together they say the sentence in the example is not
+recoverable from outcome labels at all — it is commentary, patch notes and coach
+talk, which is a **post-training** corpus on an existing LLM, not a pretraining
+corpus on draft tensors. The encoder stays: it is the only component that
+*generates* a candidate list, and the LLM has been measured to lose at that.
+
+The gate before any of it: a sentence about Kled has to move the ranking of
+champions it does not mention. Movement on Kled alone is compliance, not
+reasoning, and `/api/draft-score` already returns the per-pick ranks that would
+show the difference.
 
 ---
 
