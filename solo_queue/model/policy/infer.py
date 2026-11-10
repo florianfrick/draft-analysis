@@ -526,7 +526,7 @@ class PolicyPredictor:
     # -- public -------------------------------------------------------
     @torch.no_grad()
     def next_move(self, picks, bans, first_pick=0, k=8, unavailable=None,
-                  patch_id=PATCH_UNK_ID):
+                  patch_id=PATCH_UNK_ID, allowed=None):
         """Top-k champions for the move that is next, plus the state.
 
         `unavailable` is the fearless pool (champions picked in earlier
@@ -536,6 +536,14 @@ class PolicyPredictor:
 
         `patch_id` selects a row of this checkpoint's patch embedding;
         `patch_id_for` clamps anything it cannot resolve to UNK.
+
+        `allowed` (optional) restricts the answer to a set of champion
+        indices - the lane a pick is for, when the caller has decided one.
+        It is applied to the logits BEFORE the top-k, so the result is a real
+        ranking inside that set: without it, filtering an unconstrained top-k
+        leaves an empty list whenever the head's five favourites happen not to
+        play the lane, which is the common case (13 % of pick moves have no
+        lane-legal champion in the head's top 8).
         """
         pid = self.patch_id_for(patch_id)
         board = build_board(picks, bans, self.num_champs, first_pick,
@@ -559,6 +567,16 @@ class PolicyPredictor:
         kind, team = move_plan(first_pick)[move_idx]
         batch = _policy_batch(board, move_idx, kind, team, patch_id=pid)
         logits = self.policy_logits(batch)[0]
+        if allowed is not None:
+            idx = torch.as_tensor(list(allowed), dtype=torch.long,
+                                  device=logits.device)
+            if idx.numel() == 0:
+                raise ValueError("allowed is empty: nothing can answer this "
+                                 "move")
+            keep = torch.zeros(logits.shape, dtype=torch.bool,
+                               device=logits.device)
+            keep[idx] = True
+            logits = logits.masked_fill(~keep, float("-inf"))
         p = torch.softmax(logits.float(), dim=-1)
         top = p.topk(min(k, self.num_champs))
         suggestions = [{"idx": int(i), "prob": float(v)}

@@ -41,7 +41,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from solo_queue.model.policy import infer  # noqa: E402
-from roles import assign_roles             # noqa: E402
+import roles as ROLES                     # noqa: E402  (lane table + assignment)
+from roles import assign_roles            # noqa: E402
 
 IMPORT_ERROR = None
 try:
@@ -273,6 +274,13 @@ class RerankPredictor:
         `patch_id` defaults to the head's own default rather than to UNK: the
         patch is a *string* in the prompt ("Patch: 16.20"), and "Patch: None"
         is text no training example ever contained.
+
+        `lane` is the lane the coming pick is for. When it is a decision - the
+        drafter chose it, or the board leaves only one open - it constrains the
+        head's pool to champions that play that lane, so the panel answers the
+        question it was asked. When it is only a guess it stays a hint in the
+        prompt and the list is left alone: filtering on an assumption would make
+        a wrong assumption unrecoverable.
         """
         if patch_id is None:
             patch_id = self.default_patch_id()
@@ -282,11 +290,25 @@ class RerankPredictor:
         res["rerank"] = None
         if res.get("complete"):
             return res
+
+        # The lane needs the board's roles, which come from the head's own role
+        # head, so the first call is necessarily unconstrained. Only the
+        # constrained case pays for a second one, and the head is 2.49 M params.
+        role, source, open_lanes = self._resolve_lane(res, picks, lane)
+        allowed = None
+        if source in ("user", "board"):
+            allowed = ROLES.legal_champions(role)
+            res = self.head.next_move(picks, bans, first_pick=first_pick,
+                                      k=max(int(k), self.k),
+                                      unavailable=unavailable, patch_id=patch_id,
+                                      allowed=allowed)
+
         cands = res["suggestions"][:self.k]
         if not cands:
             return res
         try:
-            self._rerank(res, cands, picks, bans, unavailable, lane)
+            self._rerank(res, cands, picks, bans, unavailable, role, source,
+                         open_lanes, allowed)
         except Exception as exc:        # noqa: BLE001 - one panel, not the server
             # The head's answer is still a valid answer. Losing the rerank must
             # not lose the recommendation, so the failure is reported beside it.
@@ -294,24 +316,33 @@ class RerankPredictor:
         return res
 
     # --------------------------------------------------------------- internals
-    def _rerank(self, res, cands, picks, bans, unavailable, lane):
+    def _resolve_lane(self, res, picks, lane):
+        """(lane, why, lanes still open) for the move in `res`.
+
+        Three sources, and the distinction is the whole point: "user" and
+        "board" are decisions the answer must respect, "default" is a guess that
+        only shapes the prompt.
+        """
+        if res["kind"] == "ban":
+            return None, None, []
+        filled = [p is not None for p in picks]
+        lanes = assign_roles(res.get("roles") or [], filled)
+        open_lanes = BOARD.remaining_lanes(lanes, int(res["side"]))
+        if lane is not None:
+            return int(lane), "user", open_lanes
+        if len(open_lanes) == 1:
+            return open_lanes[0], "board", open_lanes   # forced, nothing guessed
+        if open_lanes:
+            return open_lanes[0], "default", open_lanes  # a guess, and labelled
+        raise ValueError("the board has all five lanes filled but the move is "
+                         "still a pick")
+
+    def _rerank(self, res, cands, picks, bans, unavailable, role, source,
+                open_lanes, allowed):
         filled = [p is not None for p in picks]
         lanes = assign_roles(res.get("roles") or [], filled)
         side = int(res["side"])
         is_ban = res["kind"] == "ban"
-        open_lanes = [] if is_ban else BOARD.remaining_lanes(lanes, side)
-
-        role, source = None, None
-        if not is_ban:
-            if lane is not None:
-                role, source = int(lane), "user"
-            elif len(open_lanes) == 1:
-                role, source = open_lanes[0], "board"   # forced, nothing guessed
-            elif open_lanes:
-                role, source = open_lanes[0], "default"  # a guess, and labelled
-            else:
-                raise ValueError("the board has all five lanes filled but the "
-                                 "move is still a pick")
 
         patch_str = self.patch_key_for(res.get("patch_id")) or "unknown"
         kind = C.DS.MOVE_BAN if is_ban else C.DS.MOVE_PICK
@@ -377,6 +408,13 @@ class RerankPredictor:
             "lane_source": source,
             "lane_assumed": source == "default",
             "lanes_open": open_lanes,
+            # Whether the lane constrained the pool or only the prompt. The
+            # chips can be read as "these play this lane" only when applied.
+            "lane_filter": {
+                "applied": allowed is not None,
+                "n_legal": None if allowed is None else len(allowed),
+                "of": int(self.num_champs),
+            },
             "candidates": rows,
             "head_top1_agrees": bool(win == 0),
         }

@@ -129,6 +129,7 @@ def test_the_llm_checkpoint_is_offered_in_the_policy_slot():
 def test_the_reranker_is_the_default_only_when_it_can_run():
     """The default is conditional by design.
 
+
     Defaulting to a 4.2B model on a host that cannot run it would break the
     next-move panel on the first click, so the head must be what is used when
     `unavailable_reason()` is not None.
@@ -153,3 +154,74 @@ def test_resolving_the_checkpoint_folder_finds_its_projector():
         pytest.skip("no llm-* checkpoint in this checkout")
     got = S.resolve_ckpt_path(S.RERANK_DEFAULT, confine=False)
     assert got.name == "projector.pt"
+
+
+# ---------------------------------------------------------------- lane legality
+#
+# The lane selector used to be a wording change: the prompt said "for Bot lane"
+# and the head's lane-blind top-5 came back regardless, so 22 % of lists had no
+# Bot champion in them at all. These pin the fix - the lane now masks the pool -
+# and the rule that decides when it may.
+
+def test_the_lane_table_is_well_formed():
+    """Every lane has a real pool, and every id is a champion index.
+
+    A lane with a handful of champions would make the masked top-5 repeat
+    itself; an id outside the 173 would be a silent -inf or a crash.
+    """
+    import roles as ROLES
+    pools = [ROLES.legal_champions(l) for l in range(5)]
+    for lane, pool in enumerate(pools):
+        assert len(pool) >= 20, "%s has only %d champions" % (
+            ROLES.lane_name(lane), len(pool))
+        assert all(0 <= c < 173 for c in pool)
+        assert len(set(pool)) == len(pool), "duplicate champion"
+    # Flex exists: the lanes are not a partition, and the single-lane
+    # champions are the majority (113 of 173 when the table was built).
+    total = sum(len(p) for p in pools)
+    assert total > 173, "no champion plays two lanes - the table is wrong"
+    assert total < 2 * 173, "every champion plays every lane - the table is wrong"
+
+
+def test_a_lane_outside_the_five_is_refused():
+    import roles as ROLES
+    for bad in (-1, 5, 99):
+        with pytest.raises(ValueError):
+            ROLES.legal_champions(bad)
+
+
+def test_a_chosen_lane_constrains_the_pool_but_a_guess_does_not():
+    """`_resolve_lane` decides which of the three it is, and only two constrain.
+
+    "user" (the drafter picked it) and "board" (four lanes filled, so the last
+    one is forced) are decisions the answer must respect. "default" is the
+    first open lane, which is only a guess: filtering on it would make a wrong
+    guess unrecoverable, because the right champion would not be in the pool.
+    """
+    empty = {"kind": "pick", "side": 0, "roles": [[] for _ in range(10)]}
+    picks = [None] * 10
+
+    role, source, open_lanes = R.RerankPredictor._resolve_lane(
+        None, empty, picks, 3)
+    assert (role, source) == (3, "user")
+    assert open_lanes == [0, 1, 2, 3, 4]
+
+    role, source, _open = R.RerankPredictor._resolve_lane(None, empty, picks,
+                                                          None)
+    assert source == "default", "with five lanes open nothing is decided"
+    assert role == 0
+
+    # Four of blue's five lanes taken -> the fifth is forced, not guessed.
+    four = {"kind": "pick", "side": 0, "roles": [[] for _ in range(10)]}
+    filled = [None] * 10
+    for slot, lane in zip(range(4), (0, 1, 2, 4)):
+        four["roles"][slot] = [{"role": lane, "prob": 1.0}]
+        filled[slot] = 100 + slot
+    role, source, open_lanes = R.RerankPredictor._resolve_lane(
+        None, four, filled, None)
+    assert open_lanes == [3]
+    assert (role, source) == (3, "board")
+
+    # A ban has no lane at all, whatever the caller sent.
+    ban = {"kind": "ban", "side": 0, "roles": [[] for _ in range(10)]}
+    assert R.RerankPredictor._resolve_lane(None, ban, picks, 3) == (None, None, [])

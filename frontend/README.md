@@ -116,11 +116,27 @@ on the first forward. It runs inside the constructor and prints its cost.
 Two things it does that a head cannot, both of which change what the panel
 shows:
 
-* **It needs the lane of the coming pick.** The prompt asks for "the best Red
-  Side pick for *Top* lane", so the panel grows a lane selector whenever the
-  board does not decide the lane (four lanes filled ⇒ forced). `lane_source` in
-  the response says `board` / `user` / `default`, and only `default` is marked
-  "assumed" in the UI.
+* **It asks which lane the coming pick is for — and enforces the answer.** The
+  panel grows a lane selector whenever the board does not decide the lane (four
+  lanes filled ⇒ forced). Choosing one masks the head's pool to champions that
+  play that lane (`data/champ_roles.json`, counted from the corpus), so "Bot"
+  returns ADCs instead of the head's unconstrained favourites. Leaving it on
+  *any* keeps the lane as a prompt hint and the list unfiltered, because
+  filtering on a guess would make a wrong guess unrecoverable. `lane_source`
+  says which case it is (`board` / `user` / `default`) and `lane_filter` says
+  whether the pool was masked and how many champions were eligible.
+
+  This is not cosmetic: over 1,200 pick moves the head's plain top-5 is only
+  46 % lane-appropriate and 22 % of lists contain **no** champion that plays the
+  lane at all. Masked to the lane it is 100 % appropriate, never empty, and
+  recall of the actual pick rises from 31.0 % to 47.4 % — dropping competitors
+  can only raise the answer's rank, so the constraint cannot cost a pick that
+  belongs in the lane. The table behind it is counted from the corpus
+  (`python data/build_champ_roles.py` → `data/champ_roles.json`): a champion is
+  legal in a lane when it was picked there in ≥10 % of its own picks and ≥5
+  times, which makes 113 of 173 champions single-lane and 54 flex. 2.5 % of pro
+  picks land outside their champion's legal lanes, and those are exactly the
+  picks a lane-constrained list cannot offer.
 * **It can disagree with the head**, which is the point: on a Red-to-pick board
   asked for Bot it returns Ezreal 73.8 % where the head's top-1 was Nautilus
   10.8 % — two ADCs at the top of a list the head filled with a support, a
@@ -202,13 +218,15 @@ picks and bans. `patch_id` is a row of the loaded checkpoint's patch table
 (omitted → its `default_patch_id`, 16.20 on every kept checkpoint). `lane` is
 only read when the loaded next-move model sets `accepts_lane` — the reranker
 does, the head does not, and the server forwards the field conditionally rather
-than letting a stale key reach a model that would ignore it.
+than letting a stale key reach a model that would ignore it. For the reranker it
+is a *constraint*: the head's pool is masked to champions that play that lane.
 
 → `{model, state{move_idx, kind, side, phase, first_pick, warning, complete,
 n_unavailable}, patch_id, patch, suggestions[{idx, prob, name}], roles,
 rerank}`. With the reranker loaded, `rerank` carries `{k, chosen, chosen_idx,
-lane, lane_name, lane_source, lane_assumed, lanes_open, head_top1_agrees,
-candidates[{idx, name, head_prob, prob, logp, chosen}]}` and each suggestion in
+lane, lane_name, lane_source, lane_assumed, lanes_open, lane_filter{applied,
+n_legal, of}, head_top1_agrees, candidates[{idx, name, head_prob, prob, logp,
+chosen}]}` and each suggestion in
 the shortlist gains `llm_prob` + `llm_pick`. `prob` is always the answering
 model's own number, so the head's probability and the LLM's are never mixed in
 one field — a suggestion outside the shortlist simply has no `llm_prob`.

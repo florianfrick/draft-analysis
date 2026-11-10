@@ -934,8 +934,10 @@ function renderNextMove() {
 }
 
 // The lane of the coming pick is a decision, not a fact, until four lanes are
-// filled. When the reranker says it had to assume one, offer the open lanes so
-// the assumption can be corrected - the prompt literally says "for X lane".
+// filled. Choosing one now *constrains the answer*: the head's pool is masked
+// to champions that play that lane, so "Bot" returns ADCs instead of the head's
+// unconstrained favourites. Leaving it unset keeps the lane as a prompt hint and
+// says so, because filtering on a guess would make a wrong guess unrecoverable.
 function renderLanePick(rr, st) {
   const box = document.getElementById('nm-lane');
   box.innerHTML = '';
@@ -943,38 +945,54 @@ function renderLanePick(rr, st) {
   const open = rr.lanes_open || [];
   if (!open.length) return;
   const names = ['Top', 'Jungle', 'Mid', 'Bot', 'Support'];
+  const lf = rr.lane_filter || {};
+  const pool = lf.applied ? ` · ${lf.n_legal} champions` : '';
   if (open.length === 1) {
-    box.textContent = `· lane ${names[open[0]]}`;
+    // Forced: the board already decides the lane, so the pool is masked without
+    // asking and there is nothing to choose.
+    box.textContent = `· lane ${names[open[0]]}${pool}`;
     return;
   }
   const lab = document.createElement('span');
   lab.textContent = '· lane ';
   const sel = document.createElement('select');
   sel.className = 'nm-lane-sel';
-  sel.title = 'the lane this pick is for — the model is asked for a champion in '
-    + 'that lane, and only the last pick of a side is forced';
+  sel.title = 'the lane this pick is for — choosing one keeps only champions '
+    + 'that play it; leaving it on "any" asks for a champion in the first open '
+    + 'lane without constraining the list';
+  // A placeholder, so picking the lane that happens to be first is still a
+  // change event. Without it the default lane is displayed but cannot be
+  // activated: selecting the option already shown fires nothing.
+  const any = document.createElement('option');
+  any.value = '';
+  any.textContent = 'any';
+  sel.appendChild(any);
   open.forEach(r => {
     const o = document.createElement('option');
     o.value = String(r);
     o.textContent = names[r];
     sel.appendChild(o);
   });
-  sel.value = String(rr.lane);
+  sel.value = rr.lane_assumed ? '' : String(rr.lane);
   sel.addEventListener('change', () => {
-    NEXT_LANE = parseInt(sel.value, 10);
+    NEXT_LANE = sel.value === '' ? null : parseInt(sel.value, 10);
     const sig = boardSig();
     renderNextMove();               // blank the stale answer while it recomputes
     runSuggest(sig);
   });
   box.appendChild(lab);
   box.appendChild(sel);
-  if (rr.lane_assumed) {
-    const hint = document.createElement('span');
-    hint.className = 'nm-assumed';
-    hint.textContent = ' assumed';
-    hint.title = 'the board does not force this lane yet';
-    box.appendChild(hint);
+  const hint = document.createElement('span');
+  hint.className = 'nm-assumed';
+  if (lf.applied) {
+    hint.textContent = pool;
+    hint.title = `only champions that play ${names[rr.lane]} can be suggested`;
+  } else {
+    hint.textContent = ' assumed — list not filtered';
+    hint.title = 'the board does not force this lane yet: it is in the prompt, '
+      + 'but the list is the head\'s unconstrained top-k';
   }
+  box.appendChild(hint);
 }
 
 function renderNextMoveError(msg) {

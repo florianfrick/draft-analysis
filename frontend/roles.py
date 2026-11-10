@@ -8,6 +8,9 @@ reranker, so reaching back for one function would be a cycle.
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 
 def assign_roles(role_dists, filled, newest=None):
     """One-to-one slot -> role assignment per team.
@@ -69,3 +72,63 @@ def assign_roles(role_dists, filled, newest=None):
         for s, r in best["assign"].items():
             out[s] = r
     return out
+
+
+# ---------------------------------------------------------------- lane legality
+#
+# `assign_roles` above answers "which lane is this pick". This answers the other
+# direction, "which champions play this lane", which is what a lane-constrained
+# shortlist needs. The table is counted from the pro corpus by
+# `data/build_champ_roles.py`; the rule (a share of the champion's own picks,
+# plus a floor) is applied here at read time so the thresholds can be tuned
+# without a rebuild.
+
+TABLE_PATH = Path(__file__).resolve().parent.parent / "data" / "champ_roles.json"
+_TABLE = None
+
+
+def _table():
+    """Parsed table: {"roles": [...], "legal": [[champ ids] per lane], "source": {}}.
+
+    Built once. A missing file is an error, not an empty pool: silently serving
+    an unconstrained list is the bug this table exists to fix, so the caller
+    gets an exception it can report next to the answer.
+    """
+    global _TABLE
+    if _TABLE is None:
+        data = json.loads(TABLE_PATH.read_text("utf-8"))
+        share = float(data["policy"]["share"])
+        floor = int(data["policy"]["floor"])
+        legal = [[] for _ in data["roles"]]
+        for champ, counts in data["counts"].items():
+            n = sum(counts)
+            if not n:
+                continue
+            for lane, v in enumerate(counts):
+                if v >= floor and v / n >= share:
+                    legal[lane].append(int(champ))
+        _TABLE = {"roles": list(data["roles"]),
+                  "legal": [sorted(x) for x in legal],
+                  "source": data.get("source") or {}}
+    return _TABLE
+
+
+def legal_champions(lane):
+    """Champion indices that play `lane`, most-picked first is NOT implied.
+
+    Sorted by index, because the caller ranks them itself (the head's
+    distribution decides the order). The point of the table is the *set*.
+    """
+    lane = int(lane)
+    if not 0 <= lane < 5:
+        raise ValueError("lane %d is not one of the five" % lane)
+    return list(_table()["legal"][lane])
+
+
+def lane_name(lane):
+    return _table()["roles"][int(lane)]
+
+
+def table_source():
+    """Provenance of the table, for the UI/logs (corpus size and build date)."""
+    return dict(_table()["source"])

@@ -818,6 +818,41 @@ def test_a_head_never_receives_the_lane(app, httpd, policy_ckpt):
     assert d["rerank"] is None
 
 
+def test_the_head_can_be_constrained_to_a_lane(policy_ckpt):
+    """`allowed` masks the distribution, it does not filter the result.
+
+    The difference is the whole fix: filtering an unconstrained top-5 leaves an
+    empty list whenever the head's five favourites do not play the lane (22 % of
+    pick moves), while masking produces a real ranking inside the pool.
+    """
+    import roles as ROLES
+    pred = S.load_predictor(Path(policy_ckpt))
+    lane = 3                                     # BOTTOM
+    allowed = ROLES.legal_champions(lane)
+    picks = [None] * 10
+    bans = [11, 12, 13, 14, 15, 16]
+
+    plain = pred.next_move(picks, bans, first_pick=0, k=8)
+    constrained = pred.next_move(picks, bans, first_pick=0, k=8, allowed=allowed)
+
+    ids = [c["idx"] for c in constrained["suggestions"]]
+    assert ids, "masking to a lane must not empty the list"
+    assert set(ids) <= set(allowed)
+    assert len(ids) == 8
+    # A real distribution over the pool, not a renormalised tail: the top
+    # champion keeps a healthy share, and the order is still the head's.
+    assert constrained["suggestions"][0]["prob"] > 0.05
+    probs = [c["prob"] for c in constrained["suggestions"]]
+    assert probs == sorted(probs, reverse=True)
+    # ... and it is a different answer than the unconstrained one, or the lane
+    # would be doing nothing.
+    assert ids != [c["idx"] for c in plain["suggestions"]][:len(ids)] or \
+        set(ids) != set(c["idx"] for c in plain["suggestions"])
+
+    with pytest.raises(ValueError):
+        pred.next_move(picks, bans, first_pick=0, k=8, allowed=[])
+
+
 # ---------------------------------------------------------------- patch id
 def test_champions_publishes_the_checkpoint_patch_table(app, httpd,
                                                         policy_ckpt):
