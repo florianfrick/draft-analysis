@@ -14,9 +14,9 @@ Three things about serving it that are not obvious from the training side:
   second implementation.
 * **The board is indexed by lane, not by pick order** (`datasets.build_prefix`:
   `slot = team * 5 + role`). The frontend's slots are pick order, so every pick
-  has to be given its lane before the prompt can be built. `roles.assign_roles`
-  supplies them from the head's own role distribution, which is the only role
-  information available before the pick exists.
+  has to be given its lane before the prompt can be built. `lanes.assign_lanes`
+  supplies them from the corpus's champion -> lane table - the same call the
+  head makes for its own `role_ids`, so the prompt and the state agree.
 * **The lane of the pick being asked for is a decision, not a fact.** In the
   corpus it is the role the pro took. Here it is either forced (four lanes
   filled) or guessed, and the response says which (`lane_assumed`).
@@ -42,7 +42,6 @@ if str(ROOT) not in sys.path:
 
 from solo_queue.model.policy import infer  # noqa: E402
 import roles as ROLES                     # noqa: E402  (lane table + assignment)
-from roles import assign_roles            # noqa: E402
 
 IMPORT_ERROR = None
 try:
@@ -325,8 +324,9 @@ class RerankPredictor:
         """
         if res["kind"] == "ban":
             return None, None, []
-        filled = [p is not None for p in picks]
-        lanes = assign_roles(res.get("roles") or [], filled)
+        # The same assignment the head used (`infer._fill_roles`): the prompt
+        # and the state must agree about which lane each placed pick is in.
+        lanes = ROLES.assign_lanes(picks)
         open_lanes = BOARD.remaining_lanes(lanes, int(res["side"]))
         if lane is not None:
             return int(lane), "user", open_lanes
@@ -339,8 +339,7 @@ class RerankPredictor:
 
     def _rerank(self, res, cands, picks, bans, unavailable, role, source,
                 open_lanes, allowed):
-        filled = [p is not None for p in picks]
-        lanes = assign_roles(res.get("roles") or [], filled)
+        lanes = ROLES.assign_lanes(picks)
         side = int(res["side"])
         is_ban = res["kind"] == "ban"
 

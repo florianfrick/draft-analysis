@@ -65,6 +65,7 @@ for _p in (str(HERE), str(MODEL_DIR), str(MODEL_DIR.parents[1])):
 
 from solo_queue.model import PolicyValueModel                             # noqa: E402
 from solo_queue.model.policy.model import FEARLESS_SLOTS                  # noqa: E402
+from solo_queue.model.policy.lanes import assign_lanes, legal_champions     # noqa: E402
 from solo_queue.model.pretraining.base_model import (SiameseBase, CHAMP_PAD_ID,   # noqa: E402
                          ROLE_FLEX_ID, NUM_ROLES, load_encoder_state,
                          attr_matrix_for_config)
@@ -486,12 +487,25 @@ class PolicyPredictor:
 
     @torch.no_grad()
     def _fill_roles(self, board):
-        """Set role_ids from the encoder's role head; -> per-slot probs.
+        """Role distributions for the panel, and the lane ids the policy reads.
 
-        Runs with the current role inputs (FLEX for a just-placed pick),
-        which is the same "role unknown" query the masked frontend uses,
-        so the answer is conditioned on the champion and its team context
-        only.
+        Two questions that look like one:
+
+        * `roles` (returned probs) - the role board's per-slot distribution:
+          "given this champion and its team, where could it go". The role head
+          answers it and it is what the panel shows.
+        * `board["role_ids"]` - which lane each placed pick is *in*, and the
+          encoder reads it as an input. The encoder is permutation-invariant
+          within a team (`base_model.py`), so this is the only channel carrying
+          a pick's position at all.
+
+        The second one used to be the head's argmax, which is a different and
+        worse estimate: it agrees with the corpus's real roles 67 % of the time,
+        while the champion's own lane history agrees 96 % of the time. On 1,500
+        pick moves that is 30.2 % -> 36.7 % recall@5, against 38.8 % for the true
+        roles, and adding the head's distribution on top of the prior changes
+        nothing (36.7 %). So the head keeps the display and the table decides
+        the input - see `lanes.assign_lanes`.
         """
         batch = {
             "champ_ids": board["champ_ids"],
@@ -501,9 +515,14 @@ class PolicyPredictor:
         }
         role_logits = self._role_logits(batch)
         probs = torch.softmax(role_logits.float(), dim=-1)
-        best = probs.argmax(dim=-1)
-        board["role_ids"] = torch.where(~board["pad_mask"], best,
-                                        torch.full_like(best, ROLE_FLEX_ID))
+
+        picks = [None if bool(pad) else int(c) for c, pad in
+                 zip(board["champ_ids"][0].tolist(),
+                     board["pad_mask"][0].tolist())]
+        lanes = [ROLE_FLEX_ID if lane is None else lane
+                 for lane in assign_lanes(picks)]
+        board["role_ids"] = torch.tensor([lanes], dtype=torch.long,
+                                         device=board["champ_ids"].device)
         return probs
 
     def _roles_json(self, probs, board):

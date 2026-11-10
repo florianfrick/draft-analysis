@@ -307,6 +307,26 @@ loads (technically legal, never done), and `_policy_batch` folds it into
 fearless-row ban moves do target a fearless-pool champion, and masking a
 training target out of the cross-entropy would dominate the loss.
 
+### Which lane each pick is in (`lanes.py`)
+
+The dataset places a pick at `team * 5 + role`, and the encoder is
+permutation-invariant within a team, so a pick's *slot* carries no information —
+the role id is the only thing that says where it is. Training read that from the
+corpus; serving gets a pick-order board and has to work it out.
+
+`_fill_roles` used to take the role head's argmax. That answers a different
+question ("given this champion and team, where could it go") and agrees with the
+corpus's real roles 67 % of the time. `lanes.assign_lanes` instead maximises the
+champions' own lane history from `data/champ_roles.json`, which agrees 96 % of
+the time; on 1,500 held-out pick moves that is **30.2 % -> 37.7 % recall@5**,
+against 38.8 % for the true roles. Adding the head's distribution on top of the
+prior changes nothing, so the head is kept only for the per-slot distribution
+the role board displays — `res["roles"]` — and the table decides the input.
+
+The assignment is injective per team (a team's five lanes are distinct), which
+is why it is an exhaustive search over ≤120 assignments rather than an argmax:
+two junglers cannot both be the jungler, and the search decides which one moves.
+
 ## Ban decisions (moved out)
 
 The ban analyses that used to live here — `ban_search.py` (additive

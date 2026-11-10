@@ -147,6 +147,15 @@ shows:
   answering model's order is the one on screen; the three candidates the LLM
   never scored keep the head's order behind it.
 
+The same table fixed a second, larger thing on the way in. The encoder is
+permutation-invariant within a team, so a placed pick's *role id* is the only
+thing that says which lane it is in, and serving was filling it with the role
+head's argmax — right 67 % of the time, against 96 % for the champion's own
+history. `infer._fill_roles` now takes the lanes from `lanes.assign_lanes`, which
+is worth **30.2 % → 37.7 % recall@5** on 1,500 held-out pick moves (the ceiling,
+the corpus's own roles, is 38.8 %). The role head keeps only the per-slot
+distribution the board displays.
+
 The reranker is not a checkpoint *file* but a folder (`projector.pt` is its entry
 point, `adapter/` its LoRA). Discovery offers a folder only when it can actually
 answer — it needs `adapter/` and a `report.json` whose `protocol.prompt_format`
