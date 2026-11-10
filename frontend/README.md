@@ -528,6 +528,11 @@ Three independent reasons the reranker cannot take the slot:
    side is *not* picking now it drops to 31.5 %, **below** the masked board's
    35.0 % on the same cells. It wins only on the single lane it is actually
    picking (53.7 %), which is the next-move panel's question, not this one.
+   *(Amended later the same day: the side is not actually fixed —
+   `_policy_batch` takes the team as an argument, so the off-turn cells can be
+   posed as hypotheticals. Done that way the head does beat the masked board,
+   +3.8 pp top-1 at 10 bans + 6 picks; see "The fabricated turn" below for the
+   number and for the reason the two sides still come out the same.)*
 3. **Latency.** Ten lane queries is ten LLM passes (~4.5 s at 0.45 s each), or a
    50-row batch on the card that had to train at batch 2. The board is
    recomputed on every click and takes 11 ms.
@@ -540,6 +545,13 @@ it is a prior with a little context, not a decision model. And role
 *inference* no longer needs it at all: `lanes.assign_lanes` decides `role_ids`
 from the champion table (96 % agreement with real drafts, against the role
 head's 67 %).
+
+The conclusion is therefore **conditional on the ban block**, which is what the
+fabricated-turn section below adds: once all ten bans are in, the lane-masked
+head plus the reranker beats this board outright, and the masking checkpoint's
+remaining value is the states where the ban block is still filling. Its slot is
+not earned by "the reranker cannot generate" — the head generates — but by the
+ban-phase boards the head cannot be honestly asked about.
 
 #### Zero-shot generation, tried and measured (2026-11-10)
 
@@ -595,6 +607,67 @@ One artefact worth knowing if this is ever revisited: the rerank adapter does
 not stop after the name — it never learned `<|im_end|>` (`loss_on_eos=False` in
 training), so the raw output runs on into `Blue Picks:` and the name has to be
 parsed off the front.
+
+#### The fabricated turn, measured (2026-11-10)
+
+The third way to fill a role-board cell is to keep the shortlist, but ask the
+head a question it was never asked at serving time: *"suppose this side were
+picking next, for this lane"*. `next_move` takes the side from `move_plan()`,
+so the only way to pose it is to build the policy batch with that team —
+`_policy_batch(board, move_idx, MOVE_PICK, team, …)` — mask the logits to
+`lanes.legal_champions(lane)`, take five, and let the reranker choose. The
+reranker's task line already says `Choose the best Red Side pick for Jungle
+lane from the candidates`, so nothing in the prompt changes.
+
+`python frontend/probe_roleboard_fab.py 200 10 6` scores all arms on the
+**same cells** (this is the only safe
+comparison — `data.eval_dataset` draws a fixed random subsample, so two probes
+with different `N` do not share a sample):
+
+| arm | top-1 | top-5 | 774 cells, 10 bans + 6 picks |
+|---|---|---|---|
+| masked board (shipped) | 10.5 % | 44.2 % | 12 ms |
+| per-lane popularity table | 11.9 % | 41.1 % | ~0 ms |
+| fabricated-turn head | 14.3 % | **49.5 %** | 15 ms |
+| fabricated turn + rerank | **15.6 %** | (the head's five) | 594 ms |
+
+Paired, on the same cells: masked right / rerank wrong 59, the reverse 99,
+exact p < 0.005; against the bare head 57 / 87, p = 0.02. So the lane-masked
+head is +3.8 pp top-1 on its own and the reranker adds +1.3 pp more, +5.3 pp
+top-5 — the first variant measured that beats the masked board rather than
+tying it. (A 60-game run of the same script showed 12.6 vs 13.9 % and looked
+like a tie; at 231 cells the intervals are ±2.2 pp and that is what noise looks
+like.)
+
+It does **not** survive an incomplete ban block. At 6 bans + 6 picks the next
+move is a ban, so a pick-phase hypothetical has to pretend the remaining bans
+are in (`move_idx = 10 + n_picks` while `ban_ids` holds six):
+
+| arm | top-1 | top-5 | 388 cells, 6 bans + 6 picks |
+|---|---|---|---|
+| masked board | 10.1 % | **46.1 %** | 12 ms |
+| popularity table | 11.9 % | 41.8 % | ~0 ms |
+| fabricated-turn head | 8.8 % | 38.7 % | 14 ms |
+| fabricated turn + rerank | 10.8 % | (the head's five) | 565 ms |
+
+p = 0.81 against the masked board: a tie, with the head's own top-5 four points
+worse. The board the head is shown is not a board it ever saw — six bans with a
+move index that says ten — so this is a fabrication cost, not a model limit.
+
+**The two sides never differentiate.** `python frontend/probe_roleboard_side.py`
+asks both sides the same
+board (52 shared cells, 10 bans + 6 picks): total-variation distance between
+the Blue and Red lane distributions is **0.015**, against **0.147** for a
+control that swaps one enemy pick — a real board change moves the answer ten
+times more than the side does. 90 % of shared lanes get the identical five, and
+the reranker picks a different winner in 4 % of them. The reason is structural:
+`to_move` enters the model only as `side_embed(to_move)`, one 64-d vector added
+into the state embedding, and the pick counts already determine whose turn it is
+— so during training the flag was redundant and it carries almost no weight
+(sd of its effect on the logits: 0.05, max 0.17). "Suppose Red were picking
+Jungle" therefore does not produce a Red-specific answer; it produces the best
+Jungle champion on this board. Making it counter-pick aware is a model change
+(an explicit my-team/enemy-team split in the encoder), not a serving change.
 
 
 ### Both slots at once
