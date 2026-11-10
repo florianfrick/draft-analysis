@@ -79,6 +79,10 @@ def parse_args(argv=None):
     p.add_argument("--n-soft", type=int, default=10)
     p.add_argument("--limit-batches", type=int, default=20)
     p.add_argument("--seed", type=int, default=7)
+    p.add_argument("--context", default="soft+text",
+                   choices=["soft+text", "cand"],
+                   help="cand = board hidden, candidate list kept; the block "
+                        "is then the only source of board information")
     return p.parse_args(argv)
 
 
@@ -157,7 +161,7 @@ def main(argv=None):
             hlog = head(batch)["policy_logits"]
             cid, _cp = R.candidates(hlog, args.k)
             cands = [[(int(c), 0.0) for c in row] for row in cid.tolist()]
-            prompt = assemble(tok, samples, names, context="soft+text",
+            prompt = assemble(tok, samples, names, context=args.context,
                               loss_on_eos=False, device=device,
                               prompt_format="v4", candidates=cands)
             keep = R.keep_mask(
@@ -173,7 +177,8 @@ def main(argv=None):
             print("  %d rows" % n, end="\r", flush=True)
 
     model.soft_tokens = original
-    print("\n%d rows, k=%d, %s" % (n, args.k, Path(args.projector).parent.name))
+    print("\n%d rows, k=%d, %s, context=%s"
+          % (n, args.k, Path(args.projector).parent.name, args.context))
     base = hits["normal"] / max(1, n)
     base_row = torch.cat(per_row["normal"])
     for arm in ARMS:

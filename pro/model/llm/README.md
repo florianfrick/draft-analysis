@@ -129,13 +129,53 @@ index all reach the model through the **text**. `zero` is not evidence about
 content - a row of zeros is out of distribution for the trunk - which is why
 `pad` is the arm that answers the question.
 
-Three consequences. The ten-vector prefix can be **one** vector for free, which
-removes the slot-index alignment question entirely (needs the projector
-retrained, one warmup stage). Prompt annotation of the tokens cannot help:
-order is worth 0.25 pp. And anything that has to make the model *reason* about
-the board - user language included - is working against a channel that
-demonstrably under-uses the board's content, so it needs an explicit weight
-rather than a logit shift.
+**It is not redundancy - the block really does not hold the draft.** The
+obvious objection is that the text drowns the block out, and that training
+without the board text would force the block to carry it. `--context cand`
+(board hidden, candidate list kept, so the model can still spell the answer)
+tests exactly that, on the same 320 rows:
+
+| arm | board hidden | | board visible | |
+|---|---|---|---|---|
+| | ft_top1 | delta | ft_top1 | delta |
+| normal | 24.69 % | - | 32.50 % | - |
+| pad | 17.19 % | −7.50 (p=.003) | 27.50 % | −5.00 (p=.009) |
+| shuffle | 23.13 % | −1.56 (p=.41) | 30.94 % | −1.56 (p=.30) |
+| mean | 24.69 % | **+0.00** (p=1.0) | 33.44 % | +0.94 (p=.65) |
+| zero | 19.38 % | −5.31 (p=.08) | 18.75 % | −13.75 (p<.001) |
+
+Two things follow. **The board text is worth 7.8 pp** (32.50 -> 24.69), so the
+text is the board channel and the block is not. And **`shuffle` costs the same
+1.56 pp with the board hidden as with it visible** - if the block were a
+suppressed duplicate of the text, removing the text would make a wrong-board
+block devastating. It does not. The block's board-specific content is worth
+about 1.6 pp *as the only channel*, which is to say it holds a coarse summary
+of the board rather than the board.
+
+`mean` is the sharpest single result: replacing all ten vectors with their own
+average changes nothing, in either context, exactly (10/10 discordant, p=1.0).
+The model uses only the average, so there is no per-slot content to anchor -
+which is why inline-splicing each vector next to its own line (the obvious
+"fix") cannot help yet. You cannot bind ten vectors to ten slots when the model
+reads them as one.
+
+**What would actually put *this* draft in the block.** Not more vectors, and not
+better binding: something the text cannot say. The block carries the encoder's
+*hidden state*, which is a 256-dim summary of ten champions - while the
+distilled draft judgement lives in the **head's posterior** over 173 champions
+(counter-matchup channel included, `counter_rank=32`), and the reranker only
+ever sees its top-5. Projecting the head's distribution into a few extra soft
+tokens is the one change that adds information rather than rearranging it, it is
+cheap (a `Linear(173, d)` on a tensor that is already computed for the
+shortlist), and it makes the reranker's job well-posed: disagree with the head
+*knowing* how confident it is and what it ranked 6th-20th. Two smaller known
+gaps point the same way - the fearless pool never reaches the encoder (next
+section), and the counter channel is policy-side only.
+
+Prompt annotation of the tokens still cannot help, for the better reason above.
+And anything that has to make the model *reason* about the board - user language
+included - is working against a channel that demonstrably under-uses the board's
+content, so it needs an explicit weight rather than a logit shift.
 
 **2. Fearless bans are structurally invisible to the soft prompt.** The encoder
 never receives `unavailable_mask` - it is a policy-stage input, applied as a

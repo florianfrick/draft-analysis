@@ -64,7 +64,7 @@ def parse_args(argv=None):
     p.add_argument("--hidden", type=int, default=1024)
     p.add_argument("--n-soft", type=int, default=10)
     p.add_argument("--context", default="soft+text",
-                   choices=["soft+text", "soft"])
+                   choices=["soft+text", "soft", "cand"])
     p.add_argument("--prompt-format", default=None,
                    choices=["v1", "v2", "v3", "v4"],
                    help="v2 labels the turn and the pick's lane; v1 is the "

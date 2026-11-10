@@ -39,7 +39,7 @@ policy head's 173-way one.
 import torch
 
 from pro.model.llm.common import (ANSWER_PREFIX, IGNORE_INDEX, PHASE_NAMES,
-                              render_state, task_line)
+                              candidates_line, render_state, task_line)
 
 SYSTEM = "You are an expert League of Legends draft engine."
 
@@ -66,6 +66,20 @@ def build_text(sample, names, context="soft+text", answer=None,
     """
     if context == "soft":
         state = ""
+    elif context == "cand":
+        # Board hidden, candidate list kept. The task line still names the side,
+        # the lane and pick-vs-ban, so what the model loses is *which champions
+        # are already on the board* - picks, bans, the fearless pool, the patch.
+        # That is exactly the information the soft block is supposed to carry,
+        # so this is the context in which `normal` vs `shuffle` measures the
+        # block's board-specific content with nothing else able to supply it.
+        # `soft` alone cannot do that: without the candidate list the model
+        # cannot spell the answer, so a collapse there would not be about the
+        # board.
+        if not candidates:
+            raise ValueError("context='cand' needs the candidate list")
+        ids, probs = zip(*candidates)
+        state = candidates_line(names, ids, probs)
     else:
         state = render_state(sample, names, prompt_format=prompt_format,
                              candidates=candidates)
