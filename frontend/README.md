@@ -500,6 +500,47 @@ Three states matter:
   `flex` styling on a pick badge is a post-hoc annotation (runner-up role
   ≥ 15%), not a class the model predicts.
 
+#### Why the role board keeps its own model (2026-11-10)
+
+The obvious simplification — drop the masking checkpoint and let the reranker
+fill the board — does not work. `python frontend/probe_roleboard.py 400` scores
+it against the two alternatives on 400 held-out games; the target for every
+cell is the champion that team actually fielded in that lane, and the number is
+whether it is the top-1 / in the top-5:
+
+| arm | 6 bans, no picks | 6 bans + 6 picks | 10 bans + 6 picks |
+|---|---|---|---|
+| masked board (shipped) | 6.4 % / 30.0 % | 7.8 % / **37.1 %** | 9.4 % / 40.6 % |
+| per-lane popularity table | **8.9 % / 33.4 %** | 9.5 % / 34.6 % | 10.5 % / 37.4 % |
+| next-move head, lane-masked | 3.6 % / 17.3 % | — | 12.1 % / 42.6 % |
+| ↳ same head, lanes it is *not* picking | 1.9 % / 17.4 % | — | 7.8 % / 31.5 % |
+| ↳ masked board, same cells | 5.8 % / 29.6 % | — | 7.5 % / 35.0 % |
+| uniform over the lane's legal pool | 0 % / 11.5 % | 0 % / 11.3 % | 0 % / 11.8 % |
+
+Three independent reasons the reranker cannot take the slot:
+
+1. **A reranker ranks; it does not generate.** Every cell needs a shortlist
+   first, and the only generator is the head — so "just the rerank model" is
+   still two models, one of them the thing it was supposed to replace.
+2. **The head only answers for the side on the clock.** `move_plan` returns one
+   `(kind, team)` per move index, so five of the ten cells have no valid input
+   at all. Its 42.6 % is not a counterfactual number either: on the lanes that
+   side is *not* picking now it drops to 31.5 %, **below** the masked board's
+   35.0 % on the same cells. It wins only on the single lane it is actually
+   picking (53.7 %), which is the next-move panel's question, not this one.
+3. **Latency.** Ten lane queries is ten LLM passes (~4.5 s at 0.45 s each), or a
+   50-row batch on the card that had to train at batch 2. The board is
+   recomputed on every click and takes 11 ms.
+
+What the same run does say, and is worth knowing before trusting the panel: the
+masking model is **+2.5 to +3.2 pp top-5 over a static table once picks are on
+the board, and −3.4 pp at the empty board**, where the table's single
+most-picked champion is a better first chip. So it does real but modest work —
+it is a prior with a little context, not a decision model. And role
+*inference* no longer needs it at all: `lanes.assign_lanes` decides `role_ids`
+from the champion table (96 % agreement with real drafts, against the role
+head's 67 %).
+
 ### Both slots at once
 
 - **Walkthrough of real games**: the "Real draft" bar lists the 46.6k pro
