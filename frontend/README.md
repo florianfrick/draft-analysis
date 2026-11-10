@@ -105,6 +105,12 @@ board, the head as next move — works exactly as before without any of this.
 | one request, steady state | ms | **0.7 s** |
 | startup | instant | ~107 s (27 s load + 58 s kernel warmup) |
 
+Both numbers were measured on the 478-game `common` split, which has since been
+retired: it turned out to be 92.3 % inside the shipped head's *train* (a
+`seed=0` in `pro/model/llm/common.SPLIT` drew a second random 10 % instead of
+reusing the head's). On the shared val the ceiling is **50.51 %** over 4,763
+games, and the reranker needs re-scoring there — see `pro/model/llm/README.md`.
+
 It also needs CUDA: 4.2 B in 4-bit is ~4.5 GB of VRAM, and a CPU forward pass
 takes minutes — so `serve.sh` passes `--device cuda`, and the head fallback is
 not something you can wait out.

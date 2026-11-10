@@ -48,7 +48,15 @@ BASELINE_VAL = {  # nextpick-proonly-randomvalsplit-.../test_report.json
 
 # Split, identical to the encoder's own run (solo_queue/model/policy/train.py defaults for
 # the -randomvalsplit- pair): 10% of every patch drawn at random per patch.
-SPLIT = dict(val_frac=0.10, test_frac=0.0, val_random=True, seed=0)
+#
+# `seed` is deliberately NOT passed. `split_within_patch` defaults it to
+# `pipeline.VAL_SPLIT_SEED`, which is the seed the encoder and the head drew
+# with; passing `seed=0` here drew a *second, independent* 10% per patch, and
+# two independent 10% draws of the same corpus overlap on ~1% of it - i.e. 90%
+# of the LLM's val sat inside the head's train. That coincidence is what
+# `_split_overlap.py` used to report as a protocol difference and what shrank
+# every cross-model comparison to a 478-game intersection. One seed, one split.
+SPLIT = dict(val_frac=0.10, test_frac=0.0, val_random=True)
 
 N_SLOTS = 10
 TEAM_SIZE = 5

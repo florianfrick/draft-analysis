@@ -102,9 +102,11 @@ def parse_args(argv=None):
                    help="reranker only: usable moves drawn per game per epoch")
     p.add_argument("--head", default=str(R.HEAD_CKPT))
     p.add_argument("--val-split", default="llmval",
-                   choices=["common", "llmval", "headheld"],
-                   help="common = the 478 games held out from both models, "
-                        "the only set a cross-model number can use")
+                   choices=["llmval", "heldout", "rr"],
+                   help="llmval = the shared val, subsampled by --val-games "
+                        "(fast, same games as the head's val); heldout = the "
+                        "same games, all 95,260 states; rr = the reranker's "
+                        "eval half")
     return p.parse_args(argv)
 
 
@@ -117,7 +119,7 @@ def main(argv=None):
                          "list is what the answer is constrained to")
     if args.rerank and not args.pairs:
         raise SystemExit("--rerank needs --pairs (rerank --build-pairs "
-                         "--split common --build-pairs <path>)")
+                         "--split rr --build-pairs <path>)")
     # Resolved before anything is built: the adapter has to be attached at
     # construction time, and the optimizer is created from the module it
     # attaches to, so a resume that arrives later would restore Adam moments

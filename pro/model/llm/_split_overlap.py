@@ -1,19 +1,32 @@
-"""Is the LLM's val set actually held out *from the policy head*?
+"""Do the two tracks actually hold the same games out?
 
     python -m pro.model.llm._split_overlap
 
-The two tracks split the corpus with the same function but different flags:
-the head trains on `split_within_patch(val_frac=.1, test_frac=.1,
-val_random=False)` (train = the *head* of each patch), the LLM on
-`split_within_patch(val_frac=.1, test_frac=0, val_random=True)` (train = a
-random 90 % of each patch). Both are legitimate, but they are not the same
-partition, so the LLM's val rows are not automatically held out from the head.
+The project believed for months that the head and the LLM split the corpus
+differently - that the head trained on the *head* of every patch
+(`val_random=False`) while the LLM trained on a random 90 %
+(`val_random=True`), so that 89.9 % of the LLM's val was inside the head's
+train. That number gated every cross-model claim: it shrank the honest
+comparison set to a 478-game intersection, it made the reranker train on a
+4,303-game pool, and it is quoted in `rerank.py` and in STATUS.
 
-That matters for one specific claim: "the LLM's 19.13 % clears the head's
-18.32 %". If most of the LLM's val rows were in the head's train, scoring the
-head there would measure memorisation, and the two numbers would not be
-comparable at all. This prints the overlap, and the intersection that is
-honest for both.
+It was wrong. The shipped head trained with `--val-split random --no-test`
+(`pro/model/bans/probe.py` defaults; its checkpoint records `test: skipped
+(--no-test)` and `init_ckpt = masking-proonly-randomvalsplit-*`), which is the
+same `val_frac=0.10, val_random=True` the LLM uses. This script prints both
+readings side by side so the correction is auditable rather than asserted.
+
+What to expect (46,915-draft corpus, game granularity):
+
+    head, real flags      train 42,153  val 4,762  test 0
+    llm, its SPLIT        train 42,145  val 4,763  test 7
+    LLM val inside the real head's train      14 / 4,763 = 0.3 %
+    LLM val inside the *assumed* head's train 4,304 / 4,763 = 90.4 %
+
+The 0.3 % is the pinned test series' patch, not leakage: the head run passed
+`--no-test`, so its val draw had 7 more games to choose from than the LLM's.
+A retrain that keeps `pinned_test=TEST_SERIES` on both sides makes the two val
+sets identical, which `test_rerank.py` now pins.
 """
 import sys
 
@@ -29,42 +42,50 @@ def main():
     rows = C.load_rows("2022")
     llm = C.split_rows(rows)
 
-    # The head's split, with the flags its checkpoints were trained with
-    # (`pro/model/bans/probe.py` defaults: within-patch, val=tail, test=tail).
-    head = PC.PRO_PIPE.split_within_patch(
+    # The head's real flags: random val, no test tail.
+    real = PC.PRO_PIPE.split_within_patch(
+        rows, val_frac=0.10, test_frac=0.0, min_patch_rows=40,
+        pinned_test=(), strict_pin=True, verbose=False, val_random=True)
+    # The flags this file used to assume, kept so the old number is
+    # reproducible and can be retired explicitly rather than forgotten.
+    assumed = PC.PRO_PIPE.split_within_patch(
         rows, val_frac=0.10, test_frac=0.10, min_patch_rows=40,
         pinned_test=PC.PRO_PIPE.TEST_SERIES, strict_pin=True, verbose=False,
         val_random=False)
 
-    g_llm = {"train": game_ids(rows, llm["train"]),
-             "val": game_ids(rows, llm["val"]),
-             "test": game_ids(rows, llm["test"])}
-    g_head = {"train": game_ids(rows, head["train"]),
-              "val": game_ids(rows, head["val"]),
-              "test": game_ids(rows, head["test"])}
+    g = {"llm": {p: game_ids(rows, llm[p]) for p in llm},
+         "real": {p: game_ids(rows, real[p]) for p in real},
+         "assumed": {p: game_ids(rows, assumed[p]) for p in assumed}}
 
-    print("games: llm %d/%d/%d  head %d/%d/%d"
-          % (len(g_llm["train"]), len(g_llm["val"]), len(g_llm["test"]),
-             len(g_head["train"]), len(g_head["val"]), len(g_head["test"])))
+    for name in ("llm", "real", "assumed"):
+        print("%-8s games train %6d  val %5d  test %d"
+              % (name, len(g[name]["train"]), len(g[name]["val"]),
+                 len(g[name]["test"])))
     print()
-    print("LLM val games by where the head put them:")
-    for part in ("train", "val", "test"):
-        n = len(g_llm["val"] & g_head[part])
-        print("  head %-5s %6d  %5.1f %%"
-              % (part, n, 100.0 * n / max(1, len(g_llm["val"]))))
+
+    n = len(g["llm"]["val"])
+    for name in ("real", "assumed"):
+        hit = len(g["llm"]["val"] & g[name]["train"])
+        print("LLM val inside the %-8s head's train: %5d / %d = %5.1f %%"
+              % (name, hit, n, 100.0 * hit / max(1, n)))
     print()
-    common = g_llm["val"] & (g_head["val"] | g_head["test"])
-    print("common held-out (LLM val AND head val/test): %d games (%.1f %% of "
-          "the LLM's val)" % (len(common),
-                              100.0 * len(common) / max(1, len(g_llm["val"]))))
-    print("LLM train games the head also trained on: %d (%.1f %% of LLM train)"
-          % (len(g_llm["train"] & g_head["train"]),
-             100.0 * len(g_llm["train"] & g_head["train"])
-             / max(1, len(g_llm["train"]))))
-    if common:
-        print()
-        print("=> score BOTH models on the %d common games, not on either "
-              "track's own val" % len(common))
+    print("common held-out set, real flags   : %d games / %d states"
+          % (len(g["llm"]["val"] & (g["real"]["val"] | g["real"]["test"])),
+             20 * len(g["llm"]["val"] & (g["real"]["val"] | g["real"]["test"]))))
+    print("common held-out set, old assumption: %d games / %d states"
+          % (len(g["llm"]["val"] & (g["assumed"]["val"] | g["assumed"]["test"])),
+             20 * len(g["llm"]["val"] & (g["assumed"]["val"] | g["assumed"]["test"]))))
+    print()
+    print("reranker pool (`headheld`, the assumed val) that the real head "
+          "trained on: %d / %d = %.1f %%"
+          % (len((g["assumed"]["val"] | g["assumed"]["test"]) & g["real"]["train"]),
+             len(g["assumed"]["val"] | g["assumed"]["test"]),
+             100.0 * len((g["assumed"]["val"] | g["assumed"]["test"])
+                         & g["real"]["train"])
+             / len(g["assumed"]["val"] | g["assumed"]["test"])))
+    print()
+    print("=> there is one split. Score on `--split heldout` (%d games) or "
+          "`--split rr`." % n)
     return 0
 
 

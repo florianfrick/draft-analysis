@@ -1,7 +1,7 @@
-"""The reranker's two numbers, and the splits that make them honest.
+"""The reranker's two numbers, and the split that makes them honest.
 
-    python -m pro.model.llm.rerank --split common
-    python -m pro.model.llm.rerank --split headheld --k 1,3,5,10,20
+    python -m pro.model.llm.rerank --split heldout --k 1,3,5,10,20
+    python -m pro.model.llm.rerank --split rr
 
 A reranker over the next-pick head's candidates cannot score better than
 **recall@k** - the share of rows whose true answer is in the list it is given.
@@ -9,31 +9,35 @@ That is the ceiling, and it is also the share of rows that can be trained on at
 all: a row whose answer is not in the list has nothing to learn. So recall@k is
 measured before anything is trained, not after.
 
-The splits, and why `common` is the only one usable for a cross-model claim:
+**There is one split.** `C.split_rows` is the only partition in the project:
+the head's trainer, both LLM stages and this file all read the same
+`split_within_patch` call, so the head's val *is* the LLM's val and one number
+can be quoted against the other. This file used to reconstruct the head's split
+from `val_frac=.1, test_frac=.1, val_random=False` on the theory that the head
+trained on the *head* of every patch; the shipped head actually trained with
+`--val-split random --no-test` (its checkpoint records `test: skipped
+(--no-test)` and was initialised from `masking-proonly-randomvalsplit-*`).
+Under the wrong reconstruction 90.4 % of the LLM's val looked like head-train;
+under the real one it is **0.3 %** (14 of 4,763 games). See
+`_split_overlap.py`, which now prints both.
 
-`split_within_patch` is shared, but the two tracks call it with different flags.
-The head trains on `val_frac=.1, test_frac=.1, val_random=False` -> train is the
-*head* of every patch. The LLM trains on `val_frac=.1, test_frac=0,
-val_random=True` -> train is a random 90 % of every patch. **Measured
-(`_split_overlap.py`): 89.9 % of the LLM's val games are in the head's train
-set.** Scoring the head there would measure memorisation, so:
+Consequences, and the reason `common` is gone:
 
-  common    478 games = LLM val AND head val/test. The only set held out from
-            both models. 9,560 states, SE 0.4 pp at a 19 % top-1 - better
-            powered than the 4,000-state val the LLM reports on.
-  headheld  4,781 games = head val/test. Held out from the *head*, so the
-            candidate lists behave the way they will at serving. This is the
-            reranker's training pool; the `common` games are removed from it so
-            the eval is not in-sample.
-  llmval    the LLM's own 4,746 games. Only valid for LLM-vs-LLM comparisons
-            (the finetune curve), never against the head.
+  heldout   eval on the whole shared val, no training rows - 4,763 games /
+            95,260 states. The ceiling measurement, and the honest
+            cross-model set. SE ~0.15 pp at a 35 % top-1.
+  rr        the shared val cut in half by game: 2,381 games train the
+            reranker, 2,382 evaluate it. Both halves are held out from the
+            head, so the candidate lists look like serving on *both* sides -
+            which the old pool did not (90.5 % of `headheld` was head-train).
 
-Caveat on `common`: the head's `best.pt` was *selected* on its val, so head-val
-is mildly optimistic as a held-out set. Unavoidable without retraining the head
+Caveat either way: the head's `best.pt` was *selected* on its val, so val is
+mildly optimistic as a held-out set. Unavoidable without retraining the head
 with a separate selection split; noted rather than corrected.
 """
 import argparse
 import json
+import random
 from pathlib import Path
 
 import torch
@@ -45,6 +49,10 @@ from pro.model.proonly import common as PC
 
 HEAD_CKPT = C.CKPT_DIR / "nextpick-bans-aware-through-wlds-ig-tes" / "best.pt"
 SPLIT_JSON = C.CKPT_DIR / "llm-rerank-splits.json"
+# The reranker's own train/eval cut of the shared val. A module constant for
+# the same reason `VAL_SPLIT_SEED` is one: two invocations must not disagree
+# about which half a game is on.
+RR_SPLIT_SEED = 20261105
 
 
 def load_head(ckpt, device):
@@ -81,31 +89,53 @@ def load_head(ckpt, device):
 
 
 def head_split(rows):
-    """The head's own within-patch split, with the flags it trained with."""
-    return PC.PRO_PIPE.split_within_patch(
-        rows, val_frac=0.10, test_frac=0.10, min_patch_rows=40,
-        pinned_test=PC.PRO_PIPE.TEST_SERIES, strict_pin=True, verbose=False,
-        val_random=False)
+    """The shared split - the one partition every stage trains and scores on.
+
+    Deliberately *not* a reconstruction from flags: a second call to
+    `split_within_patch` with guessed flags is how this file spent months
+    scoring a 478-game sliver. Read it from `C.SPLIT` and the tracks cannot
+    drift.
+
+    The shipped head's own run differs in one flag: it passed `--no-test`, so
+    it had no pinned test tail and drew its val from a 7-game-larger pool.
+    That moves 14 of 4,763 games (0.3 %) into its train - negligible here, and
+    exactly zero after a retrain that keeps `pinned_test=TEST_SERIES`, which
+    `test_rerank.py` pins as identical across the three parts.
+    """
+    return C.split_rows(rows)
 
 
-def split_games(rows, which="common"):
+def _rr_halves(games, seed=RR_SPLIT_SEED):
+    """Deterministic 50/50 cut of the shared val, at game granularity."""
+    games = sorted(games)
+    rng = random.Random(seed)
+    rng.shuffle(games)
+    half = len(games) // 2
+    return set(games[:half]), set(games[half:])
+
+
+def split_games(rows, which="rr"):
     """-> (train indices, eval indices) as indices into `rows`.
 
     Returned at *game* granularity: the dataset expands each game to its 20
     prefixes, so keeping games whole is what stops a game's prefixes straddling
     the two sides.
+
+      rr        half the shared val trains, half evaluates (see module doc)
+      heldout   no train rows; the whole shared val is the eval. Ceiling only.
     """
-    llm = C.split_rows(rows)
-    head = head_split(rows)
-    llm_val = {rows[i]["gameid"] for i in llm["val"]}
-    head_held = {rows[i]["gameid"] for i in head["val"] + head["test"]}
-    common = llm_val & head_held
-    if which == "common":
-        train, evalg = head_held - common, common
-    elif which == "headheld":
-        train, evalg = set(), head_held
-    elif which == "llmval":
-        train, evalg = set(), llm_val
+    split = head_split(rows)
+    val_games = {rows[i]["gameid"] for i in split["val"]}
+    if which == "rr":
+        train, evalg = _rr_halves(val_games)
+    elif which == "heldout":
+        train, evalg = set(), val_games
+    elif which in ("common", "headheld", "llmval"):
+        raise SystemExit(
+            "--split %s is retired: it came from reconstructing the head's "
+            "split with val_random=False, which the shipped head never used. "
+            "Use --split rr (train + eval) or --split heldout (ceiling only)."
+            % which)
     else:
         raise SystemExit("unknown split %r" % which)
     keep = train | evalg
@@ -238,8 +268,7 @@ def build_pairs(rows, game_idx, patch_index, head, device, k,
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--ckpt", default=str(HEAD_CKPT))
-    ap.add_argument("--split", default="common",
-                    choices=("common", "headheld", "llmval"))
+    ap.add_argument("--split", default="heldout", choices=("rr", "heldout"))
     ap.add_argument("--k", default="1,3,5,10,20")
     ap.add_argument("--corpus", default="2022", choices=("2022", "all"))
     ap.add_argument("--batch-size", type=int, default=256)
@@ -294,8 +323,9 @@ def main(argv=None):
 
     if args.build_pairs:
         if not train_idx:
-            raise SystemExit("--build-pairs needs a training pool; --split "
-                             "common gives one (head-held minus the eval games)")
+            raise SystemExit("--build-pairs needs a training pool; --split rr "
+                             "gives one (half the shared val, held out from "
+                             "the head). --split heldout has none.")
         pairs, n = build_pairs(rows, train_idx, patch_index, model, device,
                                args.pair_k)
         out = {"k": args.pair_k, "split": args.split, "n_rows": n,
@@ -311,8 +341,8 @@ def main(argv=None):
     if args.dump_splits:
         SPLIT_JSON.parent.mkdir(parents=True, exist_ok=True)
         SPLIT_JSON.write_text(json.dumps(
-            {"common": split_games(rows, "common"),
-             "headheld": split_games(rows, "headheld")}, indent=0))
+            {"rr": split_games(rows, "rr"),
+             "heldout": split_games(rows, "heldout")}, indent=0))
         print("\nwrote %s" % SPLIT_JSON)
     if args.json:
         p = Path(args.json)

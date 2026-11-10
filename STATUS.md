@@ -233,6 +233,38 @@ selection signal large enough to be stable (8,053 masked slots instead of 78,
 where the difference between the chosen epoch and the plateau was inside the
 noise).
 
+**One split, and the seed was the whole bug.** The LLM track meant to reuse
+this draw and passed `seed=0` to `split_within_patch`, which overrides
+`VAL_SPLIT_SEED` — so it drew a *second, independent* 10% per patch. Two
+independent 10% draws of one corpus overlap on ~1% of it, which is 90% of a val:
+**90.0% of the LLM's val was inside the head's train**, and that was recorded as
+a difference in `val_random` (the head was assumed to use `val_random=False`;
+it does not — the shipped checkpoints record `test: skipped (--no-test)` and
+`init_ckpt = masking-proonly-randomvalsplit-*`). Dropping `seed=0` from
+`pro/model/llm/common.SPLIT` takes the overlap to **0.3%** (14 of 4,763 games),
+and that residue is only the 7 pinned test games the head's `--no-test` run did
+not remove. With the pin kept on both sides the three lists are identical
+(`test_rerank.py::test_the_three_stages_split_the_corpus_identically`).
+
+Consequences, all measured on 46,915 drafts:
+
+| | games | states | what it is |
+|---|---|---|---|
+| shared train | 42,145 | — | encoder, policy head, LLM stage 1 and 2 |
+| shared val (`--split heldout`) | 4,763 | 95,260 | every cross-model number |
+| pinned test | 7 | 140 | three Worlds series, held out of everything |
+| reranker (`--split rr`) | 2,381 / 2,382 | — | half the val trains, half evaluates |
+
+The head's recall@5 on that val is **50.51%** (18.44% top-1, 58.27% picks /
+42.75% bans), which retires the 51.85% ceiling measured on the old 478-game
+`common` — that set was 92.3% inside the shipped head's train. The correction is
+small (+1.3 pp) because the head barely memorised its own train, but it moves
+every ratio that quoted 51.85%, including the reranker's 35.31% (69.9% of the
+ceiling, pending re-scoring on `heldout`). The reranker's old pool was worse
+than its eval: `headheld - common` was 90.3% head-train, so it trained on
+candidate lists the head had memorised and scored itself on clean ones. `rr`
+puts both sides at serving difficulty.
+
 ---
 
 ## 4. Results, earlier runs

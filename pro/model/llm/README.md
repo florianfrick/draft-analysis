@@ -454,16 +454,23 @@ two numbers, which this file carried before 2026-11-09, compared a
 partly-memorised set with a held-out one - see the split problem below. The
 honest statement is that the two channels are level.)
 
-**The ceiling, on the only set held out from both models** (478 games, 9,560
-states - see the split problem below):
+**The ceiling, on the shared val** (4,763 games, 95,260 states - `rerank.py
+--split heldout`, `eval_heldout_ceiling.json`):
 
 | | top-1 | top-3 | top-5 | top-10 | top-20 |
 |---|---|---|---|---|---|
-| all | 19.14 % | 39.70 % | **51.85 %** | 69.32 % | 85.18 % |
-| picks (n=4,780) | 22.34 % | 45.71 % | 59.29 % | 76.21 % | 89.29 % |
-| bans (n=4,780) | 15.94 % | 33.68 % | 44.41 % | 62.43 % | 81.07 % |
+| all | 18.44 % | 38.07 % | **50.51 %** | 68.36 % | 84.34 % |
+| picks (n=47,630) | 22.59 % | 45.02 % | 58.27 % | 75.51 % | 88.85 % |
+| bans (n=47,630) | 14.29 % | 31.11 % | 42.75 % | 61.21 % | 79.82 % |
 
-A perfect reranker at k=5 scores 51.85 %, against the 19.13 % the channel
+The old table (51.85 % / 59.29 / 44.41 on the 478-game `common`) is retired:
+that set was 92.3 % inside the shipped head's *train*, so both its ceiling and
+the 35.31 % measured against it were mildly optimistic. The correction is
+small - +1.3 pp of ceiling - because the head barely memorised its own train
+(its own val top-5 is 49.95 % on 95,160 states), but the honest number is the
+one above.
+
+A perfect reranker at k=5 scores 50.51 %, against the 18.44 % the channel
 reaches alone. The other half of the corpus is untouchable at that k, which is
 the whole argument for choosing k against this table rather than by taste.
 
@@ -487,36 +494,44 @@ instead of emitting an index, so names stay.
 
 The remaining 20 pp to the ceiling is what the reranker is trained for.
 
-### The split problem, which invalidates the obvious comparison
+### The split problem, which was a seed, not a protocol
 
-`split_within_patch` is shared, but the two tracks call it with different
-flags: the head trains on `val_frac=.1, test_frac=.1, val_random=False` (train
-= the *head* of each patch), the LLM on `val_frac=.1, test_frac=0,
-val_random=True` (train = a random 90 % of each patch). **Measured
-(`_split_overlap.py`): 89.9 % of the LLM's val games are in the head's training
-set**, and 89.8 % of the LLM's train is in the head's train.
+`split_within_patch` is shared and the two tracks *meant* to call it the same
+way, but `common.SPLIT` passed `seed=0` while the head used the function's
+default `pipeline.VAL_SPLIT_SEED`. Two independent 10 % draws of the same
+corpus overlap on ~1 % of it, so **90 % of the LLM's val games sat inside the
+head's training set** - measured (`_split_overlap.py`) and recorded here for
+months as a difference in `val_random`.
 
-So the LLM's own val is useless for a cross-model claim - scoring the head
-there measures memorisation, and it would flatter the head, not the LLM. Three
-sets follow, and only one is usable:
+It was not. The shipped head trained with `--val-split random --no-test`
+(`pro/model/bans/probe.py` defaults; the checkpoint records `test: skipped
+(--no-test)` and `init_ckpt = masking-proonly-randomvalsplit-*`), which is the
+same `val_frac=0.10, val_random=True` the LLM uses. Dropping `seed=0` from
+`SPLIT` makes the two partitions identical: **0.3 %** of the LLM's val is in
+the head's train (14 of 4,763 games), and that residue is only the 7 pinned
+test games the head's `--no-test` run did not remove. A retrain that keeps the
+pinned tail on both sides makes train/val/test bit-for-bit identical, which
+`test_rerank.py` now asserts.
+
+So there is one split and one comparison set:
 
 | split | games | what it is | valid for |
 |---|---|---|---|
-| `llmval` | 4,746 | the LLM's own val | LLM vs LLM only (the finetune curve) |
-| `headheld` | 4,781 | head val+test | the head's candidate lists at serving quality |
-| `common` | 478 | `llmval ∩ headheld` | **any** cross-model number |
+| `heldout` | 4,763 | the shared val, no training rows | **any** cross-model number; the recall@k ceiling |
+| `rr` | 2,381 / 2,382 | the shared val cut in half by game | training *and* evaluating the reranker |
 
-`common` is 9,560 states - SE 0.4 pp at a 19 % top-1, i.e. better powered than
-the 4,000-state val every earlier number in this file was measured on. One
-caveat: the head's `best.pt` was *selected* on head-val, so `common` is mildly
-optimistic for the head. Noted, not corrected - fixing it means retraining the
-head with a separate selection split.
+`heldout` is 95,260 states - SE ~0.15 pp at a 35 % top-1. One caveat: the
+head's `best.pt` was *selected* on this val, so it is mildly optimistic as a
+held-out set for the head. Noted, not corrected - fixing it means retraining
+the head with a separate selection split.
 
-The reranker's training pool is `headheld` **minus** `common`: 4,303 games. It
-has to be head-held-out or the candidate lists are unrealistically good (the
-head's in-sample top-5 is far above 51.85 %), which would teach the model to
-trust a shortlist that at serving is wrong half the time. And it must exclude
-`common` or the eval is in-sample.
+`rr` exists because the old pool was contaminated. It trained on `headheld`
+minus `common`, and **90.5 % of `headheld` was in the real head's train**, so
+the reranker learned from candidate lists the head had memorised and then
+scored itself on clean ones. Training and evaluating on halves of the shared
+val puts both sides at serving difficulty. The 35.31 % below was measured on
+the old 478-game `common`, which *is* clean, so the number stands - it is just
+underpowered, and the pool that produced it was the wrong one.
 
 ### The prompt (v4)
 
@@ -658,7 +673,7 @@ reranker should be an optional path rather than a replacement for the head.
 | `audit_targets.py` | target distribution per move (is the val sample degenerate) |
 | `audit_eyeball.py` | one game's 20 predictions next to their targets |
 | `rerank.py` | head loader, `split_games`, `candidates`, `keep_mask`, `build_pairs`, recall@k |
-| `_split_overlap.py` | how much the LLM's val overlaps the head's train (the 89.9 % finding) |
+| `_split_overlap.py` | whether the two tracks hold the same games out (they do: 0.3 %, and that is the pinned test tail) |
 | `test_llm_prompt.py` | contract tests for the splice and the prompt formats (14, CPU only) |
 | `test_rerank.py` | contract tests for the candidate list, the split and the pair builder (10) |
 

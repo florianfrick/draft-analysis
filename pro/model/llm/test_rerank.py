@@ -103,15 +103,44 @@ class _TargetHead:
         return {"policy_logits": logits}
 
 
-def test_common_split_is_disjoint_and_is_held_out_from_both():
-    """The one invariant every cross-model number rests on."""
+def test_the_three_stages_split_the_corpus_identically():
+    """One split, so a head number and an LLM number are about the same games.
+
+    This is the invariant the whole cross-model record rests on, and it was
+    broken for months by a single `seed=0` in `common.SPLIT`: the LLM drew its
+    own random 10% per patch instead of reusing `VAL_SPLIT_SEED`, so 90% of its
+    val sat inside the head's train and every comparison shrank to a 478-game
+    intersection. The head's trainer and the LLM must therefore produce the
+    same three lists from the same rows, bit for bit.
+    """
     rows = C.load_rows()
-    train_idx, eval_idx = R.split_games(rows, "common")
+    llm = C.split_rows(rows)
+    head = R.head_split(rows)
+    for part in ("train", "val", "test"):
+        assert llm[part] == head[part], "the %s lists differ" % part
+    assert head["test"], "the pinned test series must survive the split"
+
+
+def test_rr_split_keeps_games_whole_and_disjoint():
+    rows = C.load_rows()
+    train_idx, eval_idx = R.split_games(rows, "rr")
     assert train_idx and eval_idx
     assert not (set(train_idx) & set(eval_idx))
-    llm_val = {rows[i]["gameid"] for i in C.split_rows(rows)["val"]}
-    head = R.head_split(rows)
-    head_held = {rows[i]["gameid"] for i in head["val"] + head["test"]}
-    common = {rows[i]["gameid"] for i in eval_idx}
-    assert common <= (llm_val & head_held)
-    assert not (common & {rows[i]["gameid"] for i in head["train"]})
+    val = {rows[i]["gameid"] for i in R.head_split(rows)["val"]}
+    assert {rows[i]["gameid"] for i in train_idx} | \
+        {rows[i]["gameid"] for i in eval_idx} == val
+    assert abs(len(train_idx) - len(eval_idx)) <= 1
+
+
+def test_heldout_split_has_no_training_rows():
+    rows = C.load_rows()
+    train_idx, eval_idx = R.split_games(rows, "heldout")
+    assert train_idx == []
+    assert len(eval_idx) == len(R.head_split(rows)["val"])
+
+
+def test_the_retired_split_names_say_why_they_are_gone():
+    rows = C.load_rows()
+    for name in ("common", "headheld", "llmval"):
+        with pytest.raises(SystemExit):
+            R.split_games(rows, name)

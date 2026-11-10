@@ -50,10 +50,11 @@ def parse_args(argv=None):
                    help="LoRA adapter dir (stage 2); empty = frozen LLM")
     p.add_argument("--corpus", default="2022", choices=["2022", "all"])
     p.add_argument("--split", default="llmval",
-                   choices=["llmval", "common", "headheld"],
-                   help="llmval = the LLM track's own val (only valid for "
-                        "LLM-vs-LLM numbers); common = the 478 games held out "
-                        "from BOTH models, the only cross-model set")
+                   choices=["llmval", "heldout", "rr"],
+                   help="llmval = the shared val, subsampled by --val-games; "
+                        "heldout = the same games, all states; rr = the "
+                        "reranker's eval half. All three are held out from "
+                        "the head, so all three carry cross-model numbers")
     p.add_argument("--val-games", type=int, default=200)
     p.add_argument("--rerank", type=int, default=0,
                    help="K > 0 restricts the answer to the next-pick head's "
