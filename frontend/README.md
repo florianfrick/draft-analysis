@@ -541,6 +541,62 @@ it is a prior with a little context, not a decision model. And role
 from the champion table (96 % agreement with real drafts, against the role
 head's 67 %).
 
+#### Zero-shot generation, tried and measured (2026-11-10)
+
+The other way to drop a checkpoint is to let the LLM answer the cell directly,
+with no shortlist. It is the **v2 prompt — the one the base model was trained
+to answer** — with only the target cell changed, so nothing new has to be
+rendered:
+
+```
+<|im_start|>system
+You are an expert League of Legends draft engine.<|im_end|>
+<|im_start|>user
+<10 encoder soft tokens>
+Patch: 16.20 | Turn: Blue 4 (Pick 7 of 10)
+Blue Picks: Dr. Mundo (Top), Jarvan IV (Jungle), Aphelios (Bot)
+Red Picks: Aurora (Top), Viego (Jungle), Yone (Mid)
+Blue Bans: Renata Glasc, Lucian, Naafiri, Ziggs, Draven
+Red Bans: Vladimir, Caitlyn, Jayce, Viktor, Lulu
+Task: Recommend the optimal Blue Side pick for Mid lane. Answer with champion name only.
+Answer:
+```
+
+The turn line is rebuilt so the asked-for side is the side on the clock: the
+role board is a counterfactual, and the model has only ever seen a state where
+the side being asked about is the one picking. `pro/model/llm/probe_roleboard_gen.py`
+runs it two ways — greedy generation, and a readout of the model's own
+next-token distribution at `Answer:` (the `ft_top*` mechanism, no decoding):
+
+| arm | top-1 | top-5 | per board |
+|---|---|---|---|
+| masked board | 9.4 % | **40.6 %** | 11 ms |
+| per-lane popularity table | **10.5 %** | 37.4 % | ~0 ms |
+| LLM readout, `llm-lora-rerank5` | 9.4 % | 34.3 % | 0.9 s |
+| LLM readout, `llm-lora-full2` | 8.7 % | 29.4 % | 1.3 s |
+| LLM generation, `llm-lora-rerank5` | 7.2 % | one name | 0.6 s/cell |
+| LLM generation, `llm-lora-full2` | 7.9 % | one name | 0.7 s/cell |
+
+Same board (10 bans + 6 picks); 80 games for the readout rows, 40 for
+generation, so cross-row differences under ~4 pp are not resolvable. It answers,
+and every generation was a real champion name — it is just not better, and it is
+60–120× slower. Two reasons that are structural rather than tuning:
+
+* **Generation returns one name, not five.** A cell shows a top-1 plus two
+  alternatives; five samples per cell is five times the cost, and greedy decode
+  cannot produce a ranking at all.
+* **The readout is limited by the tokenizer, not by the model.** Its top-5
+  *first tokens* contain the answer 45–51 % of the time, but 24 collision groups
+  cover 61 of the 173 names, so expanding five groups and keeping five names
+  drops that to 29–34 %. The masked model's champion head is 173-way in one
+  step and does not have this problem.
+
+One artefact worth knowing if this is ever revisited: the rerank adapter does
+not stop after the name — it never learned `<|im_end|>` (`loss_on_eos=False` in
+training), so the raw output runs on into `Blue Picks:` and the name has to be
+parsed off the front.
+
+
 ### Both slots at once
 
 - **Walkthrough of real games**: the "Real draft" bar lists the 46.6k pro
