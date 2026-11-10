@@ -383,8 +383,8 @@ role board, not instead of it.
 
 `POST /api/explain` takes the same body as `/api/next-move` and adds three
 things on top of the top-k: **comparable boards from the pro corpus**, **the
-patch notes for the candidates**, and — if `LLM_API_KEY` is set — **prose that
-must cite one of those two**.
+patch notes for the candidates**, and **an explanation composed from the
+model's own numbers**. No API key, no network.
 
 ```bash
 curl -s localhost:8777/api/explain -H 'Content-Type: application/json' \
@@ -403,41 +403,65 @@ curl -s localhost:8777/api/explain -H 'Content-Type: application/json' \
   draft-relevant subset. **That corpus is local only** — it is git-ignored and
   a fresh clone does not have it (see `.gitignore`; the evidence against it as
   a training signal is in `STATUS.md` §6). With the corpus present the
-  explanation can cite patch changes; without it `patch.available` is `false`,
-  the prompt tells the model not to claim anything about patch changes, and
-  everything else — retrieval, validation, the endpoint — works unchanged.
+  explanation can cite patch changes; without it `patch.available` is `false`
+  and nothing claims anything about patch changes.
   `patch` in the body overrides which patch is used; the default is the newest
   patch in the pro corpus. `patch.available` also separates "the notes were
   read and this champion was not changed" from "no notes for this patch", so
   `missing` is never ambiguous.
-- **Reasoning** (`explanation.reasoning`) is asked for explicitly: 2–5 steps,
-  in the order the model took them, capped at 6 × 240 chars. It is the model's
-  own account — a summary written with the answer, **not** a transcript of
-  hidden deliberation — so it is never merged into `evidence` and the UI
-  labels it. Only the citations are checked.
-- **Grounding** is enforced, not requested. Every `evidence` item must resolve:
-  a `game` id must be one of the retrieved games, a `patch` line must appear
-  verbatim in the notes that were handed to the model. Unresolvable items are
-  dropped, the call is retried once with the failures fed back, and a second
-  failure returns the answer with `unverified` populated, `problems` explaining
-  each rejection, and `ok: false`. A fabricated citation never reaches the UI
-  silently.
-- **No key is not an error.** Without `LLM_API_KEY` the endpoint returns
-  `explanation: null` plus `llm.reason` and the full retrieval — which is the
-  part that has to be right anyway.
-- **Cache**: answers are keyed on board + candidates + retrieved games + model
-  + prompt version, written to `frontend/.cache/explain/` (git-ignored).
-  `"force": true` bypasses it; `PROMPT_VERSION` in `llm.py` invalidates it when
-  the answer schema changes.
-- Env: `LLM_API_KEY`, `LLM_BASE_URL` (default `https://api.openai.com/v1`, any
-  OpenAI-compatible endpoint works), `LLM_MODEL` (default `gpt-4o-mini`),
-  `LLM_TIMEOUT` (default 45 s). See `.env.example`.
+- **The explanation** (`llm.compose_local`, `explanation.local: true`) is built
+  from four things, each of which the caller can check against the same
+  response:
+  - the answering model's probabilities (`suggestions`, `llm_prob` when the
+    reranker ran) — the top entry, the runner-up, the spread;
+  - whether the reranker **overrode** the head (`rerank.head_top1_agrees`), in
+    which case the prose says "reordering", never "first choice at 12 %" while
+    another entry has 30 %;
+  - a count over the retrieved games ("3 of the 5 comparable drafts took X
+    next"), which becomes "no consensus" when the modal count is 1;
+  - the first line of the patch note for the recommended champion, when this
+    patch touched it.
+
+  It is deliberately **not** written by the local LLM. The adapter in
+  `pro/model/llm/` is a reranker trained to emit one champion name from a
+  shortlist; it has never written a sentence, and its generation does not even
+  stop at the name (`loss_on_eos=False`). Prose from it would be invention
+  dressed as analysis — the opposite of what this panel is for.
+- **Every citation resolves by construction.** A `game` id is one of the
+  retrieved games (the panel looks it up and would print "not in the retrieved
+  set"), and a `patch` line is copied out of the notes that were parsed. The
+  validator, the retry and the `unverified`/`problems` fields still exist for
+  the hosted path; the local composer cannot produce an unresolvable one.
+- **The hosted path is still there, unused.** `llm.explain(..., client=…)`
+  with `client_from_env()` still does retrieve → prompt → validate → cache
+  against any OpenAI-compatible endpoint. The button does not call it, so
+  `LLM_API_KEY` is optional now (see `.env.example`).
+- **Cache**: `frontend/.cache/explain/` (git-ignored) is only used by the
+  hosted path. The local composer is a pure function of the response, so it
+  needs none.
 
 #### In the UI
 
 **"why this move?"** in the next-move panel opens the explanation. It is a
-button rather than automatic because a call costs seconds and, with a hosted
-model, money — and the recommendation is already on screen without it.
+button rather than automatic because the retrieval costs ~40 ms and the panel
+is complete without it.
+
+**"which draft is better?"** next to it opens `/api/draft-score`, which replays
+every pick through the same head and compares how close each side came to the
+model's own ranking *at the moment it picked* (`frontend/draftscore.py`). Per
+side it reports the mean `share` (the pick's probability over the best legal
+champion's, so a pick made with 160 champions available is comparable with one
+made with 150), the mean rank, and how many times the side took the model's
+first choice; the verdict is the difference in mean share, with a 2 pp dead
+band. It is **not a win probability** — the policy has no value output worth
+shipping — and the panel says so in the response's `note`.
+
+The replay is also the only caller that re-interleaves the ban list: the UI
+sends `bans.blue` then `bans.red`, while `build_board` stores bans
+chronologically and derives each ban's side from its slot, so a grouped list
+would tell the model that blue made the first three bans of an alternating
+block. `draftscore.chronological_bans` rebuilds the interleaving from the two
+lists; the other endpoints still take the flat list as they always have.
 
 The panel shows, top to bottom: the numbered reasoning steps, the recommended
 pick (click it to apply the move), `why` / `their answer` / `risk`, the cited
@@ -553,6 +577,31 @@ remaining value is the states where the ban block is still filling. Its slot is
 not earned by "the reranker cannot generate" — the head generates — but by the
 ban-phase boards the head cannot be honestly asked about.
 
+#### What answers the board now (2026-11-10)
+
+`/api/suggest` prefers the head and falls back to the masking checkpoint, and
+says which one answered in the response's `method`:
+
+| next move | `method` | why |
+|---|---|---|
+| a pick with all ten bans in (moves 16–19) | `head` | `next_move(..., allowed=legal_champions(lane), team=…)` — one lane-masked query per open cell, 15 ms each; 15.6 % top-1 / 49.5 % top-5 against this board's 10.5 / 44.2, p < 0.005 |
+| anything else, including picks1 | `masked` | a pick-phase hypothetical on a ban-phase board is out of distribution (p = 0.81), and at 6 bans + 3 picks the head's top-5 is 39.9 % against 45.7 % — three picks is not enough board for it |
+
+The first cut of this routed *every* pick move to the head. Picks1 says no: the
+head needs six picks on the board before it beats a model built for exactly
+this question, so the rule is "ban block complete", not "next move is a pick".
+
+The head is reached through `pred.head` when the policy slot holds the LLM
+reranker, because the reranker's own `next_move` would spend 0.45 s per cell on
+a question the head answers in 15 ms. The response shape is unchanged, so the
+panel needed no edit; the `model` block now names the model that actually
+answered, not the policy slot's contents.
+
+Two things this does not do. It does **not** differentiate the two sides (see
+below — the head is nearly side-blind by construction), and it does **not**
+remove the masking checkpoint from the install, because the ban-phase boards
+still need it.
+
 #### Zero-shot generation, tried and measured (2026-11-10)
 
 The other way to drop a checkpoint is to let the LLM answer the cell directly,
@@ -653,6 +702,23 @@ are in (`move_idx = 10 + n_picks` while `ban_ids` holds six):
 p = 0.81 against the masked board: a tie, with the head's own top-5 four points
 worse. The board the head is shown is not a board it ever saw — six bans with a
 move index that says ten — so this is a fabrication cost, not a model limit.
+
+Nor does it win in picks1, where nothing is fabricated. At 6 bans + 3 picks
+(696 cells) the next move really is a pick and the head answers it in
+distribution:
+
+| arm | top-1 | top-5 | 696 cells, 6 bans + 3 picks |
+|---|---|---|---|
+| masked board | 10.2 % | **45.7 %** | 8 ms |
+| popularity table | 10.8 % | 37.6 % | ~0 ms |
+| fabricated-turn head | 9.1 % | 39.9 % | 13 ms |
+| fabricated turn + rerank | **12.1 %** | (the head's five) | 487 ms |
+
+p = 0.28 on top-1 and the head's recall is six points worse. So the win is not
+"the head is better at lanes" — it is "with six picks on the board and all ten
+bans in, the head has enough context to beat a model that answers each cell
+from the champion alone". That is why `/api/suggest` routes on the ban block
+rather than on the move kind (see "What answers the board now").
 
 **The two sides never differentiate.** `python frontend/probe_roleboard_side.py`
 asks both sides the same

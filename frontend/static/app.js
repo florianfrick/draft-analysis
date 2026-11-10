@@ -856,6 +856,7 @@ async function runSuggest(sig) {
       renderNextMoveError(msg);   // do not overwrite with the busy state
     }
     renderExplain();       // hides itself if the board moved
+    renderDraftScore();    // same rule: a stale verdict is worse than none
   }
   renderCompare();
 }
@@ -1120,8 +1121,14 @@ function renderExplain() {
     if (ex.reasoning && ex.reasoning.length) {
       out.push('<ol class="ex-steps">'
         + ex.reasoning.map(s => `<li>${esc(s)}</li>`).join('') + '</ol>');
-      out.push('<div class="ex-note">the model\'s account, in its own words —'
-        + ' only the citations below are checked</div>');
+      out.push('<div class="ex-note">'
+        + (ex.local
+          ? 'composed from the loaded model\'s own numbers — every line is a'
+            + ' probability, a count over the retrieved drafts, or a quoted'
+            + ' patch note'
+          : 'the model\'s account, in its own words — only the citations'
+            + ' below are checked')
+        + '</div>');
     }
     const cand = (presp && presp.suggestions || []).find(s => s.name === ex.recommend);
     const pick = cand
@@ -1226,6 +1233,116 @@ function applyMove(kind, side, idx) {
     }
   }
   changed();
+}
+
+// ---- which draft is better ---------------------------------------------
+// Replays every pick through the policy head and compares how close each side
+// came to the model's own ranking at the moment it picked. Not a win
+// probability - the policy has no value output worth shipping - and the panel
+// says so, because a coach will otherwise read it as one.
+
+let SCORE = null;
+let SCORE_BUSY = false;
+let SCORE_SIG = null;
+
+function hideDraftScore() {
+  SCORE = null;
+  SCORE_BUSY = false;
+  document.getElementById('compare').classList.add('hidden');
+}
+
+async function requestDraftScore() {
+  if (!isPolicyModel() || SCORE_BUSY) return;
+  const sig = boardSig();
+  SCORE_BUSY = true;
+  const box = document.getElementById('compare');
+  box.classList.remove('hidden');
+  document.getElementById('cmp-title').textContent = 'Which draft is better';
+  document.getElementById('cmp-meta').textContent = '';
+  document.getElementById('cmp-body').innerHTML =
+    '<div class="ex-busy">replaying the picks through the model</div>';
+  let d;
+  try {
+    d = await (await fetch('/api/draft-score', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        picks: picks,
+        // the two lists separately: a concatenated one cannot be un-grouped
+        // when the sides have banned different numbers of champions
+        bans_blue: bans.blue,
+        bans_red: bans.red,
+        first_pick: currentFirstPick(),
+        patch_id: currentPatchId(),
+        fearless: fearlessPool()
+      })
+    })).json();
+  } catch (e) {
+    d = { error: 'request failed: ' + e.message };
+  }
+  SCORE_BUSY = false;
+  if (d.error) {
+    document.getElementById('cmp-body').innerHTML =
+      `<div class="ex-drop">${esc(d.error)}</div>`;
+    return;
+  }
+  SCORE = d;
+  SCORE_SIG = sig;
+  renderDraftScore();
+}
+
+function renderDraftScore() {
+  const box = document.getElementById('compare');
+  if (!SCORE || !SCORE_SIG || SCORE_SIG !== boardSig()) {
+    if (!SCORE_BUSY) box.classList.add('hidden');
+    return;
+  }
+  box.classList.remove('hidden');
+  const s = SCORE;
+  const verdict = s.verdict === 'blue' ? 'Blue'
+    : s.verdict === 'red' ? 'Red'
+      : s.verdict === 'even' ? 'Even' : '—';
+  const margin = s.margin == null ? '' : ` (${(s.margin >= 0 ? '+' : '')
+    + (100 * s.margin).toFixed(1)} pp of the model's own first-choice share)`;
+  document.getElementById('cmp-meta').textContent = s.model
+    ? (s.model.ckpt || s.model.path || 'model') + ' · local' : 'local';
+
+  const out = [];
+  out.push(`<div class="ex-answer"><div class="k">verdict</div>`
+    + `<div class="v"><b>${esc(verdict)}</b>${esc(margin)}</div>`
+    + `<div class="k">meaning</div>`
+    + `<div class="v">${esc(s.note || '')}</div></div>`);
+
+  const sideRow = (label, d) => {
+    if (!d) return `<div class="ex-empty">${esc(label)} has not picked yet</div>`;
+    return '<div class="cs-side">'
+      + `<span class="cs-who">${esc(label)}</span>`
+      + `<span class="cs-n">${d.n} picks</span>`
+      + `<span class="cs-share">share ${(100 * d.mean_share).toFixed(0)}%</span>`
+      + `<span class="cs-rank">mean rank #${d.mean_rank.toFixed(1)}</span>`
+      + `<span class="cs-top1">${d.top1}/${d.n} first choice</span>`
+      + `<span class="cs-worst">worst #${d.worst_rank}</span>`
+      + '</div>';
+  };
+  out.push('<div class="ex-sub">How each side drafted, by the model</div>');
+  out.push(sideRow('Blue', s.blue));
+  out.push(sideRow('Red', s.red));
+
+  out.push('<div class="ex-sub">Every pick, in draft order</div>');
+  out.push('<div class="cs-picks">' + (s.picks || []).map(p => {
+    const share = (100 * p.share).toFixed(0);
+    const rank = p.rank == null ? 'unranked' : '#' + p.rank;
+    return `<div class="cs-pick ${esc(p.side)}">`
+      + `<span class="cs-mv">${p.move_idx + 1}</span>`
+      + `<span class="cs-sd">${esc(p.side)}</span>`
+      + `<span class="cs-ch">${imgTag(BY_IDX[p.champ])} ${esc(p.name)}</span>`
+      + `<span class="cs-rk">${esc(rank)}</span>`
+      + `<span class="cs-pr">${(100 * p.prob).toFixed(1)}%</span>`
+      + `<span class="cs-bar"><i style="width:${share}%"></i></span>`
+      + `<span class="cs-bs">model's #1: ${esc(p.best || '—')}</span>`
+      + '</div>';
+  }).join('') + '</div>');
+  document.getElementById('cmp-body').innerHTML = out.join('');
 }
 
 // ---- walkthrough of real pro drafts -------------------------------------
@@ -1454,8 +1571,13 @@ document.getElementById('patch-select').addEventListener('change', () => {
   // A patch change re-asks both panels: the next move conditions on it and
   // the explanation's notes default to it.
   hideExplain();
+  hideDraftScore();
   changed();
 });
+document.getElementById('nm-compare').addEventListener('click',
+  requestDraftScore);
+document.getElementById('cmp-close').addEventListener('click',
+  hideDraftScore);
 document.getElementById('nm-explain').addEventListener('click',
   () => requestExplain(false));
 document.getElementById('ex-reask').addEventListener('click',

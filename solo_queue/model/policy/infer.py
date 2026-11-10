@@ -545,7 +545,7 @@ class PolicyPredictor:
     # -- public -------------------------------------------------------
     @torch.no_grad()
     def next_move(self, picks, bans, first_pick=0, k=8, unavailable=None,
-                  patch_id=PATCH_UNK_ID, allowed=None):
+                  patch_id=PATCH_UNK_ID, allowed=None, team=None):
         """Top-k champions for the move that is next, plus the state.
 
         `unavailable` is the fearless pool (champions picked in earlier
@@ -563,6 +563,18 @@ class PolicyPredictor:
         leaves an empty list whenever the head's five favourites happen not to
         play the lane, which is the common case (13 % of pick moves have no
         lane-legal champion in the head's top 8).
+
+        `team` (optional) overrides the side the answer is for, which
+        `move_plan` would otherwise fix from the move index. It exists for the
+        role board: five of its ten cells belong to the side that is *not* on
+        the clock, and asking about them is a hypothetical, not a prediction.
+        `move_idx` and `kind` still come from the board - only the actor
+        changes - so a ban-phase board answers "which ban for that side",
+        which is not the question the role board wants; the caller must pose
+        it on a pick move. Measured caveat (frontend/README.md, "The
+        fabricated turn"): the two sides come out nearly identical, because
+        the pick counts already determine whose turn it is and `to_move` is a
+        redundant input to this model.
         """
         pid = self.patch_id_for(patch_id)
         board = build_board(picks, bans, self.num_champs, first_pick,
@@ -583,7 +595,11 @@ class PolicyPredictor:
                     "kind": None, "side": None, "phase": None,
                     "patch_id": pid, "n_unavailable": n_unavail}
         probs = self._fill_roles(board)
-        kind, team = move_plan(first_pick)[move_idx]
+        kind, planned = move_plan(first_pick)[move_idx]
+        team = planned if team is None else int(team)
+        if team not in (0, 1):
+            raise ValueError("team must be 0 (blue) or 1 (red), got %r"
+                             % (team,))
         batch = _policy_batch(board, move_idx, kind, team, patch_id=pid)
         logits = self.policy_logits(batch)[0]
         if allowed is not None:

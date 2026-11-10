@@ -79,11 +79,25 @@
     <span id="nm-meta" class="muted"></span>
     <span id="nm-lane" class="muted"></span>
     <span class="spacer"></span>
-    <button id="nm-explain" title="ask an LLM to explain this move from
-      comparable pro drafts and the patch notes">why this move?</button>
+    <button id="nm-compare" title="ask the loaded model which side's draft it
+      rates more highly, from its own ranking of every pick made so far">which
+      draft is better?</button>
+    <button id="nm-explain" title="explain this move from the loaded model's
+      own numbers, comparable pro drafts and the patch notes">why this
+      move?</button>
   </div>
   <div id="nm-warning" class="nm-warn hidden"></div>
   <div class="nm-chips" id="nm-chips"></div>
+</section>
+
+<section id="compare" class="hidden">
+  <div class="ex-head">
+    <span id="cmp-title">Which draft is better</span>
+    <span id="cmp-meta" class="muted"></span>
+    <span class="spacer"></span>
+    <button id="cmp-close" title="hide this panel">✕</button>
+  </div>
+  <div id="cmp-body"></div>
 </section>
 
 <section id="explain" class="hidden">

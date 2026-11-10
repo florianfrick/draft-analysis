@@ -191,7 +191,9 @@ from solo_queue.model.pretraining.base_model import (SiameseBase,  # noqa: E402
                                            attr_matrix_for_config)
 from solo_queue.model.policy import infer  # noqa: E402  (next-move policy)
 import llm  # noqa: E402  (frontend/llm.py: retrieval + grounded explanation)
+import draftscore  # noqa: E402  (frontend/draftscore.py: which draft is ahead)
 from roles import assign_roles  # noqa: E402  (frontend/roles.py: lane solver)
+from roles import assign_lanes, legal_champions  # noqa: E402,F401
 import rerank as rerank_mod  # noqa: E402  (frontend/rerank.py: LLM reranker)
 
 ROLE_ROWS = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"]
@@ -1295,18 +1297,58 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_upload()
         elif route == "/api/breakdown":
             self._handle_breakdown()
+        elif route == "/api/draft-score":
+            self._handle_draft_score()
         else:
             self._send(404, {"error": "unknown endpoint"})
+
+    def _handle_draft_score(self):
+        """POST {picks, bans, first_pick, patch_id, fearless} -> which side's
+        draft the loaded model prefers, with the per-pick evidence.
+
+        Not a win probability: the policy head has no value output worth
+        shipping, so this replays each pick through it and compares how close
+        each side came to the model's own ranking (see `frontend/draftscore.py`).
+        """
+        try:
+            payload = self._read_json()
+            pred = APP.get("policy")
+            if pred is None:
+                raise ValueError("no next-move policy loaded - pick a "
+                                 "best_policy.pt as the next-move model")
+            head = getattr(pred, "head", pred)
+            mapping, names = APP["mapping"], APP["names_by_idx"]
+            picks = payload.get("picks") or [None] * 10
+            picks_idx = [None if p is None else mapping[p] for p in picks]
+            # The two ban lists separately: the replay needs the ban that was
+            # made *before* each pick, and a concatenated list cannot be
+            # un-grouped when the sides have made different numbers of bans.
+            blue_bans = [mapping[b] for b in (payload.get("bans_blue") or [])
+                         if b in mapping]
+            red_bans = [mapping[b] for b in (payload.get("bans_red") or [])
+                        if b in mapping]
+            if not blue_bans and not red_bans:
+                flat = [mapping[b] for b in (payload.get("bans") or [])
+                        if b in mapping]
+                blue_bans, red_bans = flat[:len(flat) // 2], flat[len(flat) // 2:]
+            unavail_idx = [mapping[f] for f in (payload.get("fearless") or [])
+                           if f in mapping]
+            res = draftscore.score(
+                head, picks_idx, blue_bans, red_bans,
+                first_pick=1 if int(payload.get("first_pick", 0)) else 0,
+                patch_id=payload.get("patch_id"), unavailable=unavail_idx,
+                names=names)
+        except (ValueError, KeyError, TypeError, IndexError,
+                json.JSONDecodeError) as exc:
+            self._send(400, {"error": str(exc)})
+            return
+        out = dict(res)
+        out["model"] = model_info(pred)
+        self._send(200, out)
 
     def _handle_suggest(self):
         try:
             payload = self._read_json()
-            pred = APP.get("masked")              # one stable reference
-            if pred is None:
-                raise ValueError(
-                    "no role model loaded - pick a masked checkpoint "
-                    "(pretraining / finetune / proonly best.pt) as the "
-                    "role model")
             picks = payload["picks"]              # len 10, riot id or None
             bans = payload.get("bans", [])        # riot ids
             fearless = payload.get("fearless") or []   # riot ids
@@ -1318,8 +1360,11 @@ class Handler(BaseHTTPRequestHandler):
             mapping, names = APP["mapping"], APP["names_by_idx"]
             bans_idx = [mapping[b] for b in bans if b in mapping]
             unavail_idx = [mapping[f] for f in fearless if f in mapping]
-            res = pred.suggest(picks, bans_idx, mapping, last_slot=last_slot,
-                               unavailable_idx=unavail_idx)
+            picks_idx = [None if p is None else mapping[p] for p in picks]
+            first_pick = 1 if int(payload.get("first_pick", 0)) else 0
+            res, method, pred = self._suggest_board(
+                picks_idx, bans_idx, unavail_idx, first_pick, last_slot,
+                picks, mapping)
         except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             self._send(400, {"error": str(exc)})
             return
@@ -1328,6 +1373,11 @@ class Handler(BaseHTTPRequestHandler):
                # the masked model cannot consume the pool, so this is a
                # filter, not a condition - the UI warns when it is non-zero
                "fearless_filtered": len(unavail_idx),
+               # which model answered: "head" is the next-move policy with the
+               # pool masked to the lane (fabricated turn), "masked" is the
+               # role board's own checkpoint. They are not the same question,
+               # and only one of them exists in a `--no-policy` install.
+               "method": method,
                "model": model_info(pred)}
         for team in ("blue", "red"):
             for role, cands in res[team].items():
@@ -1340,6 +1390,121 @@ class Handler(BaseHTTPRequestHandler):
                     lst.append(cand)
                 out[team][role] = lst
         self._send(200, out)
+
+    def _suggest_board(self, picks_idx, bans_idx, unavail_idx, first_pick,
+                       last_slot, picks_riot, mapping):
+        """Fill the role board, preferring the next-move head.
+
+        Two answers, one contract (`blue`/`red` -> role -> candidates, plus
+        `roles` and `assignment`):
+
+        * **head** - the next-move policy asked "suppose this side were picking
+          next, for this lane", with the logits masked to the champions that
+          play it (`next_move(..., allowed=..., team=...)`). Measured at 10
+          bans + 6 picks: 14.3 % top-1 / 49.5 % top-5 against the masking
+          checkpoint's 10.5 / 44.2, paired p = 0.02; see frontend/README.md,
+          "The fabricated turn".
+        * **masked** - the role board's own checkpoint. It is still the
+          fallback because the head can only be asked about a *pick* move: on
+          a ban-phase board the question has no in-distribution form (6 bans
+          with a 10-ban move index), where the two tie (p = 0.81) and the
+          masked board keeps 4 pp more top-5.
+
+        The head is reached through `pred.head` when the policy slot holds the
+        LLM reranker, because the reranker's own `next_move` would spend 0.45 s
+        per cell on a question the head answers in 15 ms.
+
+        -> (result, "head" | "masked", the predictor that answered)
+        """
+        policy = APP.get("policy")
+        head = getattr(policy, "head", policy)
+        masked = APP.get("masked")
+        if head is None and masked is None:
+            raise ValueError(
+                "no role board available: load a next-move policy (best_policy"
+                ".pt) or a masked checkpoint (best.pt)")
+        if head is not None and self._next_move_is_pick(picks_idx, bans_idx,
+                                                        first_pick):
+            return (self._suggest_from_head(head, picks_idx, bans_idx,
+                                            unavail_idx, first_pick,
+                                            last_slot), "head", head)
+        if masked is None:
+            n_picks = sum(1 for c in picks_idx if c is not None)
+            move_idx, _lb, _lp = infer.resolve_position(
+                len(bans_idx), n_picks, int(first_pick))
+            if move_idx >= infer.N_MOVES:
+                raise ValueError("the draft is complete - there is no role "
+                                 "board left to fill")
+            raise ValueError(
+                "this board is in its ban phase, where the role board falls "
+                "back to the masking checkpoint - load one (best.pt) or "
+                "finish the bans")
+        return (masked.suggest(picks_riot, bans_idx, mapping,
+                               last_slot=last_slot,
+                               unavailable_idx=unavail_idx), "masked", masked)
+
+    @staticmethod
+    def _next_move_is_pick(picks_idx, bans_idx, first_pick):
+        """Whether the head can be asked about the coming move.
+
+        Two conditions, both measured (`frontend/probe_roleboard_fab.py`,
+        2026-11-10), because the head only wins where the question is both
+        in-distribution *and* the board carries enough context:
+
+        * the ban block must be complete - on a ban-phase board a pick-phase
+          hypothetical has no honest form (6 bans with a 10-ban move index),
+          and the two tie there (10.8 % vs 10.1 % top-1, p = 0.81);
+        * the next move must be a pick - the head has no pick to rank at a
+          ban move.
+
+        The first version of this routed every pick move to the head, which
+        was wrong for picks1: at 6 bans + 3 picks the head's top-5 is 39.9 %
+        against the masked board's 45.7 %, and its top-1 only 12.1 % vs 10.2 %
+        (p = 0.28). Three picks is not enough board for it to beat a model
+        built for exactly this question.
+        """
+        if len(bans_idx) < 10:
+            return False
+        n_picks = sum(1 for c in picks_idx if c is not None)
+        move_idx, _lb, _lp = infer.resolve_position(len(bans_idx), n_picks,
+                                                   int(first_pick))
+        if move_idx >= infer.N_MOVES:
+            return False
+        kind, _team = infer.move_plan(int(first_pick))[move_idx]
+        return kind == infer.MOVE_PICK
+
+    def _suggest_from_head(self, head, picks_idx, bans_idx, unavail_idx,
+                           first_pick, last_slot, k=5):
+        """One lane-masked head query per open cell, plus the display roles."""
+        lanes = assign_lanes(picks_idx)
+        filled = [c is not None for c in picks_idx]
+        pid = head.default_patch_id()
+        out = {"blue": {}, "red": {}}
+        roles = None
+        for team in (0, 1):
+            taken = {lanes[team * 5 + s] for s in range(5)}
+            for lane in range(5):
+                if lane in taken:
+                    continue
+                res = head.next_move(picks_idx, bans_idx,
+                                     first_pick=first_pick, k=k,
+                                     unavailable=unavail_idx, patch_id=pid,
+                                     allowed=legal_champions(lane), team=team)
+                if roles is None:
+                    roles = res["roles"]
+                key = "blue" if team == 0 else "red"
+                out[key][ROLE_ROWS[lane]] = res["suggestions"]
+        if roles is None:                 # every lane filled: display only
+            res = head.next_move(picks_idx, bans_idx, first_pick=first_pick,
+                                 k=1, unavailable=unavail_idx, patch_id=pid)
+            roles = res["roles"]
+        out["roles"] = roles
+        # The table decides the model's `role_ids`; the panel's badges keep the
+        # role head's answer with the newest pick pinned, exactly as the masked
+        # path does - otherwise a click could move a badge that the model was
+        # not using anyway.
+        out["assignment"] = _assign_roles(roles, filled, newest=last_slot)
+        return out
 
     def _ask_next_move(self, pred, payload, picks_idx, bans_idx, first_pick,
                        k=8, unavail_idx=None):
@@ -1428,16 +1593,28 @@ class Handler(BaseHTTPRequestHandler):
             "rerank": res.get("rerank"),
         })
 
+    @staticmethod
+    def _explain_model_label(pred):
+        """What the explanation panel should say answered the question.
+
+        Not `model_info(pred)`: the explanation is composed from the numbers,
+        so the honest label names the parts that produced them - and says so
+        when the reranker was the one that ordered the list.
+        """
+        if getattr(pred, "head", None) is not None:
+            return "head + LLM reranker (local)"
+        return "policy head (local)"
+
     def _handle_explain(self):
         """POST {picks, bans, first_pick, patch_id, k, k_games, patch, force}
-        -> top-k, retrieved evidence, and prose when an LLM key is configured.
+        -> top-k, retrieved evidence, and an explanation built locally.
 
         `patch_id` conditions the model exactly as /api/next-move does;
         `patch` overrides only which patch NOTES are quoted (default: the
-        selected patch, else the newest in the corpus). Without a key this
-        still returns the evidence. That ordering is deliberate: the
-        retrieval is the part that has to be right either way, and it is the
-        part a coach can use on its own.
+        selected patch, else the newest in the corpus). The explanation is
+        composed from the model's own numbers and the retrieved evidence
+        (`llm.compose_local`), so there is no API key and no prose that cannot
+        be traced to a probability, a count or a line of the patch notes.
         """
         try:
             payload = self._read_json()
@@ -1490,9 +1667,13 @@ class Handler(BaseHTTPRequestHandler):
                        for c in res["suggestions"]]
         try:
             explained = llm.explain(
-                board, suggestions, index, client=llm.client_from_env(),
+                board, suggestions, index,
+                # No client: the explanation is composed from the numbers the
+                # loaded model just produced, so the button needs no API key.
+                client=None,
                 k_games=int(payload.get("k_games", 5)),
-                force=bool(payload.get("force")), names=names)
+                force=bool(payload.get("force")), names=names,
+                res=res, model=self._explain_model_label(pred))
         except Exception as exc:  # noqa: BLE001 - one panel, not the server
             self._send(500, {"error": "explain failed: %s" % exc})
             return

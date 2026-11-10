@@ -344,6 +344,46 @@ body.no-role-model .role-row { display: none; }
   border-left: 3px solid var(--acc); border-radius: 10px;
 }
 #explain.hidden { display: none; }
+
+/* --- which-draft-is-better panel -------------------------------------- */
+#compare {
+  max-width: 1400px; margin: 14px auto 0; padding: 12px 14px;
+  background: var(--panel); border: 1px solid var(--line);
+  border-left: 3px solid var(--acc); border-radius: 10px;
+}
+#compare.hidden { display: none; }
+#cmp-title { font-size: 15px; font-weight: 600; color: var(--acc); }
+#cmp-meta { font-size: 12px; }
+.cs-side {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 7px 10px; margin-bottom: 5px; font-size: 12px;
+  background: #1f2530; border: 1px solid var(--line); border-radius: 8px;
+}
+.cs-side .cs-who { font-weight: 600; min-width: 40px; }
+.cs-side .cs-n, .cs-side .cs-rank, .cs-side .cs-top1, .cs-side .cs-worst {
+  color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.cs-side .cs-share { color: var(--acc); font-variant-numeric: tabular-nums; }
+.cs-picks { display: flex; flex-direction: column; gap: 3px; }
+.cs-pick {
+  display: grid;
+  grid-template-columns: 26px 34px 1fr 62px 52px 70px 1fr;
+  gap: 8px; align-items: center; padding: 3px 9px; font-size: 12px;
+  background: #1f2530; border-radius: 6px;
+}
+.cs-pick.blue { border-left: 2px solid #4a7fb5; }
+.cs-pick.red { border-left: 2px solid #b5544a; }
+.cs-pick .cs-mv, .cs-pick .cs-sd { color: var(--muted); }
+.cs-pick .cs-sd { text-transform: capitalize; }
+.cs-pick .cs-ch { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.cs-pick .cs-ch .ic { width: 22px; height: 22px; }
+.cs-pick .cs-rk, .cs-pick .cs-pr { font-variant-numeric: tabular-nums; }
+.cs-pick .cs-pr { color: var(--muted); }
+.cs-pick .cs-bar {
+  height: 6px; background: #2c3441; border-radius: 3px; overflow: hidden;
+}
+.cs-pick .cs-bar i { display: block; height: 100%; background: var(--acc); }
+.cs-pick .cs-bs { color: var(--muted); }
 .ex-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 #ex-title { font-size: 15px; font-weight: 600; color: var(--acc); }
 #ex-meta { font-size: 12px; }

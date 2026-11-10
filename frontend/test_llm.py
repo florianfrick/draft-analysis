@@ -343,12 +343,39 @@ def index_fixture():
     return llm.ProIndex([row])
 
 
-def test_explain_without_a_key_returns_evidence_and_a_reason(cache_dir):
-    out = llm.explain(board(), [("Ahri", 0.4)], index_fixture(), client=None)
-    assert out["explanation"] is None
+def test_explain_without_a_key_composes_a_local_answer(cache_dir):
+    """No key is the shipped path now: the explanation is built from the
+    numbers the model produced, so it must still name an answer and cite the
+    retrieved evidence - and say that it is local."""
+    out = llm.explain(board(), [("Ahri", 0.4), ("Vex", 0.2)],
+                      index_fixture(), client=None)
+    exp = out["explanation"]
+    assert exp is not None and exp["local"] is True
+    assert exp["recommend"] == "Ahri"
+    assert exp["reasoning"], "the panel renders these as the answer"
+    assert "40.0 %" in exp["reasoning"][0]
     assert out["llm"]["configured"] is False
-    assert "LLM_API_KEY" in out["llm"]["reason"]
     assert out["retrieval"]["games"][0]["gameid"] == "G-1"
+    # every citation is a game that was actually retrieved, so the panel can
+    # resolve it; the local composer never invents one
+    ids = {g["gameid"] for g in out["retrieval"]["games"]}
+    assert {e["id"] for e in exp["evidence"] if e["type"] == "game"} <= ids
+
+
+def test_local_explanation_never_claims_the_runner_up_is_stronger(cache_dir):
+    """The reranker's pick leads the list, but its probability can be lower
+    than another entry's - the prose must say "reordering", not "first
+    choice at 12 %" when the next entry has 30 %."""
+    out = llm.explain(board(), [("Ahri", 0.12), ("Vex", 0.30)],
+                      index_fixture(), client=None,
+                      res={"rerank": {"chosen": "Ahri",
+                                      "head_top1_agrees": False,
+                                      "candidates": [{"name": "Ahri",
+                                                      "prob": 0.12}]}})
+    exp = out["explanation"]
+    assert exp["recommend"] == "Ahri"
+    assert "reordering" in exp["reasoning"][0]
+    assert "first choice" not in exp["reasoning"][0]
 
 
 def test_explain_caches_and_does_not_call_twice(cache_dir):

@@ -1038,11 +1038,111 @@ def test_both_models_answer_the_same_board(app, httpd, policy_ckpt):
     assert nm["model"]["kind"] == "policy" and nm["state"]["kind"] == "ban"
 
 
+def test_suggest_uses_the_head_when_the_next_move_is_a_pick(app, httpd,
+                                                            policy_ckpt):
+    """The role board is the next-move head with the pool masked to the lane.
+
+    Two things have to hold at once: the answer says which model produced it,
+    and every candidate is a champion that actually plays that lane - the mask
+    is applied to the logits, so an unconstrained favourite cannot leak in.
+    """
+    from roles import legal_champions
+
+    S.load_predictor(Path(policy_ckpt))
+    # 10 bans, then three picks a side: the next move is a pick.
+    mapping = app["mapping"]
+    names = app["names_by_idx"]
+    by_name = {n: i for i, n in enumerate(names)}
+    inv = {i: r for r, i in mapping.items()}
+    blue = [by_name[n] for n in ("Aatrox", "Vi", "Ahri")]
+    red = [by_name[n] for n in ("Gnar", "Wukong", "Syndra")]
+    picks = ([inv[i] for i in blue] + [None, None]
+             + [inv[i] for i in red] + [None, None])
+    bans = [inv[i] for i in range(10)]
+    status, d = _post(httpd, "/api/suggest",
+                      json.dumps({"picks": picks, "bans": bans,
+                                  "first_pick": 0}))
+    assert status == 200, d
+    assert d["method"] == "head"
+    assert d["model"]["kind"] == "policy"
+    assert d["blue"] and d["red"], "both sides have open lanes"
+    for side in ("blue", "red"):
+        for role, cands in d[side].items():
+            lane = ROLES.index(role)
+            legal = set(legal_champions(lane))
+            assert cands, "%s %s is empty" % (side, role)
+            assert all(c["idx"] in legal for c in cands), (side, role)
+            probs = [c["prob"] for c in cands]
+            assert probs == sorted(probs, reverse=True)
+
+
+def test_suggest_falls_back_to_the_masked_board_in_the_ban_phase(app, httpd,
+                                                                policy_ckpt):
+    """A ban-phase board has no in-distribution form of the head's question,
+    so the role board's own checkpoint answers it - and says so.
+
+    Six bans and six picks is the state where the next move is a ban again
+    (moves 12-15); six bans with no picks is *not*, because move 6 is the
+    first pick and the head answers it.
+    """
+    S.load_predictor(Path(policy_ckpt))
+    mapping = app["mapping"]
+    names = app["names_by_idx"]
+    by_name = {n: i for i, n in enumerate(names)}
+    inv = {i: r for r, i in mapping.items()}
+    picks = ([inv[by_name[n]] for n in ("Aatrox", "Vi", "Ahri")]
+             + [None, None]
+             + [inv[by_name[n]] for n in ("Gnar", "Wukong", "Syndra")]
+             + [None, None])
+    status, d = _post(httpd, "/api/suggest", json.dumps({
+        "picks": picks, "bans": [inv[i] for i in range(6)],
+        "first_pick": 0}))
+    assert status == 200, d
+    assert d["method"] == "masked"
+    # the masking checkpoint's kind is "pretrain" (it is the encoder + MASK
+    # queries); what matters is that the *policy* did not answer
+    assert d["model"]["kind"] != "policy"
+
+
+def test_draft_score_reports_both_sides_and_their_picks(app, httpd,
+                                                        policy_ckpt):
+    """The panel needs a verdict, a per-side summary and one row per pick, in
+    draft order - and the rows have to agree with the board it was given."""
+    S.load_predictor(Path(policy_ckpt))
+    names = app["names_by_idx"]
+    mapping = app["mapping"]
+    by_name = {n: i for i, n in enumerate(names)}
+    inv = {i: r for r, i in mapping.items()}
+    blue = [by_name[n] for n in ("Aatrox", "Vi", "Ahri", "Jinx", "Rakan")]
+    red = [by_name[n] for n in ("Gnar", "Wukong", "Syndra", "Kai'Sa",
+                                "Nautilus")]
+    status, d = _post(httpd, "/api/draft-score", json.dumps({
+        "picks": [inv[i] for i in blue + red],
+        "bans_blue": [inv[i] for i in range(0, 5)],
+        "bans_red": [inv[i] for i in range(5, 10)],
+        "first_pick": 0}))
+    assert status == 200, d
+    assert d["verdict"] in ("blue", "red", "even")
+    assert d["n_picks"] == 10
+    assert d["blue"]["n"] == 5 and d["red"]["n"] == 5
+    assert [p["move_idx"] for p in d["picks"]] == sorted(
+        p["move_idx"] for p in d["picks"])
+    assert {p["name"] for p in d["picks"]} == set(
+        names[i] for i in blue + red)
+    for p in d["picks"]:
+        assert 0.0 <= p["share"] <= 1.0
+        assert p["rank"] is None or p["rank"] >= 1
+
+
 def test_suggest_without_a_role_model_is_an_error(app, httpd):
+    """Neither slot loaded: the board cannot be filled at all, and the message
+    has to name both checkpoints because either one can answer it now."""
     app.pop("masked", None)
+    app.pop("policy", None)
     status, d = _post(httpd, "/api/suggest",
                       json.dumps({"picks": [None] * 10, "bans": []}))
-    assert status == 400 and "no role model" in d["error"]
+    assert status == 400 and "no role board" in d["error"]
+    assert "best_policy" in d["error"] and "best.pt" in d["error"]
 
 
 def test_load_files_a_checkpoint_into_the_right_slot(app, httpd, policy_ckpt):
@@ -1081,15 +1181,18 @@ def _banned_board(app, n=6):
 
 def test_explain_returns_evidence_without_an_llm_key(app, httpd, policy_ckpt,
                                                      monkeypatch):
-    """No key must degrade to retrieval, not to an error: the evidence is the
-    part that has to be right, and it is useful on its own."""
+    """No key is the shipped path: the explanation is composed locally, so the
+    panel still gets reasoning + citations - it just says where they came from.
+    """
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     S.load_predictor(Path(policy_ckpt))
     status, d = _post(httpd, "/api/explain", _banned_board(app))
     assert status == 200, d
     assert d["llm"]["configured"] is False
-    assert d["explanation"] is None
-    assert "LLM_API_KEY" in d["llm"]["reason"]
+    exp = d["explanation"]
+    assert exp is not None and exp["local"] is True
+    assert exp["recommend"] in {s["name"] for s in d["suggestions"]}
+    assert exp["reasoning"], "the panel renders these as the answer"
     ret = d["retrieval"]
     assert ret["n_indexed"] > 1000
     assert ret["games"], "expected comparable boards from the pro corpus"
@@ -1118,35 +1221,26 @@ class _StubClient:
 def test_explain_returns_the_reasoning_the_ui_renders(app, httpd, policy_ckpt,
                                                       monkeypatch, tmp_path):
     """The panel shows `explanation.reasoning` plus the evidence it resolves
-    against, so both have to survive the HTTP round trip."""
+    against, so both have to survive the HTTP round trip.
+
+    The stub client used to answer here; the handler composes the explanation
+    locally now, so the test asks the real model and checks the same contract -
+    every rendered field present, and every citation resolvable against the
+    retrieved set (the panel looks the id up, and shows "not in the retrieved
+    set" when it cannot).
+    """
     S.load_predictor(Path(policy_ckpt))
     monkeypatch.setattr(S.llm, "CACHE_DIR", tmp_path / "cache")
-
-    def fake_client(messages):
-        # Cite the first game the server actually retrieved and recommend its
-        # own top candidate, so the answer passes the validator: the test is
-        # about transport, not leniency. Read the *first* user turn - a retry
-        # appends the rejection note, which has neither list in it.
-        text = messages[1]["content"]
-        gid = re.search(r"^  - (\S+) \| patch", text, re.M).group(1)
-        cand = re.search(r"^  - (.+?)  [\d.]+%$", text, re.M).group(1)
-        return json.dumps({
-            "reasoning": ["Their board is light on engage.",
-                          "%s answered it with a pick-first support." % gid],
-            "recommend": cand, "why": "x", "their_answer": "Azir",
-            "risk": "Falls off.", "evidence": [{"type": "game", "id": gid}]})
-
-    monkeypatch.setattr(S.llm, "client_from_env",
-                        lambda env=None: _StubClient(fake_client))
     status, d = _post(httpd, "/api/explain", _banned_board(app))
     assert status == 200, d
     exp = d["explanation"]
     assert exp["ok"] is True, exp.get("problems")
-    assert len(exp["reasoning"]) == 2
-    assert exp["reasoning"][1].endswith("support.")
+    assert exp["local"] is True
+    for key in ("recommend", "why", "their_answer", "risk", "reasoning"):
+        assert exp[key], "the panel renders %r" % key
+    assert d["llm"]["configured"] is False       # no key, and none needed
     cited = exp["evidence"][0]["id"]
     assert cited in {g["gameid"] for g in d["retrieval"]["games"]}
-    assert d["llm"]["configured"] is True
 
 
 def test_explain_without_a_policy_model_is_an_error(app, httpd):

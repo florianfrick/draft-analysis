@@ -409,6 +409,182 @@ def validate(answer, games, notes, candidate_names):
     return clean, problems
 
 
+# ------------------------------------------------------------------ local
+def _pp(x):
+    """A probability as the panel writes it: 12.3 %."""
+    return "%.1f %%" % (100.0 * float(x))
+
+
+def compose_local(board, suggestions, games, notes, notes_available=True,
+                  model=None, res=None):
+    """The explanation, from the loaded model's own numbers.
+
+    Replaces the chat-completions call: no key, no network, no prose that
+    cannot be traced to a number. Everything here is either a probability the
+    model produced, a count over the retrieved drafts, or a line of the patch
+    notes - the same evidence the API prompt was given, minus the sentences.
+
+    Returns the same shape `validate` produces (`reasoning`, `recommend`,
+    `why`, `their_answer`, `risk`, `evidence`), so the panel renders it
+    unchanged, plus `local: True` so it can be labelled as such.
+
+    Why not ask the local LLM instead: the adapter in `pro/model/llm/` is a
+    reranker trained to emit one champion name from a shortlist. Its
+    generation does not stop at the name (`loss_on_eos=False`) and it has
+    never written a sentence, so prose from it would be invention dressed as
+    analysis - the opposite of what this panel is for.
+    """
+    if not suggestions:
+        return None
+    names = [n for n, _p in suggestions]
+    probs = [float(p) for _n, p in suggestions]
+    # The reranker's choice leads, even if the caller did not sort: the panel
+    # shows one answer and the prose has to describe that one.
+    rerank = (res or {}).get("rerank") or {}
+    chosen = rerank.get("chosen")
+    if chosen in names:
+        i = names.index(chosen)
+        if i:
+            names = [names[i]] + names[:i] + names[i + 1:]
+            probs = [probs[i]] + probs[:i] + probs[i + 1:]
+    # ...and the rest by probability, so "second at X" can never name a
+    # champion the model actually rated higher than the one before it.
+    rest = sorted(zip(names[1:], probs[1:]), key=lambda kv: -kv[1])
+    if rest:
+        names = [names[0]] + [n for n, _p in rest]
+        probs = [probs[0]] + [p for _n, p in rest]
+    top, top_p = names[0], probs[0]
+    second = names[1] if len(names) > 1 else None
+    # A list whose best entry is under a third of the mass is a preference, not
+    # an answer; saying which one it is changes how the reader uses it.
+    flat = max(probs) < 0.30
+
+    steps = []
+    if second is None:
+        steps.append("%s is the only legal champion here, so the list has one "
+                     "entry." % top)
+    else:
+        # The panel's answer is not always the highest number: when the
+        # reranker reorders, the chips carry its k-way probabilities while the
+        # rest keep the head's, so the two scales can disagree about which
+        # entry is "biggest". Say which is which instead of implying an order.
+        ranked = sorted(zip(names, probs), key=lambda kv: -kv[1])
+        best_name, best_p = ranked[0]
+        runner_name, runner_p = ranked[1] if len(ranked) > 1 else (None, 0.0)
+        if best_name == top:
+            steps.append(
+                "%s is the model's first choice at %s of the probability over "
+                "the champions still legal on this board; %s is next at %s."
+                % (top, _pp(top_p), runner_name, _pp(runner_p)))
+        else:
+            steps.append(
+                "The panel's answer is %s at %s of the answering model's "
+                "probability; the model's own highest-rated champion is %s at "
+                "%s, so this is a reordering rather than a preference."
+                % (top, _pp(top_p), best_name, _pp(best_p)))
+        if best_name == top and runner_p > 0 and best_p / runner_p >= 1.25:
+            steps.append(
+                "It is %.1fx the next entry, so this is a preference with "
+                "weight behind it rather than a tiebreak."
+                % (best_p / runner_p))
+        elif flat:
+            steps.append(
+                "The list is flat - the top five sit within %s of each other "
+                "- so the order is a weak ordering, not a confident call."
+                % _pp(max(probs) - min(probs)))
+
+    # The reranker's own contribution, when it ran: it can only reorder the
+    # head's five, so the interesting fact is whether it disagreed.
+    if chosen and not rerank.get("error"):
+        if rerank.get("head_top1_agrees"):
+            steps.append("The reranker read the same five and kept the head's "
+                         "first choice.")
+        else:
+            row = next((c for c in (rerank.get("candidates") or [])
+                        if c.get("name") == chosen), None)
+            steps.append(
+                "The reranker overrode the head and chose %s%s - it reads the "
+                "board as text, so it is the only part of this stack that can "
+                "disagree with the head's numbers."
+                % (chosen, " (%s of its k-way mass)" % _pp(row["prob"])
+                   if row else ""))
+
+    # What comparable drafts did next: a count, not an opinion.
+    nxt = [g.get("next_champ") for g in games if g.get("next_champ")]
+    their = None
+    if nxt:
+        counts = {}
+        for c in nxt:
+            counts[c] = counts.get(c, 0) + 1
+        best = max(counts.items(), key=lambda kv: kv[1])
+        side = next((g.get("next_side") for g in games
+                     if g.get("next_champ") == best[0]), None)
+        kind = next((g.get("next_kind") for g in games
+                     if g.get("next_champ") == best[0]), None)
+        their = ("%d of the %d comparable drafts took %s next%s."
+                 % (best[1], len(nxt), best[0],
+                    " (%s %s)" % (side, kind) if side else ""))
+        if best[1] == 1 and len(nxt) > 1:
+            # A one-vote "consensus" is not one: say how split they were.
+            their = ("No consensus: the %d comparable drafts took %d different "
+                     "champions next." % (len(nxt), len(counts)))
+            steps.append("No consensus in the comparable drafts - %d of them "
+                         "split across %d different answers, so that evidence "
+                         "is not weighing anything here."
+                         % (len(nxt), len(counts)))
+        elif best[0] == top:
+            steps.append("That is the same champion, from %d of %d boards."
+                         % (best[1], len(nxt)))
+        else:
+            steps.append(
+                "%d of the %d comparable drafts took %s instead, which is the "
+                "one fact here the model did not weigh." % (best[1], len(nxt),
+                                                            best[0]))
+    else:
+        their = "No comparable draft in the corpus."
+
+    # Patch notes for the recommended champion, if this patch touched it.
+    note = notes.get(top) if notes else None
+    if note:
+        steps.append("%s was changed in %s: %s"
+                     % (top, board.get("patch") or "this patch",
+                        note.split("\n")[0].strip()))
+
+    if second is not None and max(zip(names, probs), key=lambda kv: kv[1])[0] \
+            != top:
+        risk = ("This is the reranker's call, not the head's: the head rates "
+                "%s higher. Treat it as a disagreement between the two, not "
+                "as agreement."
+                % max(zip(names, probs), key=lambda kv: kv[1])[0])
+    elif flat:
+        risk = ("The list is flat enough that a different reading of the "
+                "enemy's comp would reorder it.")
+    else:
+        risk = ("The margin holds unless the enemy's next pick changes the "
+                "lane matchup.")
+    if second:
+        risk += " The alternative is %s at %s." % (second, _pp(probs[1]))
+
+    evidence = [{"type": "game", "id": str(g["gameid"])} for g in games[:3]]
+    if note:
+        evidence.append({"type": "patch", "line": note.split("\n")[0].strip()})
+
+    # What the panel shows as the answer is the answering model's first entry,
+    # which is `top` after the reorder above.
+    return {"reasoning": steps,
+            "recommend": top,
+            "why": steps[0] if steps else "",
+            "their_answer": their,
+            "risk": risk,
+            "evidence": evidence,
+            "unverified": [],
+            "problems": [],
+            "ok": True,
+            "cached": False,
+            "local": True,
+            "model": model or "policy head (local)"}
+
+
 # ------------------------------------------------------------------ client
 def client_from_env(env=None):
     """-> callable(messages) -> str, or None if no key is configured.
@@ -469,14 +645,22 @@ def _cache_write(key, value):
 
 # ------------------------------------------------------------------ public
 def explain(board, suggestions, index, client=None, k_games=5, use_cache=True,
-            force=False, names=None):
-    """Retrieve, prompt, validate, cache.
+            force=False, names=None, res=None, model=None):
+    """Retrieve, then explain - locally by default, through an API if asked.
 
     `board` carries move_idx, side, first_pick_side, patch, bans, blue, red
     and `champ_ids` (the champion ids on the board, for retrieval).
     `names` maps champion idx -> display name; without it the retrieved games
     report ids, which is fine for tests and useless for a prompt.
-    Returns dict with `retrieval`, `patch`, `explanation` (or None), `llm`.
+    `res` is the next-move result the panel is showing, so the explanation can
+    say whether the reranker disagreed with the head.
+    Returns dict with `retrieval`, `patch`, `explanation`, `llm`.
+
+    With no `client` - the shipped path since 2026-11-10 - the explanation is
+    composed from the model's own numbers (`compose_local`) instead of being
+    written by a hosted model, so no `LLM_API_KEY` is needed. The API path is
+    kept for anyone who wants prose, and it is no longer reachable from the
+    button.
     """
     games, relaxed = index.similar(
         board.get("champ_ids") or [], board["move_idx"],
@@ -499,9 +683,11 @@ def explain(board, suggestions, index, client=None, k_games=5, use_cache=True,
            "llm": {"configured": client is not None,
                    "model": getattr(client, "model", None)}}
     if client is None:
-        out["llm"]["reason"] = ("set LLM_API_KEY (and optionally "
-                                "LLM_BASE_URL / LLM_MODEL) to get prose; the "
-                                "retrieved evidence is returned regardless")
+        out["explanation"] = compose_local(
+            board, suggestions, games, notes, notes_available=available,
+            model=model, res=res)
+        if out["explanation"] is None:
+            out["llm"]["reason"] = "nothing to explain: no candidates"
         return out
 
     key = _cache_key({"v": PROMPT_VERSION,
