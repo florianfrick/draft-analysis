@@ -290,6 +290,13 @@ class PolicyValueModel(nn.Module):
                      step 0 even with every new parameter at zero.
       counter_rank:  rank of the output-side champion x gone-champion
                      interaction (0 = off).
+      pool_order:    "absolute" (default) pools as concat(v_blue, v_red, ...);
+                     "to_move" pools as concat(v_me, v_them, ...) with the
+                     side on the clock first. Same shape and no new
+                     parameters, but a different function - and the only one
+                     of the four switches that is not a no-op at step 0 with
+                     zeroed parameters, so it must live in the checkpoint
+                     config or an old artefact will load and score differently.
 
     Outputs:
       policy_logits [B, C] (legality-masked, -inf on taken/unavailable)
@@ -299,7 +306,8 @@ class PolicyValueModel(nn.Module):
 
     def __init__(self, encoder, embed_dim=256, state_dim=64,
                  n_econ=6, dropout=0.0, n_patches=0, with_value=True,
-                 ban_side=False, ban_fearless=False, counter_rank=0):
+                 ban_side=False, ban_fearless=False, counter_rank=0,
+                 pool_order="absolute"):
         super().__init__()
         self.encoder = encoder
         self.embed_dim = embed_dim
@@ -309,6 +317,10 @@ class PolicyValueModel(nn.Module):
         self.ban_side = bool(ban_side)
         self.ban_fearless = bool(ban_fearless)
         self.counter_rank = int(counter_rank or 0)
+        if pool_order not in ("absolute", "to_move"):
+            raise ValueError("pool_order must be 'absolute' or 'to_move', "
+                             "got %r" % (pool_order,))
+        self.pool_order = str(pool_order)
 
         # Ban context: banned champs attend into slot vectors. `n_kinds` /
         # `n_sides` size the optional embeddings; 1 / 0 reproduces the
@@ -379,17 +391,37 @@ class PolicyValueModel(nn.Module):
             p.requires_grad = not freeze
         self._encoder_frozen = freeze
 
-    def _pool(self, h, pad_mask):
+    def _pool(self, h, pad_mask, to_move=None):
         """Set-pooled vector z [B, 4D] (PAD-masked means per team).
 
         Same pooling as finetune/model.py: concat(v_blue, v_red,
         diff, product). PAD slots never contribute.
+
+        With `pool_order="to_move"` the first two blocks are the side on the
+        clock and its opponent instead, and the diff and product follow that
+        orientation, so all four are in me/them terms:
+
+            v_me, v_them = where(to_move, (v_red, v_blue), (v_blue, v_red))
+
+        Why: `to_move` is otherwise only an additive `side_embed` in the state
+        vector, and it is redundant with the board (`move_plan` derives it from
+        the ban/pick counts) while `swap_aug` makes it a flag rather than a
+        position. Measured, the head never learned it - a side flip moves the
+        lane distribution by TV 0.015 against 0.147 for one enemy pick
+        changing. Putting "my team" in a fixed position removes the XOR the
+        head would have to learn.
         """
         keep = (~pad_mask).float().unsqueeze(-1)  # [B,10,1]
         blue, red = h[:, :TEAM_SIZE], h[:, TEAM_SIZE:]
         kb, kr = keep[:, :TEAM_SIZE], keep[:, TEAM_SIZE:]
         vb = (blue * kb).sum(1) / kb.sum(1).clamp_min(1.0)
         vr = (red * kr).sum(1) / kr.sum(1).clamp_min(1.0)
+        if self.pool_order == "to_move" and to_move is not None:
+            flip = to_move.to(vb.dtype).unsqueeze(-1)  # [B,1], 1 = red moves
+            v_me = vb * (1.0 - flip) + vr * flip
+            v_them = vr * (1.0 - flip) + vb * flip
+            return torch.cat([v_me, v_them, v_me - v_them,
+                              v_me * v_them], dim=1)
         return torch.cat([vb, vr, vb - vr, vb * vr], dim=1)
 
     def _apply_legality(self, policy_logits, batch):
@@ -524,7 +556,7 @@ class PolicyValueModel(nn.Module):
         )  # [B, state_dim]
 
         # 4. Policy head: pool all slot vectors + state -> C logits
-        pooled = self._pool(h, batch["pad_mask"])  # [B, 4D]
+        pooled = self._pool(h, batch["pad_mask"], batch["to_move"])  # [B, 4D]
         # The policy is a distribution over all champions for the next
         # move. We don't condition on a specific slot — the state
         # (phase, side, move_idx) tells the head whether it's a ban or

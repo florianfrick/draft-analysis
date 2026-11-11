@@ -81,6 +81,14 @@ def parse_args(argv=None):
                     help="rank of the output-side champion x gone-champion "
                          "interaction; 0 = off (the ban-blind baseline). "
                          "~11k params at 32 with D=256.")
+    ap.add_argument("--pool-order", choices=("absolute", "to_move"),
+                    default="absolute",
+                    help="to_move puts the side on the clock first in the "
+                         "pooled vector, so 'my team' is a fixed position "
+                         "instead of an XOR of to_move with the board. Same "
+                         "shape, no new parameters, different function - so it "
+                         "is recorded in the checkpoint and read back by every "
+                         "loader.")
     ap.add_argument("--patch-emb", dest="patch_emb", action="store_true",
                     default=True)
     ap.add_argument("--no-patch-emb", dest="patch_emb", action="store_false")
@@ -262,13 +270,15 @@ def train(args):
         state_dim=args.state_dim, n_econ=0, dropout=args.dropout,
         n_patches=n_patches, with_value=False,
         ban_side=args.ban_side, ban_fearless=args.ban_fearless,
-        counter_rank=args.counter_rank).to(device)
+        counter_rank=args.counter_rank,
+        pool_order=args.pool_order).to(device)
     model.set_freeze_encoder(False)
     print("model: %.2fM params, lr head %.0e / enc %.0e, device %s"
           % (C.param_count(model) / 1e6, args.lr, lr_enc, device))
-    print("ban-awareness: side %s, fearless %s, counter rank %d"
+    print("ban-awareness: side %s, fearless %s, counter rank %d, pool %s"
           % ("ON" if args.ban_side else "off",
-             "ON" if args.ban_fearless else "off", args.counter_rank))
+             "ON" if args.ban_fearless else "off", args.counter_rank,
+             args.pool_order))
 
     # Built once and shared by all three loaders: it is a per-series lookup
     # over the whole corpus, and rebuilding it per split would both cost time
@@ -335,7 +345,8 @@ def train(args):
                # model that loads without complaint and scores differently.
                "ban_side": bool(args.ban_side),
                "ban_fearless": bool(args.ban_fearless),
-               "counter_rank": int(args.counter_rank)}
+               "counter_rank": int(args.counter_rank),
+               "pool_order": str(args.pool_order)}
 
     best = -1.0
     global_step = 0
@@ -407,6 +418,7 @@ def train(args):
         "ban_side": bool(args.ban_side),
         "ban_fearless": bool(args.ban_fearless),
         "counter_rank": int(args.counter_rank),
+        "pool_order": str(args.pool_order),
         "split": C.split_description(args.val_split, bool(splits["test"])),
         "val_scope": args.val_scope,
         "val_split": args.val_split,

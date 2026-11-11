@@ -76,7 +76,8 @@ def load_head(ckpt, device):
         n_patches=cfg.get("n_patches", 0), with_value=False,
         ban_side=bool(cfg.get("ban_side", False)),
         ban_fearless=bool(cfg.get("ban_fearless", False)),
-        counter_rank=int(cfg.get("counter_rank", 0) or 0))
+        counter_rank=int(cfg.get("counter_rank", 0) or 0),
+        pool_order=str(cfg.get("pool_order", "absolute")))
     own = set(model.state_dict())
     keep = {k: v for k, v in payload["model"].items() if k in own}
     missing = [k for k in own - set(keep)

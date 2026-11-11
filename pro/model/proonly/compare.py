@@ -143,7 +143,8 @@ def policy_ranks(ckpt, rows, splits, args, device):
         # happens to name.
         ban_side=bool(cfg.get("ban_side", False)),
         ban_fearless=bool(cfg.get("ban_fearless", False)),
-        counter_rank=int(cfg.get("counter_rank", 0) or 0))
+        counter_rank=int(cfg.get("counter_rank", 0) or 0),
+        pool_order=str(cfg.get("pool_order", "absolute")))
     state = payload["model"]
     # A checkpoint from the soloQ pipeline may carry value/econ heads this
     # comparison does not build. Anything else missing is a real failure.

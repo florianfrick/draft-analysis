@@ -329,7 +329,11 @@ def load_policy_model(path, device="cpu", payload=None):
         **({} if cls is not PolicyValueModel else {
             "ban_side": bool(cfg.get("ban_side", False)),
             "ban_fearless": bool(cfg.get("ban_fearless", False)),
-            "counter_rank": int(cfg.get("counter_rank", 0) or 0)}))
+            "counter_rank": int(cfg.get("counter_rank", 0) or 0),
+            # Not a no-op at step 0: it reorders the pooled halves, so a
+            # checkpoint written before the flag existed has no key and must
+            # rebuild in "absolute" order or it scores a different function.
+            "pool_order": str(cfg.get("pool_order", "absolute"))}))
     # `prior_bias` registers a placeholder table (1, 1, C) and the trainer
     # replaces it with the real (patch, move, champ) one, so the checkpoint's
     # buffer is wider than a fresh module's. Size it from the checkpoint
