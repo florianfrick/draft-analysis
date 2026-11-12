@@ -243,6 +243,17 @@ The chat panel toggles between `head` - the shipped path, no key, the server's
 numbers phrased by a template - and `agent`, which hands the same board to an LLM
 that calls the tools itself.
 
+`langgraph` is not in the image. It belongs in the venv, which is inside the bind
+mount and therefore survives `--rm`:
+
+```
+pro/model/llm/.venv/bin/pip install langgraph    # once; then re-run serve.sh
+```
+
+Re-run `serve.sh` after editing `.env`, too. `env_file` is read when the
+container is *created*, so a key added to a running one is invisible - and the
+symptom is the 503 or an empty key rather than a complaint about the key.
+
 ```json
 {"picks": ["Ezreal", null, "…"], "bans": ["Ashe", "…"],
  "first_pick": 0, "fearless": ["Vi", "…"],

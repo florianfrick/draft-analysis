@@ -11,6 +11,14 @@
 #     publishes nothing, so a server started through it is unreachable from the
 #     browser even though it is running fine
 #
+# The `agent` toggle in the chat panel needs one more thing, because langgraph is
+# not in the image and pip installs into the image are lost with `--rm`:
+#
+#   pro/model/llm/.venv/bin/pip install langgraph
+#
+# The venv is inside the bind mount, so that survives. And `.env` is read when
+# the container is created, so re-run this after adding a key.
+#
 #   bash frontend/serve.sh                       # http://127.0.0.1:8777
 #   bash frontend/serve.sh --port 8780           # or PORT=8780
 #   bash frontend/serve.sh --policy-ckpt pro/model/checkpoints/nextpick-bans-aware-through-wlds-ig-tes/best.pt
