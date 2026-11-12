@@ -1,15 +1,19 @@
 """The agent's tool layer: a queryable corpus, the models as tools, and a log.
 
-Not an agent. This package is the part that has to be *correct* before any
-LangGraph loop is worth writing: what the tools return, what they refuse, and
-what they record. The loop that decides which tool to call is the easy part and
-the part most likely to change; these three modules are what the experiment
-actually measures.
+This package is the part that has to be *correct* before any loop is worth
+running: what the tools return, what they refuse, and what they record.
 
     schema    build the SQLite corpus, and the schema text the model is shown
     sql_tool  one read-only query tool with mechanical guards
     model_tools  predict_next_move / rank_candidates over the trained heads
     session   the registry, the call log, and the ablation switch
+
+Two modules sit on top and are **not** imported here, so that the tool layer
+stays importable without `langgraph` or a network stack:
+
+    llm_client   an OpenAI-compatible chat client with tool calling
+    loop         the bounded tool-calling graph, over `Session`
+    mcp_server   the same tools over the MCP stdio wire protocol
 
 See `pro/model/agent/README.md` for why the schema looks the way it does.
 """

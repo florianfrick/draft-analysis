@@ -929,6 +929,60 @@ champions it does not mention. Movement on Kled alone is compliance, not
 reasoning, and `/api/draft-score` already returns the per-pick ranks that would
 show the difference.
 
+### The agent experiment — `exp/langgraph`, built, not yet evaluated
+
+**Built (2026-11-11).** The thesis being tested: a zero-shot end-to-end LLM draft
+assistant is not reachable by fine-tuning here, so put the trained models *behind*
+the LLM as tools and let it orchestrate. `pro/model/agent/` now has the tool layer
+(`schema.py`, `sql_tool.py`, `model_tools.py`, `session.py`), a bounded
+tool-calling graph (`loop.py`), an OpenAI-compatible client (`llm_client.py`) and
+an MCP stdio server (`mcp_server.py`). 60 tests. Two tiers by design, because
+neither works alone: **high-level** (`predict_next_move`, `rank_candidates` - the
+heads that already rank well) and **very low level** (one read-only `sql` tool
+over the whole corpus, with the schema in the prompt).
+
+**The prediction, recorded before measuring.** MCP-as-interface works (high
+confidence). The LLM as a full-pool ranker disappoints at **18-28 % top-1** -
+against 18.44 % for the head's own argmax and 33.85 % for the fine-tuned k=5
+reranker, i.e. no better than the model it is wrapping. End-to-end autonomy fails
+unmeasurably. The one place an agent can add value is the **13.65 % of val truths
+at ranks 6-20**, which the reranker structurally cannot reach; aggregate top-1
+will hide that slice, so the evaluation has to be split by it.
+
+**Why the low-level tier is a SQL tool and not ten more named tools.** The
+`_probe_tool_power.py` result: a per-champion cell is 0-2 of 120 boards at a given
+move, so the aggregate I guessed a coach wanted is usually empty. Guessing the
+right aggregates is the error; a query tool moves the choice to the model. The
+cost is that the schema becomes the prompt, and three properties of this corpus
+are silent-wrong-answer traps (patches overlap in time, `move_idx` is draft order
+not a slot, `split` is not optional) - each is handled in the schema and repeated
+in the tool's `hint`, and each has a test.
+
+**The measurement that motivated instrumentation.** The k=20 reranker experiment
+(§6) converted only 29 % of a 86.35 % ceiling, so the shortlist was never the
+bottleneck. If the agent's gain is also small, the useful question is not "does it
+pick better" but "what did it do" - hence every call logged with arguments,
+latency, row count and success, and `sql_share` as the number the design turns
+on: **more than half the calls being `sql` means the high-level tier is
+under-specified, not that SQL is over-powered.**
+
+**Ablation is part of the instrument, not a variant.** `--ablate sql` hides the
+spec *and* refuses the call. Hiding tests the shipped configuration; refusing
+catches the model that invents a tool it was never offered. Both are logged as
+`ablated`, not as errors.
+
+**One structural finding already.** Every model tool takes the whole board, so the
+model re-types nine champion names per call. The loop fills an *omitted* board
+(the turn's board is unambiguous) but **flags** a board the model retyped
+differently - `transcription.mismatched`. Silently correcting it would hide the
+most likely failure of the architecture. If mismatches are common, the fix is a
+stateful server that holds the board, not a better prompt.
+
+**Not written: the 200-state eval.** Whether the agent picks better than the head
+on the shared val, split by whether the truth was inside the head's top-20. Until
+that exists, this branch measures tool mix and nothing else, and the branch does
+not merge.
+
 ---
 
 ## 10. Reproduce
