@@ -22,9 +22,13 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-DEFAULT_BASE_URL = "https://api.openai.com/v1"
-# The id has to match the provider's catalogue; `LLM_MODEL` overrides it.
-DEFAULT_MODEL = "deepseek-v4.1-flash"
+DEFAULT_BASE_URL = "https://api.deepseek.com"
+# DeepSeek's current id is `deepseek-flash`, served by DeepSeek-V4.1-Flash-1017.
+# The legacy `deepseek-v4-flash` still resolves to the same model, but
+# `deepseek-v4.1-flash` - the obvious guess, and what this file used to say -
+# does not exist and 404s. DeepSeek defaults here because it is the model this
+# experiment was specified against; any OpenAI-compatible endpoint works.
+DEFAULT_MODEL = "deepseek-flash"
 
 
 class LLMError(RuntimeError):

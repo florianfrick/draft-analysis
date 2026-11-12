@@ -155,7 +155,7 @@ python pro/model/agent/loop.py --question "Kled or Olaf?" --blue "..." --red "..
 python pro/model/agent/mcp_server.py --self-test   # the protocol, no client
 python pro/model/agent/mcp_server.py               # serve on stdio
 
-pytest pro/model/agent/ -q                         # 66 tests
+pytest pro/model/agent/ -q                         # 70 tests
 ```
 
 The loop reads `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_TIMEOUT` - the
@@ -170,6 +170,45 @@ spends a call.
 `--scripted` replaces the model with a fake client that calls one tool and stops,
 which is enough to exercise the graph, the board filling and the ablation without
 a key.
+
+## Which provider
+
+The client is OpenAI-compatible and nothing else in the loop knows or cares, so
+the provider is three environment variables. The defaults are DeepSeek
+(`https://api.deepseek.com`, `deepseek-flash`) because that is the model this
+experiment was specified against - `deepseek-flash` is served by
+DeepSeek-V4.1-Flash-1017. **`deepseek-v4.1-flash` does not exist**; the obvious
+guess 404s, and the legacy `deepseek-v4-flash` still resolves to the same model.
+
+```bash
+python pro/model/agent/loop.py --ping            # one round trip, then exit
+python pro/model/agent/loop.py --ping --env-file .env.agent
+```
+
+`--ping` is not a nicety: a wrong base URL, a retired model id and a key without
+tool-calling access all look the same from inside `run()` - an empty answer or an
+HTTP error buried in a batch. The ping separates them, and it exercises the same
+call path, so a pass means the wiring is good.
+
+| option | cost | verdict |
+|---|---|---|
+| **DeepSeek direct** | ~¥1-2 for the whole 200-state eval (500 calls x ~1.3k in / 150 out, at peak rates; half off-peak) | the model under test, so results are comparable to this conversation |
+| **Gemini free tier** | 0 | works, but the daily cap is the binding constraint; the eval has to be resumable per state |
+| **Ollama, local 7-8B** | 0, unlimited | fine for measuring *tool selection*, not for measuring whether an agent beats the reranker |
+| **WorkBuddy cloud LLM** | 0 | **not usable from here** - see below |
+
+`--env-file` exists because `.env` belongs to the frontend: it points at
+`gpt-4o-mini` for `/api/explain`, and changing it would change the frontend's
+behaviour. Put the experiment's provider in `.env.agent` instead; `.env.*` is
+git-ignored.
+
+**Why the WorkBuddy keyless model is not an option for this loop.** The cloud
+LLM is `/.cloud/llm/chat/completions` on a deployed app's origin, reached through
+`@tencent-ai/workbuddy-cloud-sdk` from browser or mini-program code, authenticated
+by a publishable key and an exact-Origin match. It is a client-side API scoped to
+an application's quota, not an endpoint a local Python process can call. Reaching
+it would mean deploying a relay app and posting through it - a proxy to another
+product's quota, which is fragile and not something to build a measurement on.
 
 ## What this does not answer
 

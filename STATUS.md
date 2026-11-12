@@ -936,7 +936,7 @@ assistant is not reachable by fine-tuning here, so put the trained models *behin
 the LLM as tools and let it orchestrate. `pro/model/agent/` now has the tool layer
 (`schema.py`, `sql_tool.py`, `model_tools.py`, `session.py`), a bounded
 tool-calling graph (`loop.py`), an OpenAI-compatible client (`llm_client.py`) and
-an MCP stdio server (`mcp_server.py`). 66 tests. Two tiers by design, because
+an MCP stdio server (`mcp_server.py`). 70 tests. Two tiers by design, because
 neither works alone: **high-level** (`predict_next_move`, `rank_candidates` - the
 heads that already rank well) and **very low level** (one read-only `sql` tool
 over the whole corpus, with the schema in the prompt).
@@ -982,6 +982,21 @@ stateful server that holds the board, not a better prompt.
 on the shared val, split by whether the truth was inside the head's top-20. Until
 that exists, this branch measures tool mix and nothing else, and the branch does
 not merge.
+
+**Provider (2026-11-11).** `llm_client` is OpenAI-compatible, so the provider is
+three env vars. Defaults are DeepSeek (`api.deepseek.com`, `deepseek-flash`)
+because that is the model the experiment was specified against - and
+`deepseek-flash` is served by **DeepSeek-V4.1-Flash-1017**, the same model behind
+the WorkBuddy chat. Two corrections found while wiring it: the id
+`deepseek-v4.1-flash` **does not exist** (404; the legacy `deepseek-v4-flash`
+does resolve to the same model), and the WorkBuddy keyless cloud LLM is
+**not usable here** - it is `/.cloud/llm/chat/completions` on a deployed app's
+origin, reached through a browser/mini-program SDK with an exact-Origin match,
+scoped to that app's quota rather than callable from a local process. Cost of the
+eval at DeepSeek peak rates: ~500 calls x ~1.3k in / 150 out, so **~¥1-2**, half
+that off-peak. `loop.py --ping` validates a provider in one round trip, including
+whether it can call tools at all - the three failure modes (bad URL, retired
+model, no tool support) are otherwise indistinguishable from inside a batch.
 
 ---
 

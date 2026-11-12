@@ -304,9 +304,48 @@ def test_describe_says_what_a_run_would_use():
 
 def test_the_no_key_message_names_the_model_it_would_have_used(session):
     """The dead end this closes: a key set in `.env` and a loop that ignored it."""
-    out = loop.run(session, "x", env={"LLM_MODEL": "deepseek-v4.1-flash"})
-    assert "deepseek-v4.1-flash" in out["error"]
+    out = loop.run(session, "x", env={"LLM_MODEL": "deepseek-flash"})
+    assert "deepseek-flash" in out["error"]
     assert "--scripted" in out["error"]
+
+
+def test_ping_without_a_key_says_so():
+    rep = loop.ping(env={})
+    assert rep["ok"] is False
+    assert rep["error"] == "no LLM_API_KEY"
+    assert rep["model"] == llm_client.DEFAULT_MODEL
+
+
+def test_ping_reports_latency_and_whether_tools_work():
+    """The three ways a provider is wrong look identical from inside `run`."""
+    def client(messages, tools=None):
+        return reply("", [("sql", {"query": "SELECT 1"})]) if tools \
+            else reply("ok")
+
+    rep = loop.ping(client=client, env={"LLM_API_KEY": "k", "LLM_MODEL": "m"})
+    assert rep["ok"] is True
+    assert rep["answer"] == "ok"
+    assert rep["tool_calls"] == ["sql"]
+    assert rep["latency_ms"] >= 0
+    assert rep["model"] == "m"
+
+
+def test_ping_separates_a_key_that_cannot_call_tools():
+    def client(messages, tools=None):
+        return reply("ok" if not tools else "I have no tools")
+
+    rep = loop.ping(client=client, env={"LLM_API_KEY": "k"})
+    assert rep["ok"] is True
+    assert rep["tool_calls"] == []      # answers, but the loop cannot use it
+
+
+def test_ping_reports_an_http_error_instead_of_raising():
+    def client(messages, tools=None):
+        raise llm_client.LLMError("HTTP 404 from https://x: model not found")
+
+    rep = loop.ping(client=client, env={"LLM_API_KEY": "k"})
+    assert rep["ok"] is False
+    assert "404" in rep["error"]
 
 
 # --------------------------------------------------------------------- mcp

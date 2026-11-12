@@ -38,7 +38,9 @@ from __future__ import annotations
 import argparse
 import json
 import operator
+import os
 import sys
+import time
 import warnings
 from pathlib import Path
 from typing import Annotated, TypedDict
@@ -339,6 +341,51 @@ def scripted_client(calls=("rank_candidates",), answer=None,
     return call
 
 
+# ----------------------------------------------------------------------- ping
+PING_TOOL = {"type": "function",
+             "function": {"name": "sql",
+                          "description": "Run one read-only SQL query.",
+                          "parameters": {"type": "object",
+                                         "properties": {"query": {"type": "string"}},
+                                         "required": ["query"]}}}
+
+
+def ping(client=None, env=None):
+    """One cheap round trip, plus one request that needs tool calling.
+
+    Worth its 30 lines because the three ways a provider is wrong all look
+    identical from inside `run()`: a bad base URL, a retired model id and a key
+    without tool-calling access each produce an empty answer or an HTTP error
+    deep inside a 200-state batch. This tells them apart in five seconds, and it
+    is the same call path `run` uses, so a pass here means the wiring is good.
+    """
+    env = os.environ if env is None else env
+    out = dict(llm_client.describe(env), ok=False)
+    client = client if client is not None else llm_client.client_from_env(
+        env, temperature=0)
+    if client is None:
+        out["error"] = "no LLM_API_KEY"
+        return out
+    started = time.monotonic()
+    try:
+        reply = client([{"role": "user",
+                         "content": "Reply with the single word: ok"}])
+    except llm_client.LLMError as exc:
+        out["error"] = str(exc)
+        return out
+    out["latency_ms"] = round(1000 * (time.monotonic() - started))
+    out["answer"] = (reply.get("content") or "").strip()[:60]
+    out["ok"] = bool(out["answer"])
+    try:
+        reply = client([{"role": "user",
+                         "content": "Call sql with the query: SELECT 1 AS one"}],
+                       tools=[PING_TOOL])
+        out["tool_calls"] = [c["name"] for c in reply.get("tool_calls") or []]
+    except llm_client.LLMError as exc:
+        out["tool_calls"] = "error: %s" % exc
+    return out
+
+
 # ----------------------------------------------------------------------- cli
 def _load(ckpt, db, ablate, max_calls):
     predictor = champs = con = None
@@ -357,6 +404,24 @@ def _load(ckpt, db, ablate, max_calls):
                    ablate=ablate, max_calls=max_calls)
 
 
+def _print_ping(rep, from_env=()):
+    for key in ("model", "base_url", "ok", "latency_ms", "answer",
+                "tool_calls", "error"):
+        if key in rep:
+            print("  %-11s %s" % (key, rep[key]))
+    added = [k for k in from_env if k.startswith("LLM_")]
+    if added:
+        print("  %-11s %s" % ("from .env", ", ".join(added)))
+    if not rep["ok"]:
+        print("\n  not usable. DeepSeek:  LLM_BASE_URL=https://api.deepseek.com"
+              "  LLM_MODEL=deepseek-flash")
+        print("  Gemini:            LLM_BASE_URL=https://generativelanguage"
+              ".googleapis.com/v1beta/openai  LLM_MODEL=<an id from /models>")
+    elif not rep.get("tool_calls"):
+        print("\n  answers, but did not call a tool - the loop cannot use it.")
+    return 0 if rep["ok"] else 1
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--question", default="Kled or Olaf here?")
@@ -368,6 +433,12 @@ def main(argv=None):
     ap.add_argument("--ablate", default="")
     ap.add_argument("--max-steps", type=int, default=MAX_STEPS)
     ap.add_argument("--max-calls", type=int, default=24)
+    ap.add_argument("--env-file", default=None,
+                    help="dotenv file to read (default: .env). Use a separate "
+                         "file for this experiment so it does not fight the "
+                         "frontend's model settings.")
+    ap.add_argument("--ping", action="store_true",
+                    help="one round trip against the configured provider, then exit")
     ap.add_argument("--scripted", action="store_true",
                     help="run a fake client, so no API key is needed")
     ap.add_argument("--json", action="store_true", help="print the transcript")
@@ -381,12 +452,15 @@ def main(argv=None):
     def names(s):
         return [x.strip() for x in s.split(",") if x.strip()]
 
-    board = board_from_args(names(args.blue), names(args.red), names(args.bans),
-                            args.first_pick, args.patch)
     # `.env` is where this repo keeps its keys; docker compose injects it for
     # the frontend, but a host-side script has to read it itself or the user
     # sets a key and is told there is none.
-    from_env = llm_client.load_dotenv()
+    from_env = llm_client.load_dotenv(args.env_file)
+    if args.ping:
+        return _print_ping(ping(), from_env)
+
+    board = board_from_args(names(args.blue), names(args.red), names(args.bans),
+                            args.first_pick, args.patch)
     session = _load(args.ckpt, args.db,
                     {x.strip() for x in args.ablate.split(",") if x.strip()},
                     args.max_calls)
