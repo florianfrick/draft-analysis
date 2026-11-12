@@ -155,7 +155,7 @@ python pro/model/agent/loop.py --question "Kled or Olaf?" --blue "..." --red "..
 python pro/model/agent/mcp_server.py --self-test   # the protocol, no client
 python pro/model/agent/mcp_server.py               # serve on stdio
 
-pytest pro/model/agent/ -q                         # 70 tests
+pytest pro/model/agent/ -q                         # 74 tests
 ```
 
 The loop reads `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_TIMEOUT` - the
@@ -210,6 +210,42 @@ an application's quota, not an endpoint a local Python process can call. Reachin
 it would mean deploying a relay app and posting through it - a proxy to another
 product's quota, which is fragile and not something to build a measurement on.
 
+## The first hand-run (2026-11-11): 2 of 6, and why the number is not the point
+
+Before any key existed, the tool layer was driven by hand: six val states,
+stratified by where the head ranked the true next pick (2 at rank 1, 2 at 2-5, 2
+at 6-20), boards printed without the truth, answers written blind, scored after.
+`handrun.py` is that driver; it goes through `Session`, so the mix it reports is
+the same number the real loop reports.
+
+**9 calls: 5 `predict_next_move`, 3 `rank_candidates`, 1 `sql`. `sql_share`
+0.11, zero refusals.** The high-level tier carried the turn without the escape
+hatch, which is the outcome the two-tier design was betting on.
+
+**2/6 top-1 — 2/2 where the head was already right, 0/2 in each harder bucket.**
+The aggregate is meaningless (the sample is stratified, so it is not comparable
+to the head's 18.44 % on the real distribution). The *pattern* is the result:
+
+> **In all four misses I picked the head's own top-ranked champion.** The head's
+> ordering was wrong, not my reading of it.
+
+That is the prediction from STATUS §9 reproduced on six boards: an LLM wrapping
+the head cannot beat the head's argmax, because reading the distribution
+correctly is not the hard part. The interface worked perfectly and still lost.
+
+**Two things it did teach, both now in the prompt or the docs:**
+
+- **A shortlist you write yourself can omit the head's top pick.** In 2 of 3
+  `rank_candidates` calls, the shortlist I chose before seeing any distribution
+  missed the head's actual #1 (Rumble in one, Gwen in another). `rank_candidates`
+  is only as good as the set you hand it, so the prompt now says: if the
+  shortlist is yours, confirm with `predict_next_move` before answering.
+- **That confirmation is a coin flip, not a gain.** It flipped one board from a
+  hit to a miss (I abandoned my own correct read for the head's #1) and one from
+  a miss to a hit (the head's #1 was right and my shortlist had missed it). Net
+  zero, 2/6 either way. Following the head over your own read is not
+  automatically better - which is the same lesson from the other direction.
+
 ## What this does not answer
 
 Whether an LLM driving these tools beats the head. That needs the 200-state
@@ -219,6 +255,8 @@ ones where the agent can add anything the reranker cannot. Aggregate top-1 will
 look like a wash and hide exactly that.
 
 What the loop measures today is the **mix**, not the accuracy: how many calls,
-which tool, how often it fell back to SQL, whether it retyped the board. That is
-the diagnostic for the design; the pick-accuracy number needs the 200-state eval,
-and that is not written yet.
+which tool, how often it fell back to SQL, whether it retyped the board. The
+hand-run above is six boards and cannot support a rate; the pick-accuracy number
+needs the 200-state eval, and that is not written yet. `handrun.py` is its
+skeleton - the sampling, the stratification and the blind scoring are the parts
+that are easy to get wrong.

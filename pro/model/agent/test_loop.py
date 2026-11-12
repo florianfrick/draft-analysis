@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import contextlib
 import io
+import itertools
 import json
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -22,7 +24,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 sys.path.insert(0, str(ROOT))
 
-from pro.model.agent import llm_client, loop, mcp_server, schema  # noqa: E402
+from pro.model.agent import handrun, llm_client, loop, mcp_server, schema  # noqa: E402
 from pro.model.agent.session import Session                        # noqa: E402
 from pro.model.agent.test_agent import SPLIT, _rows                # noqa: E402
 
@@ -232,6 +234,13 @@ def test_the_prompt_ranks_the_tools_by_reliability():
     i_pred = loop.SYSTEM.index("predict_next_move")
     i_sql = loop.SYSTEM.index("`sql`")
     assert i_rank < i_pred < i_sql
+
+
+def test_the_prompt_warns_that_a_shortlist_can_omit_the_heads_top_pick():
+    """Measured in the first hand-run: 2 of 3 hand-made shortlists missed it."""
+    text = loop.SYSTEM.lower()
+    assert "shortlist" in text
+    assert "before you answer" in text
 
 
 def test_the_prompt_says_the_two_probabilities_are_not_comparable():
@@ -481,3 +490,47 @@ def test_the_mcp_layer_and_the_loop_share_one_log(session):
                                  "arguments": {"query": "SELECT 1 AS one"}}}])
     assert session.summary()["by_tool"] == {"sql": 1}
     assert session.summary()["sql_share"] == 1.0
+
+
+# ------------------------------------------------------------- the hand-run
+def test_the_board_is_everything_strictly_before_the_move(con):
+    """One move too many and the answer is in the board; one too few and it is not."""
+    board = handrun._board(con, "g0", 12)
+    assert len(board["bans"]) == 10              # five each, in move order
+    assert board["blue_picks"] == [schema.key(schema.names()[0])]
+    assert board["red_picks"] == [schema.key(schema.names()[5])]
+    assert board["first_pick"] == 1
+    assert board["patch"] == "16.20"
+
+
+def test_the_sample_hides_the_bucket_while_answering(con, tmp_path, monkeypatch,
+                                                     capsys):
+    """The bucket says which boards to distrust - a real agent never has it."""
+    monkeypatch.setattr(handrun, "STATE", tmp_path / "state.json")
+    # cycle, not iter: `sample` asks for two per bucket by default and would
+    # exhaust a three-item iterator before it filled them.
+    ranks = itertools.cycle([1, 3, 8])
+    monkeypatch.setattr(handrun, "_head_rank",
+                        lambda *a, **k: (next(ranks), None))
+    monkeypatch.setattr(handrun, "_session",
+                        lambda: types.SimpleNamespace(
+                            con=con, predictor=object(), champs=object()))
+    handrun.cmd_sample(types.SimpleNamespace(n=3, seed=0))
+    out = capsys.readouterr().out
+    assert "bucket" not in out.lower()
+    assert "=== A ===" in out and "to move:" in out
+    blob = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
+    buckets = [s["bucket"] for s in blob["states"].values()]
+    assert len(buckets) == 3
+    assert set(buckets) <= set(handrun.BUCKETS)
+    assert all(s["truth"] for s in blob["states"].values())
+
+
+def test_the_sample_is_reproducible_from_its_seed(con, tmp_path, monkeypatch):
+    """A run nobody can repeat is an anecdote, not a measurement."""
+    monkeypatch.setattr(handrun, "STATE", tmp_path / "state.json")
+    monkeypatch.setattr(handrun, "_head_rank", lambda *a, **k: (1, None))
+    first, _ = handrun.sample(con, object(), object(), n=2, seed=7)
+    second, _ = handrun.sample(con, object(), object(), n=2, seed=7)
+    assert [s["gameid"] for s in first.values()] == \
+           [s["gameid"] for s in second.values()]

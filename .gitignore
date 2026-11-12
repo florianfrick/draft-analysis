@@ -104,3 +104,4 @@ Thumbs.db
 .workbuddy-ai/
 *.corrupt
 solo_queue/analysis/additive_model.json
+.handrun.json

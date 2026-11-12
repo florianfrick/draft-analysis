@@ -57,6 +57,11 @@ from pro.model.agent.session import Session                  # noqa: E402
 
 MAX_STEPS = 8
 
+# The shipped head, shared with `demo.py` and `handrun.py` so there is one place
+# to change when the checkpoint is retrained.
+DEFAULT_CKPT = str(ROOT / "pro" / "model" / "checkpoints"
+                   / "nextpick-sharedsplitthrough-las-dk-c-t1-r" / "best.pt")
+
 SYSTEM = """\
 You are a draft assistant for professional League of Legends. You answer one \
 question about one board, using tools.
@@ -71,6 +76,12 @@ trained for exactly that question and it is the most reliable thing you have.
 3. `sql` only when neither answers it: a rate over a patch window, a pairing's \
 lane record, a count of games. Always select the count next to a rate, always \
 filter `split = 'train'`, and treat n under 30 as an anecdote.
+
+If the shortlist is yours rather than the model's, call `predict_next_move` \
+before you answer. A shortlist you wrote can omit the head's own top pick, and \
+then a confident `rank_candidates` result is a confident answer to the wrong \
+question - in the first hand-run of this tool layer, a hand-made shortlist \
+missed the head's top pick on two of three boards.
 
 Reading the numbers:
 - `p_head` is a share of the legal pool (about 160 champions). `p_rerank` is a \
@@ -442,9 +453,7 @@ def main(argv=None):
     ap.add_argument("--scripted", action="store_true",
                     help="run a fake client, so no API key is needed")
     ap.add_argument("--json", action="store_true", help="print the transcript")
-    ap.add_argument("--ckpt", default=str(ROOT / "pro" / "model" / "checkpoints"
-                                          / "nextpick-sharedsplitthrough-las-dk-c-t1-r"
-                                          / "best.pt"))
+    ap.add_argument("--ckpt", default=DEFAULT_CKPT)
     ap.add_argument("--db", default=str(schema.DB_PATH))
     args = ap.parse_args(argv)
     warnings.filterwarnings("ignore")

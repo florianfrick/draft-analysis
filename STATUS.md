@@ -936,7 +936,7 @@ assistant is not reachable by fine-tuning here, so put the trained models *behin
 the LLM as tools and let it orchestrate. `pro/model/agent/` now has the tool layer
 (`schema.py`, `sql_tool.py`, `model_tools.py`, `session.py`), a bounded
 tool-calling graph (`loop.py`), an OpenAI-compatible client (`llm_client.py`) and
-an MCP stdio server (`mcp_server.py`). 70 tests. Two tiers by design, because
+an MCP stdio server (`mcp_server.py`). 74 tests. Two tiers by design, because
 neither works alone: **high-level** (`predict_next_move`, `rank_candidates` - the
 heads that already rank well) and **very low level** (one read-only `sql` tool
 over the whole corpus, with the schema in the prompt).
@@ -977,6 +977,27 @@ model re-types nine champion names per call. The loop fills an *omitted* board
 differently - `transcription.mismatched`. Silently correcting it would hide the
 most likely failure of the architecture. If mismatches are common, the fix is a
 stateful server that holds the board, not a better prompt.
+
+**First hand-run (2026-11-11): 2 of 6, and the misses are the finding.** With no
+key available, the tool layer was driven by hand (`handrun.py`): six val states,
+stratified by where the head ranked the true pick (2 at rank 1, 2 at 2-5, 2 at
+6-20), boards shown without the truth, answers written blind, scored after. **9
+calls: 5 `predict_next_move`, 3 `rank_candidates`, 1 `sql`; `sql_share` 0.11,
+zero refusals** - the high-level tier carried the turn, which is what the two-tier
+design bet on. **2/6 top-1: 2/2 where the head was already right, 0/2 in each
+harder bucket.** The aggregate is meaningless (stratified sample, not comparable
+to 18.44 % on the real distribution); the pattern is the result:
+
+> **In all four misses I picked the head's own top-ranked champion.** The head's
+> ordering was wrong, not my reading of it.
+
+That is §9's prediction reproduced on six boards - an LLM wrapping the head
+cannot beat the head's argmax, because reading the distribution correctly is not
+the hard part. Two operational lessons, both now in the prompt: a shortlist you
+write yourself **omits the head's top pick** (2 of 3 `rank_candidates` calls), so
+confirm with `predict_next_move` first; but that confirmation is a **coin flip,
+not a gain** - it flipped one board hit→miss (abandoning my own correct read for
+the head's #1) and one miss→hit, net zero.
 
 **Not written: the 200-state eval.** Whether the agent picks better than the head
 on the shared val, split by whether the truth was inside the head's top-20. Until
