@@ -256,14 +256,71 @@ board fields:
   thing an exploration must never damage. `Store.apply` refuses `real` by
   construction, and a test asserts a sandbox can never touch it.
 
-`Store.set_real` is the frontend's channel - it takes a move log, not a board.
-That integration is **not wired yet**: the store is seeded from the CLI
-(`--moves "Kled,Olaf,Aatrox"`) and the frontend still renders its own board.
+**The frontend writes `real` on every request that carries a board.** That is the
+integration, and it is one call: `_publish_state` in `frontend/server.py` maps the
+UI's riot ids to indices, hands the board to `Store.set_board`, and nothing else
+may write `real`. So the assistant reads the board the user is looking at without
+being told what it is.
 
-**What this does not fix.** The ranking. The 2-of-6 hand-run below is about the
-head being wrong, not about the interface being awkward; a state handle removes a
-whole class of *input* error and leaves the *judgment* error untouched. Expect
-fewer silent nonsense answers, not better picks.
+The two shapes are not the same question, which is why `log_from_board` exists:
+the UI keeps **slots** (ten, two blocks of five in pick order) and **side-grouped
+bans**; a state keeps **moves**, in the order they were made. Two rules fall out of
+what the UI cannot say:
+
+- **Bans are split by the schedule, not by halving.** A flat ban list is blue's
+  bans then red's, and how many belong to each side is in the schedule rather than
+  in the list. Halving is right only when both sides have made five; mid-phase-1
+  with 2 blue and 1 red it puts every ban on the wrong side from then on.
+- **The log stops at the first gap.** A pick slot is not a move index: a coach can
+  fill blue's third slot and leave the second empty, and a state cannot have move
+  7 without move 6. So the log is the longest prefix the board supports.
+  (`draftscore.replay` skips the gap and keeps scoring, because it scores each
+  placed pick independently - the two are right for their own question.)
+
+`test_a_ui_board_rebuilds_every_prefix_of_a_real_game` converts every prefix of
+eight real drafts and compares against the corpus, so the conversion is checked
+against the data rather than against itself.
+
+### Over HTTP
+
+| route | what it is for |
+|---|---|
+| `GET /api/state` | the live state and every sandbox, each rendered |
+| `POST /api/state` | `{op: clone\|apply\|undo\|drop\|reset, state, champion, name}` |
+| `POST /api/agent` | one agent turn against `real`; returns the transcript |
+
+`/api/agent` is the only route that calls a remote model. Three things have to be
+true, and each missing one is a sentence rather than a traceback: `langgraph`
+importable (503), a policy loaded (400), a key in the environment (200 with
+`stop: "no client"` and the reason). The board comes from the store, not from the
+payload, which is why the model is never asked to retype nine champion names. The
+corpus database is optional - without it the SQL tool is simply not offered.
+
+The frontend image does not ship `langgraph` (it lives in the venv inside the bind
+mount, so it is not baked in). One command adds it, and it survives `--rm`:
+
+    pro/model/llm/.venv/bin/pip install langgraph
+
+Then put the provider in `.env`, which `docker compose` already passes to the
+frontend container:
+
+    LLM_API_KEY=...
+    LLM_BASE_URL=https://api.deepseek.com
+    LLM_MODEL=deepseek-flash
+
+`python pro/model/agent/loop.py --ping` checks the pair before a single turn is
+spent: it separates a bad base URL, a retired model id and a key without
+tool-calling access, which all look identical from inside `run()`.
+
+The chat panel has a `head` / `agent` toggle. `head` is the shipped path and needs
+no key: the server computes the numbers and a template phrases them. `agent` hands
+the same board to an LLM that calls the tools itself. Switching modes clears the
+log, because a turn in the other mode answered a different question.
+
+**The ranking is not this component's job.** The heads are well trained and are
+not being improved on this branch; the goal is the user/chat interface. A state
+handle removes a whole class of *input* error and leaves judgment to the head,
+where it belongs - so expect fewer silent nonsense answers, and the same picks.
 
 ## The first hand-run (2026-11-11): fidelity 6/6, accuracy 2/6
 
@@ -309,15 +366,18 @@ frontend and a person, which is the actual goal of this branch.
 
 ## What this does not answer
 
-Whether an LLM driving these tools beats the head. That needs the 200-state
-evaluation on the shared val, split by whether the truth was inside the head's
-top-20: the ~13.65 % of states where the head is confidently wrong are the only
-ones where the agent can add anything the reranker cannot. Aggregate top-1 will
-look like a wash and hide exactly that.
+**Whether a user finds it useful.** That needs the frontend, a person and a
+pay-per-token key, and it is the goal of this branch - not a top-1 number.
 
-What the loop measures today is the **mix**, not the accuracy: how many calls,
-which tool, how often it fell back to SQL, whether it retyped the board. The
-hand-run above is six boards and cannot support a rate; the pick-accuracy number
-needs the 200-state eval, and that is not written yet. `handrun.py` is its
-skeleton - the sampling, the stratification and the blind scoring are the parts
-that are easy to get wrong.
+**Whether an LLM driving these tools beats the head.** Not the target any more:
+the heads are trained and are not being improved here. The 200-state eval would
+answer it, split by whether the truth was inside the head's top-20, because the
+~13.65 % of states where the head is confidently wrong are the only ones where an
+agent can add anything the reranker cannot - and aggregate top-1 would look like a
+wash and hide exactly that.
+
+What the loop measures today is the **mix**: how many calls, which tool, how often
+it fell back to SQL, whether it retyped the board. The hand-run above is six
+boards and cannot support a rate. `handrun.py` is the skeleton of that eval - the
+sampling, the stratification and the blind scoring are the parts that are easy to
+get wrong.

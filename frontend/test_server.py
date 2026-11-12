@@ -1247,3 +1247,197 @@ def test_explain_without_a_policy_model_is_an_error(app, httpd):
     app.pop("policy", None)
     status, d = _post(httpd, "/api/explain", _empty_board())
     assert status == 400 and "policy" in d["error"]
+
+
+# ---------------------------------------------------------------- state service
+@pytest.fixture()
+def fresh_store():
+    """A store per test: `real` is process-wide, so a stale one leaks a board."""
+    S._STATE_STORE = None
+    yield
+    S._STATE_STORE = None
+
+
+def _state_post(srv, body):
+    return _post(srv, "/api/state", json.dumps(body))
+
+
+def test_suggest_publishes_the_board_the_user_is_looking_at(app, httpd,
+                                                            fresh_store):
+    """The one thing the frontend owes the agent: the live board, kept current.
+
+    `/api/suggest` is what the UI calls on every click, so publishing there is
+    what makes the state never more than one request stale.
+    """
+    bans = list(app["mapping"])[:6]
+    status, d = _post(httpd, "/api/suggest",
+                      json.dumps({"picks": [None] * 10, "bans": bans,
+                                  "first_pick": 0}))
+    assert status == 200, d
+    status, st = _get(httpd, "/api/state")
+    assert status == 200, st
+    real = st["real"]
+    assert real["move_idx"] == 6 and real["state"] == "real"
+    assert real["kind"] == "pick" and real["side"] == "blue"
+    assert real["readonly"] is True
+    # six bans are on the state, in the order the schedule deals them
+    assert real["rendered"].count(",") >= 5
+    assert st["error"] is None
+
+
+def test_a_sandbox_is_explored_over_http_without_touching_the_live_board(
+        app, httpd, fresh_store):
+    """The workflow the assistant is given, driven through the API."""
+    bans = list(app["mapping"])[:6]
+    _post(httpd, "/api/suggest", json.dumps({"picks": [None] * 10, "bans": bans,
+                                             "first_pick": 0}))
+    status, d = _state_post(httpd, {"op": "clone", "name": "alistar-line"})
+    assert status == 200, d
+    sid = d["state"]
+    assert sid == "alistar-line"
+
+    name = app["names_by_idx"][next(i for i in range(173)
+                                    if i not in {app["mapping"][b] for b in bans})]
+    status, d = _state_post(httpd, {"op": "apply", "state": sid,
+                                    "champion": name})
+    assert status == 200, d
+    assert d["move_idx"] == 7
+    assert d["real"]["move_idx"] == 6          # the live board did not move
+
+    status, d = _state_post(httpd, {"op": "undo", "state": sid})
+    assert status == 200 and d["move_idx"] == 6
+
+    status, d = _state_post(httpd, {"op": "drop", "state": sid})
+    assert status == 200 and d["dropped"] == sid
+    assert [r["state"] for r in d["states"]] == ["real"]
+
+
+def test_the_live_board_cannot_be_edited_over_http(app, httpd, fresh_store):
+    _post(httpd, "/api/suggest", _empty_board())
+    name = app["names_by_idx"][next(iter(app["mapping"].values()))]
+    status, d = _state_post(httpd, {"op": "apply", "state": "real",
+                                    "champion": name})
+    assert status == 400 and "read-only" in d["error"]
+    status, d = _state_post(httpd, {"op": "nonsense"})
+    assert status == 400 and "unknown op" in d["error"]
+
+
+def test_a_board_the_state_refuses_is_reported_not_fatal(app, httpd,
+                                                         fresh_store):
+    """`/api/suggest` must still answer; the panel shows why the state is behind."""
+    riot = list(app["mapping"])[0]
+    _post(httpd, "/api/suggest", json.dumps({"picks": [None] * 10,
+                                             "bans": [riot], "first_pick": 0}))
+    # The same champion banned twice cannot be a draft.
+    status, d = _post(httpd, "/api/suggest",
+                      json.dumps({"picks": [None] * 10, "bans": [riot, riot],
+                                  "first_pick": 0}))
+    assert status == 200, d
+    status, st = _get(httpd, "/api/state")
+    assert st["error"] and "twice" in st["error"]
+    assert st["real"]["move_idx"] == 1         # the last good board survived
+
+
+def test_the_agent_route_says_why_it_cannot_answer(app, httpd, policy_ckpt,
+                                                   fresh_store, monkeypatch):
+    """No key is a sentence, not a traceback - and the wiring still runs."""
+    pytest.importorskip("langgraph")
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    S.load_predictor(Path(policy_ckpt))
+    status, d = _post(httpd, "/api/agent",
+                      json.dumps({"message": "what do we pick here?",
+                                  "picks": [None] * 10, "bans": [],
+                                  "first_pick": 0}))
+    assert status == 200, d
+    assert d["stop"] == "no client"
+    assert "LLM_API_KEY" in d["error"]
+    # the tools it would have offered, and the state it would have read
+    assert "get_state" in d["tools_offered"]
+    assert "predict_next_move" in d["tools_offered"]
+    assert d["state"]["move_idx"] == 0
+
+
+def test_the_agent_route_needs_a_policy(app, httpd, fresh_store):
+    pytest.importorskip("langgraph")
+    app.pop("policy", None)
+    status, d = _post(httpd, "/api/agent",
+                      json.dumps({"message": "what next?", "picks": [None] * 10,
+                                  "bans": [], "first_pick": 0}))
+    assert status == 400 and "policy" in d["error"]
+
+
+def test_the_agent_turn_reads_the_live_board_and_answers_over_http(
+        app, httpd, policy_ckpt, fresh_store, monkeypatch):
+    """The whole route, end to end, with a scripted model instead of a key.
+
+    What this pins is the wiring, which is the part a key cannot fix: the board
+    the handler publishes is the board the tool answers about, and the answer
+    comes back with the calls that produced it.
+    """
+    loop = pytest.importorskip("pro.model.agent.loop")
+    S.load_predictor(Path(policy_ckpt))
+    monkeypatch.setitem(S.APP, "agent_client",
+                        loop.scripted_client(calls=("get_state",
+                                                    "predict_next_move")))
+    bans = list(app["mapping"])[:6]
+    status, d = _post(httpd, "/api/agent",
+                      json.dumps({"message": "what do we pick here?",
+                                  "picks": [None] * 10, "bans": bans,
+                                  "first_pick": 0}))
+    assert status == 200, d
+    assert d["stop"] == "answered", d
+    assert d["model"] == "scripted"
+    assert [c["name"] for c in d["calls"]] == ["get_state",
+                                               "predict_next_move"]
+    assert all(c["ok"] for c in d["calls"])
+    # the tool ran against the board the handler published, not a stale one
+    assert d["state"]["move_idx"] == 6
+    assert d["summary"]["calls"] == 2 and d["summary"]["sql_share"] == 0.0
+    # ... and the loop never retyped the board, so nothing was mismatched
+    assert d["transcription"]["mismatched"] == []
+
+
+def test_the_agent_can_explore_a_sandbox_and_the_live_board_survives(
+        app, httpd, policy_ckpt, fresh_store, monkeypatch):
+    """The hypothetical the prompt describes, driven by the model's own calls."""
+    loop = pytest.importorskip("pro.model.agent.loop")
+    S.load_predictor(Path(policy_ckpt))
+    banned = {app["mapping"][b] for b in list(app["mapping"])[:6]}
+    idx = next(i for i in range(173) if i not in banned)
+    champ = app["names_by_idx"][idx]
+    S.APP["agent_client"] = None
+    monkeypatch.setitem(S.APP, "agent_client", _explore_client(loop, champ))
+
+    bans = list(app["mapping"])[:6]
+    status, d = _post(httpd, "/api/agent",
+                      json.dumps({"message": "and if they take %s?" % champ,
+                                  "picks": [None] * 10, "bans": bans,
+                                  "first_pick": 0}))
+    assert status == 200, d
+    assert [c["name"] for c in d["calls"]] == [
+        "clone_state", "apply_move", "predict_next_move", "undo_move"]
+    assert all(c["ok"] for c in d["calls"])
+    assert d["state"]["move_idx"] == 6          # the live board never moved
+    assert [r["state"] for r in d["states"]] == ["real", "hypo"]
+
+
+def _explore_client(loop, champ):
+    """clone -> apply -> predict -> undo, then answer. Order is the assertion."""
+    steps = [
+        ("clone_state", {"from_state": "real", "name": "hypo"}),
+        ("apply_move", {"state": "hypo", "champion": champ}),
+        ("predict_next_move", {"state": "hypo"}),
+        ("undo_move", {"state": "hypo"}),
+    ]
+    queue = [{"id": "c%d" % i, "name": n, "args": a}
+             for i, (n, a) in enumerate(steps)]
+
+    def call(messages, tools=None):
+        if queue:
+            c = queue.pop(0)
+            return {"role": "assistant", "content": "", "tool_calls": [c],
+                    "model": "scripted"}
+        return {"role": "assistant", "model": "scripted",
+                "content": "Taking %s there changes nothing material." % champ,
+                "tool_calls": []}
+    return call

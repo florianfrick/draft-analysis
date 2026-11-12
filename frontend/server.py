@@ -197,6 +197,7 @@ from roles import assign_lanes, legal_champions  # noqa: E402,F401
 import rerank as rerank_mod  # noqa: E402  (frontend/rerank.py: LLM reranker)
 import tools  # noqa: E402  (frontend/tools.py: the deterministic evidence layer)
 import chat  # noqa: E402  (frontend/chat.py: the inverted loop + replies)
+from pro.model.agent import draft_state, model_tools  # noqa: E402
 
 ROLE_ROWS = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"]
 N_SLOTS = 10
@@ -513,6 +514,62 @@ def icon_url(name):
     """Deterministic dDragon icon URL from a display name (offline path)."""
     ident = DDRAGON_NAME_FIX.get(name) or re.sub(r"[^A-Za-z]", "", name)
     return "%s%s/img/champion/%s.png" % (DDRAGON_CDN, DDRAGON_VERSION, ident)
+
+
+_STATE_LOCK = threading.Lock()
+_STATE_STORE = None
+
+# A sandbox is a list of states (one per move, for undo), so an unbounded store
+# is an unbounded leak in a process that never restarts. 32 is far more than an
+# exploration needs and small enough that a runaway loop cannot exhaust memory.
+MAX_SANDBOXES = 32
+
+
+def state_store():
+    """The live draft state, and the sandboxes an assistant may explore in.
+
+    Separate from `chat_corpus()` because it needs neither the corpus nor any
+    weights - only the name table - so a board can be published before a model
+    is loaded, and `/api/state` keeps working in a `--no-policy` install.
+
+    This is the one object the frontend and the agent share. The frontend writes
+    it (`_publish_state`, once per request that carries a board); the agent reads
+    it as `real` and clones it to explore. Nothing on the agent side can write
+    `real`, which is why the panel can be left open while a hypothetical is
+    being tested.
+    """
+    global _STATE_STORE
+    if _STATE_STORE is None:
+        with _STATE_LOCK:
+            if _STATE_STORE is None:
+                names = APP.get("names_by_idx")
+                if not names:
+                    raise ValueError("champion names are not loaded yet")
+                _STATE_STORE = draft_state.Store(model_tools.ChampIndex(names))
+    return _STATE_STORE
+
+
+def _agent_session():
+    """A `Session` over the loaded policy, the corpus and the live store.
+
+    The corpus database is optional: without it the SQL tool is simply not
+    offered, and the model and state tools still answer. The policy is not
+    optional - a run without the head would be a chat about a board with
+    nothing to say about it.
+    """
+    from pro.model.agent import schema as agent_schema
+    from pro.model.agent.session import Session
+
+    pred = APP.get("policy")
+    if pred is None:
+        raise ValueError("no next-move policy loaded - /api/agent answers from "
+                         "the head, so load a best_policy.pt first")
+    con = None
+    if Path(agent_schema.DB_PATH).exists():
+        con = agent_schema.connect(str(agent_schema.DB_PATH))
+    return Session(con=con, predictor=pred,
+                   champs=model_tools.ChampIndex(APP["names_by_idx"]),
+                   store=state_store(), max_calls=int(APP.get("agent_calls", 24)))
 
 
 def ddragon_icons():
@@ -1286,6 +1343,9 @@ class Handler(BaseHTTPRequestHandler):
                            "reason": rerank_mod.unavailable_reason()},
             })
             return
+        if path == "/api/state":
+            self._handle_state()
+            return
         if path.startswith("/api/"):
             self._send(404, {"error": "unknown endpoint"})
             return
@@ -1325,6 +1385,10 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_chat()
         elif route == "/api/tool":
             self._handle_tool()
+        elif route == "/api/state":
+            self._handle_state()
+        elif route == "/api/agent":
+            self._handle_agent()
         else:
             self._send(404, {"error": "unknown endpoint"})
 
@@ -1338,6 +1402,7 @@ class Handler(BaseHTTPRequestHandler):
         """
         try:
             payload = self._read_json()
+            self._publish_state(payload)
             pred = APP.get("policy")
             if pred is None:
                 raise ValueError("no next-move policy loaded - pick a "
@@ -1429,6 +1494,7 @@ class Handler(BaseHTTPRequestHandler):
         """
         try:
             payload = self._read_json()
+            self._publish_state(payload)
             pred = APP.get("policy")
             if pred is None:
                 raise ValueError("/api/chat needs a next-move policy "
@@ -1469,6 +1535,159 @@ class Handler(BaseHTTPRequestHandler):
                         "n_taken": len(board.taken)}
         self._send(200, out)
 
+    # ------------------------------------------------------------- state
+    def _publish_state(self, payload):
+        """Publish the board the user is looking at as the live state.
+
+        Called by every handler that receives a full board, so `real` is never
+        more than one request stale. The UI speaks riot ids and the store speaks
+        champion indices; the mapping stops at this edge, as it does everywhere
+        else in the frontend.
+
+        A board the store refuses is *recorded*, not raised: `/api/chat` falls
+        back to taking the board as an argument, which is what it did before
+        states existed, and the panel can show the reason instead of a 400.
+        """
+        mapping = APP.get("mapping") or {}
+        try:
+            picks = payload.get("picks") or [None] * N_SLOTS
+            picks_idx = [None if p is None else mapping[p] for p in picks]
+            flat = [mapping[b] for b in (payload.get("bans") or [])
+                    if b in mapping]
+            blue = [mapping[b] for b in (payload.get("bans_blue") or [])
+                    if b in mapping]
+            red = [mapping[b] for b in (payload.get("bans_red") or [])
+                   if b in mapping]
+            # The split only when it carries bans: a payload sending both is
+            # normal, but an empty pair next to a populated flat list means the
+            # split is the stale half and the flat list is the board.
+            split = bool(blue or red)
+            state, _old = state_store().set_board(
+                picks_idx, flat,
+                red_first=bool(int(payload.get("first_pick") or 0)),
+                patch=payload.get("patch"),
+                bans_blue=blue if split else None,
+                bans_red=red if split else None)
+        except (ValueError, KeyError, TypeError) as exc:
+            APP["state_error"] = str(exc)
+            return None
+        APP["state_error"] = None
+        return state
+
+    def _state_payload(self):
+        """One shape for `real` and for the sandboxes, so the panel cannot drift.
+
+        Built from `Store.list()` rather than from `summary()` so `label`,
+        `depth` and `readonly` are on `real` too - the panel decides whether to
+        offer an edit button from that flag, and a missing key would read as
+        false.
+        """
+        store = state_store()
+        rows = store.list()
+        for row in rows:
+            row["rendered"] = store.get(row["state"]).render(row["state"],
+                                                             store.display)
+        return {"real": next(r for r in rows
+                             if r["state"] == draft_state.REAL_ID),
+                "states": rows, "error": APP.get("state_error")}
+
+    def _handle_state(self):
+        """GET -> the live state and its sandboxes. POST -> one operation.
+
+        POST {op, state, champion, name}:
+
+            clone   copy `state` (default real) into a new sandbox
+            apply   play `champion` (a dDragon name) into `state`
+            undo    take back the last move in `state`
+            drop    delete a sandbox
+            reset   drop every sandbox, keeping `real`
+
+        `real` is refused for apply/undo/drop. It is written by `_publish_state`
+        and by nothing else, which is what lets a panel explore a hypothetical
+        while the board on screen keeps moving.
+        """
+        if self.command == "GET":
+            try:
+                self._send(200, self._state_payload())
+            except ValueError as exc:          # names not loaded yet
+                self._send(400, {"error": str(exc)})
+            return
+        try:
+            payload = self._read_json()
+            op = payload.get("op")
+            store = state_store()
+            sid = payload.get("state") or draft_state.REAL_ID
+            if op == "clone":
+                if len(store.ids()) > MAX_SANDBOXES:
+                    raise ValueError("too many sandboxes (%d) - drop one first"
+                                     % len(store.ids()))
+                out = {"state": store.clone(sid, payload.get("name"))}
+            elif op == "apply":
+                st = store.apply(sid, payload.get("champion"),
+                                 kind=payload.get("kind"),
+                                 side=payload.get("side"))
+                out = {"state": sid, "move_idx": st.move_idx}
+            elif op == "undo":
+                out = {"state": sid, "move_idx": store.undo(sid).move_idx}
+            elif op == "drop":
+                store.drop(sid)
+                out = {"dropped": sid}
+            elif op == "reset":
+                for other in store.ids():
+                    if other != draft_state.REAL_ID:
+                        store.drop(other)
+                out = {"dropped": "all sandboxes"}
+            else:
+                raise ValueError("unknown op %r (clone, apply, undo, drop, "
+                                 "reset)" % (op,))
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            self._send(400, {"error": str(exc)})
+            return
+        out.update(self._state_payload())
+        self._send(200, out)
+
+    def _handle_agent(self):
+        """POST {message, picks, bans, first_pick, fearless} -> one agent turn.
+
+        The only route that calls a remote model, and the only one whose answer
+        is prose. Three things have to be true, and each missing one is a
+        sentence rather than a traceback: `langgraph` importable, a key in the
+        environment, a policy loaded. The board comes from the store, not from
+        the payload - that is what `/api/state` is for, and it is why the model
+        is never asked to retype nine champion names.
+        """
+        try:
+            from pro.model.agent import loop
+        except ImportError as exc:
+            self._send(503, {"error": "the agent loop needs langgraph: %s" % exc})
+            return
+        try:
+            payload = self._read_json()
+            message = (payload.get("message") or "").strip()
+            if not message:
+                raise ValueError("empty message")
+            self._publish_state(payload)
+            sess = _agent_session()
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            self._send(400, {"error": str(exc)})
+            return
+        try:
+            # `agent_client` is the seam `/api/chat` already has as
+            # `chat_client`: a test (or a local model) can answer without a
+            # network, and with nothing set the environment decides.
+            out = loop.run(sess, message, client=APP.get("agent_client"),
+                           state_id=draft_state.REAL_ID,
+                           max_steps=int(payload.get("max_steps") or 8))
+        except Exception as exc:  # noqa: BLE001 - one panel, not the server
+            self._send(500, {"error": "agent failed: %s" % exc})
+            return
+        # The board the turn was about, and every sandbox it left behind: an
+        # exploration is only useful if the user can see what was tried.
+        state = self._state_payload()
+        out["state"] = state["real"]
+        out["states"] = state["states"]
+        self._send(200, out)
+
     def _handle_tool(self):
         """POST {tool, args:{...}, picks, bans, first_pick, fearless} -> one result.
 
@@ -1478,6 +1697,7 @@ class Handler(BaseHTTPRequestHandler):
         """
         try:
             payload = self._read_json()
+            self._publish_state(payload)
             name = payload.get("tool")
             if not name:
                 raise ValueError("missing 'tool'")
@@ -1508,6 +1728,7 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_suggest(self):
         try:
             payload = self._read_json()
+            self._publish_state(payload)
             picks = payload["picks"]              # len 10, riot id or None
             bans = payload.get("bans", [])        # riot ids
             fearless = payload.get("fearless") or []   # riot ids
@@ -1706,6 +1927,7 @@ class Handler(BaseHTTPRequestHandler):
         """
         try:
             payload = self._read_json()
+            self._publish_state(payload)
             pred = APP.get("policy")
             if pred is None:
                 raise ValueError(
@@ -1777,6 +1999,7 @@ class Handler(BaseHTTPRequestHandler):
         """
         try:
             payload = self._read_json()
+            self._publish_state(payload)
             pred = APP.get("policy")
             if pred is None:
                 raise ValueError(

@@ -1001,9 +1001,20 @@ Two measured facts made this cheap, and one was a bug:
   is `red_first` now, and the spec says so.
 - **The live board is read-only to the model.** A stateless tool cannot be
   corrupted; a stateful one can. `Store.apply` refuses `real` by construction and
-  a test asserts a sandbox can never touch it. `Store.set_real` is the
-  frontend's channel (a move log, not a board) and is **not wired yet** - the
-  store is seeded from `--moves`.
+  a test asserts a sandbox can never touch it. `Store.set_board` is the
+  frontend's channel - it takes the UI's slots and side-grouped bans and builds
+  the move log - and `_publish_state` calls it from every handler that carries a
+  board, so `real` is never more than one request stale.
+- **The UI's board and a state's log are different shapes**, and `log_from_board`
+  is the conversion: bans are split by the schedule rather than halved (a flat
+  list is blue's then red's, and mid-phase-1 halving puts every ban on the wrong
+  side), and the log stops at the first empty pick slot because move 7 cannot
+  exist without move 6. Checked by converting every prefix of eight real drafts
+  back to the corpus.
+- **`GET/POST /api/state` and `POST /api/agent`** expose the service to the
+  panel; the chat has a `head` / `agent` toggle. `/api/agent` needs `langgraph`
+  (503 without it), a policy (400) and a key (200, `stop: "no client"`), and it
+  reads the board from the store rather than the request.
 
 **The ranking is not this component's job.** The heads are well trained and are
 not being improved on this branch; the goal is the user/chat interface. A state

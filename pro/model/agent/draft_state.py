@@ -173,6 +173,73 @@ class DraftState:
                 "complete": due is None}
 
 
+def log_from_board(picks, bans=(), red_first=False, patch=None,
+                   bans_blue=None, bans_red=None):
+    """The frontend's board -> the chronological move log. -> DraftState.
+
+    The two shapes are not the same question. The UI keeps **slots** (ten, two
+    blocks of five in pick order) and **side-grouped bans**; a state keeps
+    **moves**, in the order they were made, because that is what the model reads
+    and what `to_move()` indexes. Nothing else in the codebase converts one to
+    the other, so a board reaching the store any other way would be a guess.
+
+    Two rules, both of which are about what the UI cannot tell us:
+
+    **Bans are split by the schedule, not by halving.** A flat ban list is the
+    UI's `allBansFlat`: blue's bans in order, then red's. How many belong to
+    each side is not in the list, but it *is* in the schedule - the first n bans
+    of the draft are dealt to known sides - so the split is exact for any legal
+    prefix. Halving is only right when both sides have made five, which is why
+    `draftscore.score`'s fallback is wrong mid-phase-1 (2 blue + 1 red reads as
+    1 blue + 2 red). Pass `bans_blue`/`bans_red` and this is moot.
+
+    **The log stops at the first gap.** A pick slot is not a move index: a coach
+    can fill blue's third slot and leave the second empty, and there is no
+    chronological claim to make about that board. `draftscore.replay` skips the
+    gap and keeps going, because it scores each placed pick independently; a
+    state cannot, because move 7 cannot exist without move 6. So the log is the
+    longest prefix the board supports, and `move_idx` is its length.
+    """
+    schedule = SCHEDULE_RED_FIRST if red_first else SCHEDULE_BLUE_FIRST
+    picks = list(picks or [])
+    if len(picks) < 10:
+        picks = picks + [None] * (10 - len(picks))
+
+    if bans_blue is not None or bans_red is not None:
+        by_side = {BLUE: [key(b) for b in (bans_blue or [])],
+                   RED: [key(b) for b in (bans_red or [])]}
+    else:
+        flat = [key(b) for b in (bans or [])]
+        # Deal the flat list onto the schedule to learn each side's count.
+        ban_sides = [side for kind, side in schedule if kind == BAN]
+        n_blue = sum(1 for side in ban_sides[:len(flat)] if side == BLUE)
+        by_side = {BLUE: flat[:n_blue], RED: flat[n_blue:]}
+
+    used = {BLUE: 0, RED: 0}          # picks consumed, per side
+    moves, seen = [], set()
+    for kind, side in schedule:
+        if kind == BAN:
+            queue = by_side[side]
+            if not queue:
+                break
+            champ = queue.pop(0)
+        else:
+            slot = used[side] if side == BLUE else 5 + used[side]
+            champ = picks[slot] if slot < len(picks) else None
+            if champ is None:
+                break
+            used[side] += 1
+            champ = key(champ)
+        if not champ:
+            break
+        if champ in seen:
+            raise IllegalMove("%s appears twice on this board - the UI and the "
+                              "state disagree" % champ)
+        seen.add(champ)
+        moves.append((kind, side, champ))
+    return DraftState(moves=tuple(moves), patch=patch, red_first=bool(red_first))
+
+
 class Store:
     """Named draft states. One real (read-only), any number of sandboxes."""
 
@@ -236,6 +303,37 @@ class Store:
         self._states[REAL_ID] = [state]
         self._labels[REAL_ID] = label
         return REAL_ID
+
+    def set_board(self, picks, bans=(), red_first=False, patch=None,
+                  bans_blue=None, bans_red=None):
+        """A UI board -> the live state. -> (state, the state it replaced).
+
+        The translation from indices to canonical keys lives here rather than in
+        the server because the store is what holds the name table. An index the
+        table cannot spell is refused: silently dropping it would shorten the
+        log and hand the model a board that is not the one on screen.
+        """
+        names = list(getattr(self.champs, "names", None) or [])
+
+        def nm(x):
+            if x is None or isinstance(x, str):
+                return x
+            i = int(x)
+            if not 0 <= i < len(names):
+                raise IllegalMove("champion index %d is outside the name table "
+                                  "(%d entries)" % (i, len(names)))
+            return names[i]
+
+        state = log_from_board([nm(p) for p in (picks or [])],
+                               bans=[nm(b) for b in (bans or [])],
+                               red_first=red_first, patch=patch,
+                               bans_blue=None if bans_blue is None
+                               else [nm(b) for b in bans_blue],
+                               bans_red=None if bans_red is None
+                               else [nm(b) for b in bans_red])
+        old = self.get(REAL_ID)
+        self.set_real(state)
+        return state, old
 
     def clone(self, from_id=REAL_ID, name=None):
         """-> a new sandbox id holding a copy of `from_id`'s current state."""

@@ -204,6 +204,114 @@ def test_listing_reports_depth_and_read_only():
     assert rows["a"]["depth"] == 1
 
 
+# ------------------------------------------------------- board -> move log
+def _ui_board(moves, red_first):
+    """A chronological move list -> the board shape the frontend sends.
+
+    Slots are two blocks of five in pick order; the flat ban list is the UI's
+    `allBansFlat`, i.e. blue's bans then red's. Built here rather than in the
+    module so the test asserts against the UI's shape, not against a helper
+    that could agree with the code it is checking.
+    """
+    blue = [c for k, s, c in moves if k == D.PICK and s == D.BLUE]
+    red = [c for k, s, c in moves if k == D.PICK and s == D.RED]
+    picks = blue + [None] * (5 - len(blue)) + red + [None] * (5 - len(red))
+    bans = ([c for k, s, c in moves if k == D.BAN and s == D.BLUE]
+            + [c for k, s, c in moves if k == D.BAN and s == D.RED])
+    return picks, bans
+
+
+def test_a_ui_board_rebuilds_every_prefix_of_a_real_game():
+    """The conversion, checked against the corpus rather than against itself.
+
+    Every prefix of a real draft is a board the frontend could be showing, so
+    every prefix has to come back as the moves the corpus recorded - including
+    the ones where one side has picked three times and the other twice.
+    """
+    if not Path(schema.DB_PATH).exists():
+        pytest.skip("corpus not built - run build_db.py")
+    con = schema.connect(str(schema.DB_PATH))
+    games = con.execute(
+        "SELECT gameid, first_pick FROM game g WHERE split = 'val'"
+        " AND (SELECT COUNT(*) FROM move WHERE gameid = g.gameid) = 20"
+        " ORDER BY first_pick, gameid LIMIT 8").fetchall()
+    checked = 0
+    for gameid, first_pick in games:
+        rows = con.execute(
+            "SELECT kind, side, champ_key FROM move WHERE gameid = ?"
+            " ORDER BY move_idx", (gameid,)).fetchall()
+        assert len(rows) == 20
+        for n in range(1, 21):
+            picks, bans = _ui_board(rows[:n], red_first=bool(first_pick))
+            got = D.log_from_board(picks, bans, red_first=bool(first_pick))
+            assert got.moves == tuple(rows[:n]), (gameid, n)
+            assert got.move_idx == n
+            checked += 1
+    assert checked >= 100
+
+
+def test_the_ban_split_is_dealt_by_the_schedule_not_halved():
+    """2 blue + 1 red mid-phase-1 is the case halving gets wrong.
+
+    The flat list is side-grouped (`allBansFlat`: blue's bans, then red's), so a
+    list of three is blue's first two and red's first one - and halving it reads
+    as 1 blue + 2 red, which puts every ban on the wrong side from then on.
+    """
+    # Blue-first: ban order is BLUE, RED, BLUE, RED, ...
+    st = D.log_from_board([], ["kled", "olaf", "vi"], red_first=False)
+    assert st.moves == ((D.BAN, D.BLUE, "kled"), (D.BAN, D.RED, "vi"),
+                        (D.BAN, D.BLUE, "olaf"))
+
+
+def test_the_side_grouped_bans_are_accepted_directly():
+    """The frontend sends `bans_blue`/`bans_red` too; that path must agree."""
+    flat = D.log_from_board([], ["kled", "olaf", "vi"], red_first=False)
+    split = D.log_from_board([], red_first=False,
+                             bans_blue=["kled", "olaf"], bans_red=["vi"])
+    assert flat.moves == split.moves
+
+
+def test_a_gap_in_the_pick_slots_truncates_the_log():
+    """A slot is not a move index, so a hole means the log stops there.
+
+    `draftscore.replay` skips the hole and keeps scoring the picks after it.
+    A state cannot: move 7 cannot exist without move 6.
+    """
+    # Blue-first, six bans done, then blue picks slots 0 and 2 but not 1.
+    bans = ["kled", "olaf", "vi", "poppy", "lee sin", "locke"]
+    picks = ["ahri", None, "vi2"] + [None] * 7
+    st = D.log_from_board(picks, bans, red_first=False)
+    assert st.move_idx == 7                       # six bans + blue's first pick
+    assert st.moves[-1] == (D.PICK, D.BLUE, "ahri")
+    assert st.board()["blue_picks"] == ["ahri"]
+
+
+def test_red_first_mirrors_which_slot_a_pick_comes_from():
+    """`red_first` swaps the schedule, not the slot layout."""
+    st = D.log_from_board([], ["kled"], red_first=True)
+    assert st.moves == ((D.BAN, D.RED, "kled"),)
+    assert st.board()["first_pick"] == 1
+
+
+def test_a_duplicated_champion_is_refused():
+    with pytest.raises(D.IllegalMove) as exc:
+        D.log_from_board([], ["kled", "kled"], red_first=False)
+    assert "twice" in str(exc.value)
+
+
+def test_the_store_converts_indices_and_keeps_the_name_table():
+    """The frontend speaks indices; the log speaks canonical keys."""
+    s = store()
+    names = NAMES
+    state, old = s.set_board([None] * 10, [names.index("Kled")], red_first=False)
+    assert state.moves == ((D.BAN, D.BLUE, "kled"),)
+    assert old.move_idx == 0                      # what it replaced
+    assert s.get(D.REAL_ID).moves == state.moves
+    with pytest.raises(D.IllegalMove) as exc:
+        s.set_board([999] + [None] * 9, [], red_first=False)
+    assert "outside the name table" in str(exc.value)
+
+
 # ------------------------------------------------------------------- session
 def test_state_tools_are_offered_only_with_a_store():
     without = Session(predictor=Predictor(),

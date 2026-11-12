@@ -5,6 +5,13 @@
 // difference between "the model suggested X" and "X is now on the board", and
 // the second one is the user's decision, not the chat's.
 //
+// Two answerers, one box. The default is `head`: the server computes the
+// numbers and a template (or a remote model asked to phrase, never to decide)
+// says which of them matters. `agent` hands the same board to an LLM that can
+// call the tools itself - it reads the live state, clones it to test a
+// hypothetical, and writes the sentence. The agent costs a key and a round trip
+// per step, which is why it is a toggle and not the default.
+//
 // Every turn shows three things, because each answers a different question:
 //   the reply   what the model and the corpus say, in sentences
 //   the delta   where the named champion moved, and what it would have taken to
@@ -15,6 +22,7 @@
   const el = id => document.getElementById(id);
   let busy = false;
   let turns = 0;
+  let mode = 'head';          // 'head' -> /api/chat, 'agent' -> /api/agent
 
   function boardBody() {
     return {
@@ -43,10 +51,18 @@
 
   function greet() {
     const n = el('chat-meta');
-    if (n) n.textContent = 'answers from the next-move head; nothing here edits the board';
-    add('system', 'Name a champion and say how strongly you rate it. The reply '
-      + 'shows the head\u2019s rank, where your wording moves it, and the '
-      + 'nearest boards that agree or disagree.');
+    if (n) {
+      n.textContent = mode === 'agent'
+        ? 'an LLM drives the tools; it reads the live board and cannot edit it'
+        : 'answers from the next-move head; nothing here edits the board';
+    }
+    add('system', mode === 'agent'
+      ? 'Ask about the board, or ask what happens if a champion is taken. The '
+        + 'assistant can clone the board to try it, then answer from the head\u2019s '
+        + 'ranking on the clone.'
+      : 'Name a champion and say how strongly you rate it. The reply '
+        + 'shows the head\u2019s rank, where your wording moves it, and the '
+        + 'nearest boards that agree or disagree.');
   }
 
   function add(kind, text) {
@@ -104,6 +120,57 @@
     el('chat-log').scrollTop = el('chat-log').scrollHeight;
   }
 
+  // ---- the agent's turn: an answer, plus the tool calls it is built on ----
+  function summariseArgs(args) {
+    if (!args || !Object.keys(args).length) return 'no arguments';
+    const text = Object.keys(args).map(k => {
+      const v = args[k];
+      if (Array.isArray(v)) return k + '=[' + v.length + ']';
+      return k + '=' + (typeof v === 'object' ? JSON.stringify(v) : v);
+    }).join(', ');
+    return text.length > 90 ? text.slice(0, 90) + '\u2026' : text;
+  }
+
+  function renderAgent(res) {
+    const d = add('model', '');
+    let html = '';
+    if (res.answer) {
+      html += '<p>' + esc(res.answer) + '</p>';
+    } else {
+      html += '<p class="muted">no answer \u2014 ' + esc(res.stop || 'unknown')
+        + '</p>';
+    }
+    if (res.error) {
+      html += '<div class="chat-ev-note">' + esc(res.error) + '</div>';
+    }
+    const calls = res.calls || [];
+    if (calls.length) {
+      const rows = calls.map(c => '<div class="chat-ev-row"><b>'
+        + esc(c.name) + '</b> <span class="muted">'
+        + esc(summariseArgs(c.args)) + '</span>'
+        + (c.ok ? '' : ' <span class="chat-thin">refused</span>')
+        + '</div>').join('');
+      html += '<details class="chat-ev"><summary>tools (' + calls.length
+        + ')</summary>' + rows + '</details>';
+    }
+    const s = res.summary || {};
+    const facts = ['<span class="chat-chip">' + esc(res.model || 'no model')
+      + '</span>',
+      '<span class="chat-chip muted">stop: ' + esc(res.stop || '?') + '</span>'];
+    if (s.calls != null) {
+      facts.push('<span class="chat-chip muted">' + s.calls + ' calls</span>');
+    }
+    if (s.sql_share != null) {
+      // The number the two-tier design is judged on: mostly SQL means the
+      // high-level tools are under-specified, not that SQL is too good.
+      facts.push('<span class="chat-chip muted">sql '
+        + Math.round(100 * s.sql_share) + ' %</span>');
+    }
+    html += '<div class="chat-facts">' + facts.join('') + '</div>';
+    d.innerHTML = html;
+    el('chat-log').scrollTop = el('chat-log').scrollHeight;
+  }
+
   async function send(text) {
     if (busy) return;
     busy = true;
@@ -117,14 +184,21 @@
     const sig = chatSig();
     try {
       const body = Object.assign(boardBody(), { message: text });
-      const r = await fetch('/api/chat', {
+      const agent = mode === 'agent';
+      const r = await fetch(agent ? '/api/agent' : '/api/chat', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
       const res = await r.json();
       pending.remove();
       if (!r.ok || res.error) { add('error', res.error || ('HTTP ' + r.status)); }
-      else {
+      else if (agent) {
+        // No CHAT_ROW: the agent's answer is prose about a state, and the row
+        // under the header compares the *head's* ranking with the chat's. An
+        // agent turn has neither a single ranking nor a lambda to publish.
+        turns++;
+        renderAgent(res);
+      } else {
         turns++;
         render(res);
         // The same ranking, published to the next-move panel: the chat log is
@@ -153,6 +227,18 @@
       turns = 0;
       // The row in the panel is a record of a turn, and its provenance is the
       // message it quotes. Forget the turns and the record has to go with them.
+      CHAT_ROW = null;
+      renderChatRow();
+      greet();
+    });
+    el('chat-mode').addEventListener('click', () => {
+      mode = mode === 'agent' ? 'head' : 'agent';
+      el('chat-mode').textContent = mode;
+      // A turn in the other mode answered a different question, so the log
+      // cannot stay: "head" and "agent" disagreeing on screen with no label
+      // between them reads as a model changing its mind.
+      el('chat-log').innerHTML = '';
+      turns = 0;
       CHAT_ROW = null;
       renderChatRow();
       greet();

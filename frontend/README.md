@@ -221,6 +221,28 @@ per-candidate `flex`, and `fearless_filtered` — how many pool champions were
 removed from the answer —), and `POST /api/next-move` (always the next-move
 model):
 
+**The draft-state service.** Every handler that receives a full board also
+publishes it as the live state (`real`), which is what an assistant reads instead
+of being handed nine champion names to retype. Three routes expose it:
+
+| route | body | what it does |
+|---|---|---|
+| `GET /api/state` | — | `real` plus every sandbox, each rendered |
+| `POST /api/state` | `{op, state, champion, name}` | `clone`, `apply`, `undo`, `drop`, `reset` |
+| `POST /api/agent` | `{message, …board}` | one LLM turn against `real`; returns the transcript |
+
+`real` is read-only over HTTP: `apply`/`undo`/`drop` on it are a 400, and only the
+board publication writes it. A board the store cannot read (a champion twice, say)
+is recorded in `GET /api/state`'s `error` rather than returned as a failure, so
+`/api/suggest` keeps answering and the panel can say why the state is behind.
+
+`/api/agent` is the only route that calls a remote model, and it needs three
+things: `langgraph` installed (else 503), a next-move policy loaded (else 400),
+and a key in the environment (else 200 with `stop: "no client"` and the reason).
+The chat panel toggles between `head` - the shipped path, no key, the server's
+numbers phrased by a template - and `agent`, which hands the same board to an LLM
+that calls the tools itself.
+
 ```json
 {"picks": ["Ezreal", null, "…"], "bans": ["Ashe", "…"],
  "first_pick": 0, "fearless": ["Vi", "…"],
