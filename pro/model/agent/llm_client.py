@@ -20,6 +20,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 # The id has to match the provider's catalogue; `LLM_MODEL` overrides it.
@@ -28,6 +29,43 @@ DEFAULT_MODEL = "deepseek-v4.1-flash"
 
 class LLMError(RuntimeError):
     pass
+
+
+def describe(env=None):
+    """-> {model, base_url, has_key}. What a run would use, without using it."""
+    env = os.environ if env is None else env
+    return {"model": env.get("LLM_MODEL") or DEFAULT_MODEL,
+            "base_url": (env.get("LLM_BASE_URL") or DEFAULT_BASE_URL).rstrip("/"),
+            "has_key": bool((env.get("LLM_API_KEY") or "").strip())}
+
+
+def load_dotenv(path=None, env=None):
+    """Read KEY=VALUE lines from `.env` into `env`; never override what is set.
+
+    The repo keeps its secrets in `.env` and docker compose injects them, so a
+    host-side script that ignores the file is a dead end - the user sets a key
+    and is told there is none. Returns the names it added, so a CLI can say
+    which ones came from the file rather than the shell.
+
+    Deliberately minimal: no interpolation, no `export`, no multiline values.
+    A parser with opinions about `.env` is a dependency wearing a trench coat.
+    """
+    env = os.environ if env is None else env
+    path = Path(path) if path is not None else Path(__file__).resolve().parents[3] / ".env"
+    if not path.exists():
+        return []
+    added = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and value and not (env.get(key) or "").strip():
+            env[key] = value
+            added.append(key)
+    return added
 
 
 def _normalise(message):

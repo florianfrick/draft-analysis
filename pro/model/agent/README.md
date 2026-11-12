@@ -155,14 +155,21 @@ python pro/model/agent/loop.py --question "Kled or Olaf?" --blue "..." --red "..
 python pro/model/agent/mcp_server.py --self-test   # the protocol, no client
 python pro/model/agent/mcp_server.py               # serve on stdio
 
-pytest pro/model/agent/ -q                         # 60 tests
+pytest pro/model/agent/ -q                         # 66 tests
 ```
 
 The loop reads `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_TIMEOUT` - the
 same contract as `frontend/llm.py`, so a transcript that names a model names the
-one that answered. `--scripted` replaces the model with a fake client that calls
-one tool and stops, which is enough to exercise the graph, the board filling and
-the ablation without a key.
+one that answered. It also reads `.env` from the repo root, without overriding
+the shell, because that is where this repo keeps its keys and docker compose only
+injects them for the frontend: a host-side script that ignored the file would
+tell a user with a key that there is none. The banner prints the model, the base
+URL and whether a key was found, so a misconfigured run is visible before it
+spends a call.
+
+`--scripted` replaces the model with a fake client that calls one tool and stops,
+which is enough to exercise the graph, the board filling and the ablation without
+a key.
 
 ## What this does not answer
 

@@ -936,7 +936,7 @@ assistant is not reachable by fine-tuning here, so put the trained models *behin
 the LLM as tools and let it orchestrate. `pro/model/agent/` now has the tool layer
 (`schema.py`, `sql_tool.py`, `model_tools.py`, `session.py`), a bounded
 tool-calling graph (`loop.py`), an OpenAI-compatible client (`llm_client.py`) and
-an MCP stdio server (`mcp_server.py`). 60 tests. Two tiers by design, because
+an MCP stdio server (`mcp_server.py`). 66 tests. Two tiers by design, because
 neither works alone: **high-level** (`predict_next_move`, `rank_candidates` - the
 heads that already rank well) and **very low level** (one read-only `sql` tool
 over the whole corpus, with the schema in the prompt).

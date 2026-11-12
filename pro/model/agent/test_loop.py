@@ -259,6 +259,56 @@ def test_the_board_renders_the_way_a_user_would_type_it():
     assert "not given" in loop.render_board({})
 
 
+# ------------------------------------------------------------- the env contract
+def test_dotenv_is_read_because_the_repo_keeps_its_keys_there(tmp_path):
+    """docker compose injects `.env` for the frontend; a host script must too."""
+    p = tmp_path / ".env"
+    p.write_text("# comment\n\nLLM_API_KEY='sk-test'\nLLM_MODEL=deepseek-v4.1-flash\n",
+                 encoding="utf-8")
+    env = {}
+    added = llm_client.load_dotenv(p, env)
+    assert added == ["LLM_API_KEY", "LLM_MODEL"]
+    assert env["LLM_API_KEY"] == "sk-test"          # quotes stripped
+    assert env["LLM_MODEL"] == "deepseek-v4.1-flash"
+
+
+def test_dotenv_never_overrides_the_shell(tmp_path):
+    """A key exported for one run must not be silently replaced by the file."""
+    p = tmp_path / ".env"
+    p.write_text("LLM_API_KEY=from-file\n", encoding="utf-8")
+    env = {"LLM_API_KEY": "from-shell"}
+    assert llm_client.load_dotenv(p, env) == []
+    assert env["LLM_API_KEY"] == "from-shell"
+
+
+def test_an_empty_value_in_the_file_does_not_count_as_set(tmp_path):
+    p = tmp_path / ".env"
+    p.write_text("LLM_API_KEY=\n", encoding="utf-8")
+    env = {}
+    assert llm_client.load_dotenv(p, env) == []
+    assert "LLM_API_KEY" not in env
+
+
+def test_a_missing_dotenv_is_not_an_error(tmp_path):
+    assert llm_client.load_dotenv(tmp_path / "nope", {}) == []
+
+
+def test_describe_says_what_a_run_would_use():
+    cfg = llm_client.describe({})
+    assert cfg["model"] == llm_client.DEFAULT_MODEL
+    assert cfg["has_key"] is False
+    cfg = llm_client.describe({"LLM_API_KEY": "k", "LLM_MODEL": "m",
+                               "LLM_BASE_URL": "https://x/v1/"})
+    assert cfg == {"model": "m", "base_url": "https://x/v1", "has_key": True}
+
+
+def test_the_no_key_message_names_the_model_it_would_have_used(session):
+    """The dead end this closes: a key set in `.env` and a loop that ignored it."""
+    out = loop.run(session, "x", env={"LLM_MODEL": "deepseek-v4.1-flash"})
+    assert "deepseek-v4.1-flash" in out["error"]
+    assert "--scripted" in out["error"]
+
+
 # --------------------------------------------------------------------- mcp
 def _serve(session, messages):
     buf = io.StringIO()

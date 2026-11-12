@@ -250,9 +250,12 @@ def run(session, question, client=None, board=None, system=SYSTEM,
            "transcription": {"filled": [], "mismatched": []}}
     client = client if client is not None else llm_client.client_from_env(env)
     if client is None:
-        out["error"] = ("no LLM_API_KEY (or LLM_BASE_URL/LLM_MODEL) in the "
-                        "environment - the tools are available but nothing can "
-                        "drive them; try --scripted")
+        cfg = llm_client.describe(env)
+        out["error"] = ("no LLM_API_KEY in the environment - this run would "
+                        "have used %s at %s. Set LLM_API_KEY (and LLM_BASE_URL "
+                        "/ LLM_MODEL if the provider is not the default), or "
+                        "use --scripted to exercise the graph without one."
+                        % (cfg["model"], cfg["base_url"]))
         out.update(summary=session.summary(), calls=list(session.log))
         return out
 
@@ -380,10 +383,20 @@ def main(argv=None):
 
     board = board_from_args(names(args.blue), names(args.red), names(args.bans),
                             args.first_pick, args.patch)
+    # `.env` is where this repo keeps its keys; docker compose injects it for
+    # the frontend, but a host-side script has to read it itself or the user
+    # sets a key and is told there is none.
+    from_env = llm_client.load_dotenv()
     session = _load(args.ckpt, args.db,
                     {x.strip() for x in args.ablate.split(",") if x.strip()},
                     args.max_calls)
     print("tools offered:", ", ".join(session.names()) or "none")
+    cfg = llm_client.describe()
+    note = "" if cfg["has_key"] else "   (no key)"
+    llm_added = [k for k in from_env if k.startswith("LLM_")]
+    if llm_added:
+        note += "   [from .env: %s]" % ", ".join(llm_added)
+    print("model: %s at %s%s" % (cfg["model"], cfg["base_url"], note))
     client = scripted_client() if args.scripted else None
     out = run(session, args.question, client=client, board=board,
               max_steps=args.max_steps)
