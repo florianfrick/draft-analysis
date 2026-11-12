@@ -228,19 +228,27 @@ def test_every_call_goes_through_the_session(con):
 
 
 # -------------------------------------------------------------- the prompt
-def test_the_prompt_ranks_the_tools_by_reliability():
+def test_the_prompt_reads_the_board_before_it_ranks_anything():
     """The order in the prompt is the design decision; pin it."""
-    i_rank = loop.SYSTEM.index("rank_candidates")
+    i_state = loop.SYSTEM.index("get_state")
     i_pred = loop.SYSTEM.index("predict_next_move")
+    i_rank = loop.SYSTEM.index("rank_candidates")
     i_sql = loop.SYSTEM.index("`sql`")
-    assert i_rank < i_pred < i_sql
+    assert i_state < i_pred < i_rank < i_sql
+
+
+def test_the_prompt_forbids_retyping_a_board():
+    """The transcription failure the state service exists to remove."""
+    text = loop.SYSTEM.lower()
+    assert "never retype a board" in text
+    assert "read-only" in text
 
 
 def test_the_prompt_warns_that_a_shortlist_can_omit_the_heads_top_pick():
     """Measured in the first hand-run: 2 of 3 hand-made shortlists missed it."""
     text = loop.SYSTEM.lower()
-    assert "shortlist" in text
-    assert "before you answer" in text
+    assert "shortlist you wrote" in text
+    assert "omit the head's top pick" in text
 
 
 def test_the_prompt_says_the_two_probabilities_are_not_comparable():
@@ -263,7 +271,9 @@ def test_the_tools_are_offered_in_the_openai_shape(session):
 def test_the_board_renders_the_way_a_user_would_type_it():
     text = loop.render_board(BOARD)
     assert "Aatrox, Vi, Ahri" in text
-    assert "first pick: blue" in text
+    # BOARD has first_pick=1, which is RED first - the corpus meaning, and the
+    # opposite of what the tool spec claimed before it was measured.
+    assert "first pick: red" in text
     assert "16.20" in text
     assert "not given" in loop.render_board({})
 

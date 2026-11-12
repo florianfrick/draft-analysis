@@ -293,7 +293,10 @@ _BOARD_PROPS = {
     "bans": {"type": "array", "items": {"type": "string"},
              "description": "all bans, in the order they were made"},
     "first_pick": {"type": "integer", "enum": [0, 1],
-                   "description": "1 if blue has the first pick of the game"},
+                   "description": "1 if RED has the first pick of the game. "
+                                  "Verified across 46,915 games: the field is "
+                                  "not 'blue first'. Prefer passing a state id "
+                                  "instead - the store gets this right."},
     "patch": {"type": "string", "description": "e.g. '16.20'"},
 }
 

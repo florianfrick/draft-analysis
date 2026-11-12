@@ -52,7 +52,7 @@ if str(ROOT) not in sys.path:
 
 from langgraph.graph import END, START, StateGraph          # noqa: E402
 
-from pro.model.agent import llm_client, model_tools, schema  # noqa: E402
+from pro.model.agent import draft_state, llm_client, model_tools, schema  # noqa: E402
 from pro.model.agent.session import Session                  # noqa: E402
 
 MAX_STEPS = 8
@@ -66,22 +66,32 @@ SYSTEM = """\
 You are a draft assistant for professional League of Legends. You answer one \
 question about one board, using tools.
 
+The board lives in a state, not in this message. Never retype a board into a \
+tool call: read it with `get_state` and pass the state id. `real` is the live \
+board and is read-only; the tools refuse to change it.
+
 Use a tool before you assert a number. A claim with no tool result behind it is \
 a bug, not an opinion.
 
 Which tool, in order of preference:
-1. `rank_candidates` when the question names champions ("Kled or Olaf?"). It was \
-trained for exactly that question and it is the most reliable thing you have.
-2. `predict_next_move` when the question is open ("what do we pick here?").
-3. `sql` only when neither answers it: a rate over a patch window, a pairing's \
-lane record, a count of games. Always select the count next to a rate, always \
-filter `split = 'train'`, and treat n under 30 as an anecdote.
+1. `get_state` before anything about the board, and again after every change.
+2. `predict_next_move` for an open question ("what do we pick here?"). This is \
+the model's own ranking and it is the most reliable thing you have.
+3. `rank_candidates` for a choice between names - but only on names the model \
+already put in front of you. A shortlist you wrote yourself can omit the head's \
+top pick, and then a confident comparison is a confident answer to the wrong \
+question; that happened on two of three boards in the first hand-run.
+4. `sql` only when none of the above answers it: a rate over a patch window, a \
+pairing's lane record, a count of games. Always select the count next to a rate, \
+always filter `split = 'train'`, and treat n under 30 as an anecdote.
 
-If the shortlist is yours rather than the model's, call `predict_next_move` \
-before you answer. A shortlist you wrote can omit the head's own top pick, and \
-then a confident `rank_candidates` result is a confident answer to the wrong \
-question - in the first hand-run of this tool layer, a hand-made shortlist \
-missed the head's top pick on two of three boards.
+Exploring a hypothetical ("what if blue takes Alistar here?"):
+  clone_state(from_state="real")        -> a sandbox id
+  apply_move(state=<id>, champion="Alistar")
+  predict_next_move(state=<id>)         -> what red does next
+  undo_move(state=<id>)                 -> try the other branch
+Say which state your answer is about. A recommendation about a sandbox is not a \
+recommendation about the live board.
 
 Reading the numbers:
 - `p_head` is a share of the legal pool (about 160 champions). `p_rerank` is a \
@@ -92,7 +102,8 @@ as if patch did not matter. Say so if you rely on it.
 - The model cannot see which side is blue. Do not ask it to tell you.
 
 If a tool refuses, read the error and change the call. Do not retype it and \
-hope. If it says a champion is already on the board, you misread the board.
+hope. If it says a champion is already on the board, you misread the board - \
+call `get_state`.
 
 The models rank better than you do. Overrule a distribution only when a tool \
 result says why - a matchup count, a lane record - not because the pick feels \
@@ -119,20 +130,9 @@ def board_from_args(blue=(), red=(), bans=(), first_pick=0, patch=None):
             "patch": patch}
 
 
-def render_board(board):
-    """The board as the model reads it. Mirrors what a user would type."""
-    def names(xs):
-        return ", ".join(xs) if xs else "(none yet)"
-    return ("Board:\n"
-            "  blue picks: %s\n"
-            "  red picks:  %s\n"
-            "  bans:       %s\n"
-            "  first pick: %s\n"
-            "  patch:      %s"
-            % (names(board.get("blue_picks")), names(board.get("red_picks")),
-               names(board.get("bans")),
-               "blue" if board.get("first_pick") else "red",
-               board.get("patch") or "not given"))
+# The board renderer lives with the state, which is what owns a board now; it is
+# re-exported here because every caller and test reaches for `loop.render_board`.
+render_board = draft_state.render_board
 
 
 def _keys(xs):
@@ -251,13 +251,23 @@ def build(session, client, system=SYSTEM, max_steps=MAX_STEPS, board=None):
 
 # ----------------------------------------------------------------------- run
 def run(session, question, client=None, board=None, system=SYSTEM,
-        max_steps=MAX_STEPS, env=None, raise_errors=False):
+        max_steps=MAX_STEPS, env=None, raise_errors=False, state_id=None):
     """One turn. -> a transcript dict, whether or not anything answered.
 
     `client=None` falls back to the environment, and no key is a recorded
     outcome rather than an exception.
+
+    With `state_id`, the board is read from the session's store and the prompt
+    names the state. The board is still *rendered* - the model has to see it to
+    reason about comps - but no tool takes it as an argument, so there is nothing
+    to transcribe.
     """
     board = board or {}
+    state_text = None
+    if state_id is not None and getattr(session, "store", None) is not None:
+        state = session.store.get(state_id)
+        board = state.board()
+        state_text = state.render(state_id)
     out = {"question": question, "answer": None, "stop": "no client",
            "model": None, "tools_offered": session.names(),
            "transcription": {"filled": [], "mismatched": []}}
@@ -275,8 +285,8 @@ def run(session, question, client=None, board=None, system=SYSTEM,
     graph = build(session, client, system=system, max_steps=max_steps,
                   board=board)
     init = {"messages": [{"role": "user",
-                          "content": render_board(board) + "\n\nQuestion: "
-                                     + question}],
+                          "content": (state_text or render_board(board))
+                                     + "\n\nQuestion: " + question}],
             "pending": [], "steps": 0, "answer": "", "stop": ""}
     try:
         final = graph.invoke(init, {"recursion_limit": 2 * max_steps + 6})
@@ -399,11 +409,14 @@ def ping(client=None, env=None):
 
 # ----------------------------------------------------------------------- cli
 def _load(ckpt, db, ablate, max_calls):
+    # The state store needs champion *names*, not weights, so it is built even
+    # when no checkpoint is loaded - exploring a board should not require a model.
+    names = model_tools.ChampIndex(schema.names())
     predictor = champs = con = None
     if Path(ckpt).exists():
         from solo_queue.model.policy.infer import PolicyPredictor
         predictor = PolicyPredictor(ckpt, device="cpu")
-        champs = model_tools.ChampIndex(schema.names())
+        champs = names
     else:
         print("no checkpoint at %s - model tools unavailable" % ckpt,
               file=sys.stderr)
@@ -412,7 +425,8 @@ def _load(ckpt, db, ablate, max_calls):
     else:
         print("no database at %s - run build_db.py first" % db, file=sys.stderr)
     return Session(con=con, predictor=predictor, champs=champs,
-                   ablate=ablate, max_calls=max_calls)
+                   ablate=ablate, max_calls=max_calls,
+                   store=draft_state.Store(names))
 
 
 def _print_ping(rep, from_env=()):

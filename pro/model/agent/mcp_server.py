@@ -48,7 +48,7 @@ ROOT = HERE.parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from pro.model.agent import model_tools, schema       # noqa: E402
+from pro.model.agent import draft_state, model_tools, schema  # noqa: E402
 from pro.model.agent.session import Session           # noqa: E402
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -155,12 +155,13 @@ def _write(stdout, payload):
 
 
 # ----------------------------------------------------------------------- cli
-def _load(ckpt, db, ablate, max_calls):
+def _load(ckpt, db, ablate, max_calls, moves=(), red_first=False, patch=None):
+    names = model_tools.ChampIndex(schema.names())
     predictor = champs = con = None
     if Path(ckpt).exists():
         from solo_queue.model.policy.infer import PolicyPredictor
         predictor = PolicyPredictor(ckpt, device="cpu")
-        champs = model_tools.ChampIndex(schema.names())
+        champs = names
     else:
         print("no checkpoint at %s - model tools unavailable" % ckpt,
               file=sys.stderr)
@@ -168,8 +169,15 @@ def _load(ckpt, db, ablate, max_calls):
         con = schema.connect(db)
     else:
         print("no database at %s - run build_db.py first" % db, file=sys.stderr)
+    # `--moves` is the channel a frontend would use: a chronological move log,
+    # which the store turns into the board the tools read. Nothing in the tool
+    # layer can write to it.
+    live = draft_state.DraftState(patch=patch, red_first=red_first)
+    for move in moves:
+        live = live.apply(move)
     return Session(con=con, predictor=predictor, champs=champs,
-                   ablate=ablate, max_calls=max_calls)
+                   ablate=ablate, max_calls=max_calls,
+                   store=draft_state.Store(names, real=live))
 
 
 SELF_TEST = [
@@ -185,6 +193,16 @@ SELF_TEST = [
     {"jsonrpc": "2.0", "id": 5, "method": "tools/call",
      "params": {"name": "nope", "arguments": {}}},
     {"jsonrpc": "2.0", "id": 6, "method": "no/such/method"},
+    {"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+     "params": {"name": "get_state", "arguments": {}}},
+    {"jsonrpc": "2.0", "id": 8, "method": "tools/call",
+     "params": {"name": "clone_state", "arguments": {"name": "line"}}},
+    {"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+     "params": {"name": "apply_move",
+                "arguments": {"state": "line", "champion": "Alistar"}}},
+    {"jsonrpc": "2.0", "id": 10, "method": "tools/call",
+     "params": {"name": "apply_move",
+                "arguments": {"state": "real", "champion": "Kled"}}},
 ]
 
 
@@ -196,6 +214,12 @@ def main(argv=None):
     ap.add_argument("--db", default=str(schema.DB_PATH))
     ap.add_argument("--ablate", default="")
     ap.add_argument("--max-calls", type=int, default=24)
+    ap.add_argument("--moves", default="",
+                    help="seed the live board with a chronological move log, "
+                         "e.g. 'Kled,Olaf,Aatrox'")
+    ap.add_argument("--red-first", action="store_true",
+                    help="red has the first pick of the game")
+    ap.add_argument("--patch", default=None)
     ap.add_argument("--self-test", action="store_true",
                     help="pipe canned messages through the server and exit")
     args = ap.parse_args(argv)
@@ -212,7 +236,9 @@ def main(argv=None):
 
     session = _load(args.ckpt, args.db,
                     {x.strip() for x in args.ablate.split(",") if x.strip()},
-                    args.max_calls)
+                    args.max_calls,
+                    moves=[x.strip() for x in args.moves.split(",") if x.strip()],
+                    red_first=args.red_first, patch=args.patch)
     print("mcp: serving %s (ablate=%s)"
           % (", ".join(session.names()) or "no tools",
              ",".join(sorted(session.ablate)) or "-"), file=sys.stderr)

@@ -22,12 +22,16 @@ from __future__ import annotations
 
 import time
 
-from . import model_tools, sql_tool
+from . import draft_state, model_tools, sql_tool, state_tools
+
+_STATE_NAMES = {"get_state", "clone_state", "apply_move", "undo_move",
+                "list_states"}
 
 
 class Session:
     def __init__(self, con=None, predictor=None, champs=None, ablate=(),
-                 max_calls=24, rerank=None, max_rows=sql_tool.MAX_ROWS):
+                 max_calls=24, rerank=None, max_rows=sql_tool.MAX_ROWS,
+                 store=None):
         self.con = con
         self.predictor = predictor
         self.champs = champs
@@ -35,12 +39,17 @@ class Session:
         self.max_calls = int(max_calls)
         self.rerank = rerank
         self.max_rows = max_rows
+        # A store is opt-in: without one, the board is still an argument and the
+        # old tool signatures behave exactly as before.
+        self.store = store
         self.log = []
         self._started = time.monotonic()
 
     # ------------------------------------------------------------- specs
     def available(self):
         out = []
+        if self.store is not None:
+            out += state_tools.SPECS
         if self.predictor is not None and self.champs is not None:
             out += [model_tools.PREDICT_SPEC, model_tools.RANK_SPEC]
         if self.con is not None:
@@ -51,7 +60,12 @@ class Session:
         return [s["name"] for s in self.available()]
 
     # -------------------------------------------------------------- call
-    def call(self, name, **args):
+    def call(self, tool, **args):
+        # The first parameter is `tool`, not `name`, because a tool argument can
+        # be called `name` (clone_state takes one) and `call(name, **{"name": x})`
+        # is a TypeError. The loop dispatches model-chosen arguments, so this is
+        # not a theoretical collision.
+        name = tool
         entry = {"i": len(self.log), "name": name,
                  "args": _trim(args), "t": round(time.monotonic()
                                                  - self._started, 2)}
@@ -86,28 +100,84 @@ class Session:
         if name not in self.names():
             raise ValueError("unknown tool %r; available: %s"
                              % (name, ", ".join(self.names()) or "none"))
+        if name in _STATE_NAMES:
+            if self.store is None:
+                raise ValueError("no draft state is loaded in this session")
+            return self._state_call(name, args)
         if name == "sql":
             if self.con is None:
                 raise ValueError("no corpus database is open")
             return sql_tool.run(self.con, args.get("query"),
                                 max_rows=self.max_rows)
-        if name == "predict_next_move":
-            return model_tools.predict_next_move(
-                self.predictor, self.champs,
-                args.get("blue_picks") or [], args.get("red_picks") or [],
-                args.get("bans") or [],
-                first_pick=args.get("first_pick") or 0,
-                patch=args.get("patch"), k=args.get("k") or 8,
-                unavailable=args.get("unavailable") or (), rerank=self.rerank)
-        if name == "rank_candidates":
-            return model_tools.rank_candidates(
-                self.predictor, self.champs,
-                args.get("blue_picks") or [], args.get("red_picks") or [],
-                args.get("bans") or [], args.get("candidates") or [],
-                first_pick=args.get("first_pick") or 0, patch=args.get("patch"),
-                rerank=self.rerank)
+        if name in ("predict_next_move", "rank_candidates"):
+            return self._model_call(name, args)
         raise ValueError("unknown tool %r; available: %s"
                          % (name, ", ".join(self.names()) or "none"))
+
+    # -------------------------------------------------------------- state
+    def _state_call(self, name, args):
+        store = self.store
+        if name == "get_state":
+            return state_tools.get(store, args.get("state") or draft_state.REAL_ID)
+        if name == "clone_state":
+            return state_tools.clone(store,
+                                     args.get("from_state")
+                                     or draft_state.REAL_ID,
+                                     name=args.get("name"))
+        if name == "apply_move":
+            if not args.get("state"):
+                raise ValueError("apply_move needs a state id; call get_state "
+                                 "or list_states first")
+            return state_tools.apply(store, args["state"], args.get("champion"),
+                                     kind=args.get("kind"), side=args.get("side"))
+        if name == "undo_move":
+            if not args.get("state"):
+                raise ValueError("undo_move needs a state id")
+            return state_tools.undo(store, args["state"])
+        return state_tools.listing(store)
+
+    def _with_state(self, args):
+        """Swap a `state` id for the board it holds. -> (args, id, state)."""
+        sid = args.get("state")
+        if sid is None:
+            return dict(args), None, None
+        args = {k: v for k, v in args.items() if k != "state"}
+        st = self.store.get(sid)
+        board = st.board()
+        args.update(blue_picks=board["blue_picks"], red_picks=board["red_picks"],
+                    bans=board["bans"], first_pick=board["first_pick"],
+                    patch=board["patch"] or args.get("patch"))
+        return args, sid, st
+
+    def _model_call(self, name, args):
+        """One implementation for both forms: a state id is resolved to the same
+        board the caller would have typed, then the model function is unchanged.
+        """
+        args, sid, st = self._with_state(args)
+        common = (self.predictor, self.champs, args.get("blue_picks") or [],
+                  args.get("red_picks") or [], args.get("bans") or [])
+        if name == "predict_next_move":
+            out = model_tools.predict_next_move(
+                *common, first_pick=args.get("first_pick") or 0,
+                patch=args.get("patch"), k=args.get("k") or 8,
+                unavailable=args.get("unavailable") or (), rerank=self.rerank)
+        else:
+            out = model_tools.rank_candidates(
+                *common, args.get("candidates") or [],
+                first_pick=args.get("first_pick") or 0, patch=args.get("patch"),
+                rerank=self.rerank)
+        if st is not None:
+            out["state"] = st.summary(sid)
+            due = st.to_move() or {}
+            if "move_idx" in out:
+                # A disagreement means the board is not a legal 20-move prefix,
+                # which cannot happen through the store and does through the
+                # board form. Worth surfacing rather than hiding.
+                out["move_matches_state"] = (
+                    out["move_idx"] == due.get("move_idx")
+                    and out.get("kind") == due.get("kind")
+                    and out.get("side") == due.get("side"))
+        return out
 
     # ---------------------------------------------------------- reporting
     def mix(self):

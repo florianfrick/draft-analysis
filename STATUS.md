@@ -936,7 +936,7 @@ assistant is not reachable by fine-tuning here, so put the trained models *behin
 the LLM as tools and let it orchestrate. `pro/model/agent/` now has the tool layer
 (`schema.py`, `sql_tool.py`, `model_tools.py`, `session.py`), a bounded
 tool-calling graph (`loop.py`), an OpenAI-compatible client (`llm_client.py`) and
-an MCP stdio server (`mcp_server.py`). 74 tests. Two tiers by design, because
+an MCP stdio server (`mcp_server.py`). 96 tests. Two tiers by design, because
 neither works alone: **high-level** (`predict_next_move`, `rank_candidates` - the
 heads that already rank well) and **very low level** (one read-only `sql` tool
 over the whole corpus, with the schema in the prompt).
@@ -977,6 +977,38 @@ model re-types nine champion names per call. The loop fills an *omitted* board
 differently - `transcription.mismatched`. Silently correcting it would hide the
 most likely failure of the architecture. If mismatches are common, the fix is a
 stateful server that holds the board, not a better prompt.
+
+**The board is held, not passed (2026-11-11).** Every model tool used to take
+nine champion names and trust the caller to retype them - a **silent** failure,
+since a legal but wrong board returns a confident distribution, and the
+`transcription.mismatched` flag could only detect it afterwards. A draft is now
+an immutable move log (`draft_state.py`) with a store of them, and the tools take
+an id: `get_state`, `clone_state`, `apply_move`, `undo_move`, `list_states`.
+`predict_next_move`/`rank_candidates` accept `state="<id>"` or the board
+arguments and resolve to the **same call**, so the two forms cannot drift.
+
+Two measured facts made this cheap, and one was a bug:
+
+- **The schedule is a constant in the corpus.** All 46,915 games are exactly 20
+  moves, and the (kind, side) at each index depends only on `first_pick`: six
+  bans, six picks, four bans, four picks. `to_move()` is now an index into that
+  table instead of an inference from pick and ban counts - which is why a board
+  with two bans and five picks used to get a plausible answer about a state that
+  cannot occur. `test_the_schedule_matches_the_corpus` re-derives the table from
+  the database.
+- **`first_pick=1` means RED picks first**, the opposite of what the tool spec
+  claimed. A model following the spec would have inverted it silently. The field
+  is `red_first` now, and the spec says so.
+- **The live board is read-only to the model.** A stateless tool cannot be
+  corrupted; a stateful one can. `Store.apply` refuses `real` by construction and
+  a test asserts a sandbox can never touch it. `Store.set_real` is the
+  frontend's channel (a move log, not a board) and is **not wired yet** - the
+  store is seeded from `--moves`.
+
+**What this does not fix: the ranking.** The 2-of-6 below is about the head being
+wrong, not about the interface being awkward. A state handle removes a class of
+*input* error and leaves the *judgment* error untouched - expect fewer silent
+nonsense answers, not better picks.
 
 **First hand-run (2026-11-11): 2 of 6, and the misses are the finding.** With no
 key available, the tool layer was driven by hand (`handrun.py`): six val states,

@@ -8,11 +8,14 @@ is the part most likely to change.
 schema.py       build the SQLite corpus + the schema text the model is shown
 sql_tool.py     one read-only query tool with mechanical guards
 model_tools.py  predict_next_move / rank_candidates over the trained heads
+draft_state.py  the draft as an immutable move log, and a store of them
+state_tools.py  get / clone / apply / undo / list, as tools
 session.py      the registry, the call log, the ablation switch
 demo.py         a scripted turn, so the wiring is checkable without an LLM
 llm_client.py   an OpenAI-compatible chat client with tool calling (urllib)
 loop.py         the bounded tool-calling graph, over `Session`
-mcp_server.py   the same three tools over the MCP stdio wire protocol
+mcp_server.py   the same tools over the MCP stdio wire protocol
+handrun.py      stratified val sample, answered blind, scored after
 ```
 
 `llm_client` and `loop` are deliberately **not** imported by `__init__.py`: the
@@ -155,7 +158,7 @@ python pro/model/agent/loop.py --question "Kled or Olaf?" --blue "..." --red "..
 python pro/model/agent/mcp_server.py --self-test   # the protocol, no client
 python pro/model/agent/mcp_server.py               # serve on stdio
 
-pytest pro/model/agent/ -q                         # 74 tests
+pytest pro/model/agent/ -q                         # 96 tests
 ```
 
 The loop reads `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_TIMEOUT` - the
@@ -209,6 +212,58 @@ by a publishable key and an exact-Origin match. It is a client-side API scoped t
 an application's quota, not an endpoint a local Python process can call. Reaching
 it would mean deploying a relay app and posting through it - a proxy to another
 product's quota, which is fragile and not something to build a measurement on.
+
+## The board is held, not passed
+
+The first version took the board as an argument: every model tool wanted nine
+champion names and trusted the caller to retype them. That is a **silent**
+failure - a legal but wrong board returns a confident distribution - and the
+`transcription.mismatched` flag could only detect it after the fact. In the first
+hand-run I transcribed six boards by hand and got them right only because I was
+being careful; a flash model at temperature 0.2 across 200 states will not be.
+
+So a draft is a state now (`draft_state.py`), and the tools take an id:
+
+| tool | what it does |
+|---|---|
+| `get_state` | the board, whose move it is, how many champions are legal |
+| `clone_state` | copy into a sandbox - the live board is read-only |
+| `apply_move` | play a champion into the scheduled slot |
+| `undo_move` | take it back and try the other branch |
+| `list_states` | every live state, with depth and read-only flag |
+
+`predict_next_move` and `rank_candidates` accept `state="<id>"` as well as the
+board arguments, and the state path resolves to *the same call* - there is one
+implementation, so the two forms cannot drift.
+
+Four decisions, each of which is why this is a move log rather than a set of
+board fields:
+
+- **The schedule is a constant in the corpus.** All 46,915 games are exactly 20
+  moves, and the (kind, side) at each index depends only on `first_pick`: six
+  bans, six picks, four bans, four picks. `to_move()` is an index into that
+  table, never an inference. The old tools inferred it from pick and ban counts,
+  which is why a board with two bans and five picks got a plausible answer about
+  a state that cannot occur.
+- **`first_pick=1` means red picks first.** Measured, and the opposite of what
+  the tool spec claimed until it was checked - a silent inversion a model
+  following the spec would walk into. The field is `red_first` here so it cannot
+  be repeated.
+- **Undo is dropping the last move and clone is sharing the tuple**, both free
+  because a state is immutable. A mutable board would need a diff log for either.
+- **The real state is read-only to the model.** A stateless tool cannot be
+  corrupted; a stateful one can, and the board the frontend is showing is the one
+  thing an exploration must never damage. `Store.apply` refuses `real` by
+  construction, and a test asserts a sandbox can never touch it.
+
+`Store.set_real` is the frontend's channel - it takes a move log, not a board.
+That integration is **not wired yet**: the store is seeded from the CLI
+(`--moves "Kled,Olaf,Aatrox"`) and the frontend still renders its own board.
+
+**What this does not fix.** The ranking. The 2-of-6 hand-run below is about the
+head being wrong, not about the interface being awkward; a state handle removes a
+whole class of *input* error and leaves the *judgment* error untouched. Expect
+fewer silent nonsense answers, not better picks.
 
 ## The first hand-run (2026-11-11): 2 of 6, and why the number is not the point
 
