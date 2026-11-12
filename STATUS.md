@@ -727,6 +727,27 @@ refused at load rather than failing later.
   have no such input, and their answers are filtered rather than conditioned —
   the bar says so.
 
+- **Chat** (`/api/chat`, `frontend/chat.py` + `frontend/tools.py`) — the inverted
+  loop. The adapter cannot generate (7-8 % top-1, one name, no stop token) but
+  can select (33.85 %), so the server computes the legal pool, the head's whole
+  distribution over it, and the corpus evidence, and the model only chooses
+  among those. A user's insistence enters as a prior in log space
+  (`log p' = log p + λ·1[c=named]`, renormalised, so the mass comes out of the
+  other candidates) and the reply reports the λ it used, the rank the named
+  champion moved from and to, and the λ it *would* have taken
+  (`log p_top − log p_named`). Measured on the shipped head at move 9: Kled at
+  rank 76 of 164 → rank 1 at +6.0 nats ("incredibly"), rank 37 at +1.5
+  ("alright", pick unchanged, 5.0 nats needed), rank 164 at −6.0 ("bad").
+  **The λ ladder is uncalibrated; the required-λ number is exact**, which is why
+  both are printed. Tools return `n` and a `reliable` flag and refuse a rate
+  below `MIN_CELL=30` — `_probe_tool_power.py` measured the same-lane pair a
+  counter-pick claim needs at a median of 5 games. `next_move_counts` exists
+  because the per-champion cell is 0-2 of 120 at a given move; aggregating the
+  same 120 boards gives a leader of 8-15. The model does not call the tools —
+  the server does. It answers from the head even when the reranker is loaded,
+  because a reranker has no distribution to boost, and it does not answer for
+  the off-turn side (§4: the two sides are not differentiated).
+
 Verified against a live server on the seven test games, not by reading the
 loader: all five checkpoints load through `/api/load` and answer their own
 endpoint; `/api/next-move` returns the real move's kind *and* side at 35/35

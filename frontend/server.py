@@ -195,6 +195,8 @@ import draftscore  # noqa: E402  (frontend/draftscore.py: which draft is ahead)
 from roles import assign_roles  # noqa: E402  (frontend/roles.py: lane solver)
 from roles import assign_lanes, legal_champions  # noqa: E402,F401
 import rerank as rerank_mod  # noqa: E402  (frontend/rerank.py: LLM reranker)
+import tools  # noqa: E402  (frontend/tools.py: the deterministic evidence layer)
+import chat  # noqa: E402  (frontend/chat.py: the inverted loop + replies)
 
 ROLE_ROWS = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"]
 N_SLOTS = 10
@@ -485,6 +487,26 @@ def pro_index():
             if _PRO_INDEX is None:
                 _PRO_INDEX = llm.ProIndex.load(PRO_DRAFTS_PT)
     return _PRO_INDEX
+
+
+_CHAT_LOCK = threading.Lock()
+_CHAT_CORPUS = None
+
+
+def chat_corpus():
+    """The evidence layer over the same rows, built once per process.
+
+    Separate from `pro_index()` because the expensive part is different: the
+    index is 46k bitmask builds (~1 s), the corpus adds the pair counters
+    (~2 s). The chat is the only caller, so it pays for them on the first
+    message rather than at startup.
+    """
+    global _CHAT_CORPUS
+    if _CHAT_CORPUS is None:
+        with _CHAT_LOCK:
+            if _CHAT_CORPUS is None:
+                _CHAT_CORPUS = tools.Corpus(pro_index())
+    return _CHAT_CORPUS
 
 
 def icon_url(name):
@@ -1299,6 +1321,10 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_breakdown()
         elif route == "/api/draft-score":
             self._handle_draft_score()
+        elif route == "/api/chat":
+            self._handle_chat()
+        elif route == "/api/tool":
+            self._handle_tool()
         else:
             self._send(404, {"error": "unknown endpoint"})
 
@@ -1344,6 +1370,139 @@ class Handler(BaseHTTPRequestHandler):
             return
         out = dict(res)
         out["model"] = model_info(pred)
+        self._send(200, out)
+
+    # ------------------------------------------------------------------ chat
+    def _board_from_payload(self, payload):
+        """The board fields every POST shares, mapped to champion indices."""
+        mapping = APP["mapping"]
+        picks = payload.get("picks") or [None] * 10
+        picks_idx = [None if p is None else mapping[p] for p in picks]
+        bans_idx = [mapping[b] for b in (payload.get("bans") or [])]
+        unavail_idx = [mapping[f] for f in (payload.get("fearless") or [])]
+        first_pick = 1 if int(payload.get("first_pick", 0)) else 0
+        return picks_idx, bans_idx, unavail_idx, first_pick
+
+    def _chat_head_probs(self, pred, payload, picks_idx, bans_idx, first_pick,
+                         unavail_idx):
+        """The head's whole distribution for this move, as idx -> p.
+
+        The whole vector, not a top-k. The chat adds a user's insistence in log
+        space and renormalises, so a champion the head ranks 47th still has to
+        be liftable - a top-8 would make the tail unreachable and every pin
+        would look identical. `k=num_champs` is the only way to get the tail out
+        of `next_move` without reaching into the model for raw logits.
+
+        Deliberately the *head*, even when the reranker is the loaded model: a
+        reranker scores a shortlist and has no distribution to boost. The chat
+        therefore answers from the head, and the reranker keeps its own panel.
+        """
+        head = getattr(pred, "head", pred)
+        pid = payload.get("patch_id")
+        pid = head.default_patch_id() if pid is None else pid
+        res = head.next_move(picks_idx, bans_idx, first_pick=first_pick,
+                             k=int(getattr(head, "num_champs", 173)),
+                             unavailable=unavail_idx, patch_id=pid)
+        return res, {int(c["idx"]): float(c["prob"])
+                     for c in res["suggestions"]}
+
+    def _chat_board(self, payload, res, index, pred, picks_idx, bans_idx,
+                    unavail_idx, first_pick):
+        key_for = getattr(pred, "patch_key_for", None)
+        patch = (payload.get("patch")
+                 or (key_for(res["patch_id"]) if key_for else None)
+                 or index.latest_patch)
+        return tools.Board(picks_idx, bans_idx, first_pick=first_pick,
+                           unavailable=unavail_idx, patch=patch,
+                           num_champs=len(APP["names_by_idx"]))
+
+    def _handle_chat(self):
+        """POST {message, picks, bans, first_pick, fearless, patch_id}
+        -> a grounded reply, the ranking it is about, and the evidence used.
+
+        The turn is four steps and each one is somewhere else: `chat.parse`
+        reads the message, `tools` gathers the evidence, `chat.invert` adds the
+        user's insistence as a prior in log space and renormalises, and
+        `chat.compose_local` (or a remote model, if one is configured) phrases
+        the numbers. Nothing here is allowed to invent a fact: every clause of
+        the reply traces to a tool result or to the head's own probability.
+        """
+        try:
+            payload = self._read_json()
+            pred = APP.get("policy")
+            if pred is None:
+                raise ValueError("/api/chat needs a next-move policy "
+                                 "checkpoint; none is loaded")
+            message = (payload.get("message") or "").strip()
+            if not message:
+                raise ValueError("empty message")
+            picks_idx, bans_idx, unavail_idx, first_pick = \
+                self._board_from_payload(payload)
+            res, probs = self._chat_head_probs(pred, payload, picks_idx,
+                                               bans_idx, first_pick,
+                                               unavail_idx)
+            index = pro_index()
+            corpus = chat_corpus()
+        except (ValueError, KeyError, TypeError, IndexError,
+                json.JSONDecodeError) as exc:
+            self._send(400, {"error": str(exc)})
+            return
+        except Exception as exc:  # noqa: BLE001 - corpus missing/unreadable
+            self._send(500, {"error": "cannot build the draft index: %s" % exc})
+            return
+
+        board = self._chat_board(payload, res, index, pred, picks_idx, bans_idx,
+                                 unavail_idx, first_pick)
+        try:
+            out = chat.respond(
+                corpus, board, probs, APP["names_by_idx"], message,
+                client=APP.get("chat_client"),
+                k_similar=int(payload.get("k_similar", tools.SIMILAR_DEFAULT)))
+        except Exception as exc:  # noqa: BLE001 - one panel, not the server
+            self._send(500, {"error": "chat failed: %s" % exc})
+            return
+        out["model"] = model_info(pred)
+        out["state"] = {k: res[k] for k in ("move_idx", "kind", "side", "phase",
+                                            "first_pick", "complete")}
+        out["board"] = {"move_idx": board.move_idx, "patch": board.patch,
+                        "n_legal": len(board.legal()),
+                        "n_taken": len(board.taken)}
+        self._send(200, out)
+
+    def _handle_tool(self):
+        """POST {tool, args:{...}, picks, bans, first_pick, fearless} -> one result.
+
+        Exposed so the panel can show the evidence a reply was built from, and
+        so a tool can be asked about a board the chat never saw. Same board
+        fields as /api/chat, so the two cannot disagree about what is legal.
+        """
+        try:
+            payload = self._read_json()
+            name = payload.get("tool")
+            if not name:
+                raise ValueError("missing 'tool'")
+            pred = APP.get("policy")
+            if pred is None:
+                raise ValueError("no next-move policy loaded")
+            picks_idx, bans_idx, unavail_idx, first_pick = \
+                self._board_from_payload(payload)
+            res, probs = self._chat_head_probs(pred, payload, picks_idx,
+                                               bans_idx, first_pick,
+                                               unavail_idx)
+            index = pro_index()
+            board = self._chat_board(payload, res, index, pred, picks_idx,
+                                     bans_idx, unavail_idx, first_pick)
+            out = tools.run(chat_corpus(), board, name, APP["names_by_idx"],
+                            probs=probs, **(payload.get("args") or {}))
+        except (ValueError, KeyError, TypeError, IndexError,
+                json.JSONDecodeError) as exc:
+            self._send(400, {"error": str(exc)})
+            return
+        except Exception as exc:  # noqa: BLE001 - one request, not the server
+            self._send(500, {"error": "tool failed: %s" % exc})
+            return
+        out["state"] = {k: res[k] for k in ("move_idx", "kind", "side",
+                                            "complete")}
         self._send(200, out)
 
     def _handle_suggest(self):
@@ -1821,6 +1980,12 @@ def main():
                          "is still selectable, it is a 3-member logit mean)")
     ap.add_argument("--no-policy", action="store_true",
                     help="run the role board only, without a next-move model")
+    ap.add_argument("--chat-llm", action="store_true",
+                    help="let a remote chat-completions model phrase the chat "
+                         "replies (needs LLM_API_KEY). Off by default: the "
+                         "local composer is the shipped path and needs no key, "
+                         "and a local-only server should not start calling out "
+                         "because an environment variable happens to be set")
     args = ap.parse_args()
 
     mapping, names_by_idx, champions = load_champ_data()
@@ -1862,6 +2027,11 @@ def main():
     else:
         print("next-move:    (none - role board only)")
     APP.update(mapping=mapping, names_by_idx=names_by_idx, champions=champions)
+    chat_client = llm.client_from_env() if args.chat_llm else None
+    APP["chat_client"] = chat_client
+    print("chat:         %s" % ("phrased by %s" % chat_client.model
+                                if chat_client is not None
+                                else "local composer (no API key in use)"))
     print("champions: %d, device: %s" % (len(mapping), args.device))
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)

@@ -85,6 +85,9 @@
     <button id="nm-explain" title="explain this move from the loaded model's
       own numbers, comparable pro drafts and the patch notes">why this
       move?</button>
+    <button id="nm-chat" title="talk about this board: name a champion and say
+      how strongly you rate it, and the reply shows what that is worth against
+      the model's own ranking">chat</button>
   </div>
   <div id="nm-warning" class="nm-warn hidden"></div>
   <div class="nm-chips" id="nm-chips"></div>
@@ -109,6 +112,22 @@
     <button id="ex-close" title="hide this panel">✕</button>
   </div>
   <div id="ex-body"></div>
+</section>
+
+<section id="chat" class="hidden">
+  <div class="ex-head">
+    <span id="chat-title">Chat</span>
+    <span id="chat-meta" class="muted"></span>
+    <span class="spacer"></span>
+    <button id="chat-clear" title="forget the conversation, keep the board">clear</button>
+    <button id="chat-close" title="hide this panel">✕</button>
+  </div>
+  <div id="chat-log"></div>
+  <form id="chat-form">
+    <input id="chat-input" autocomplete="off"
+      placeholder="e.g. I think Kled is incredibly good here">
+    <button id="chat-send" type="submit">ask</button>
+  </form>
 </section>
 
 <div id="wt-bar">
@@ -192,5 +211,6 @@
 
 <script src="/draft-order.js"></script>
 <script src="/app.js"></script>
+<script src="/chat.js"></script>
 </body>
 </html>

@@ -789,6 +789,103 @@ Jungle champion on this board. Making it counter-pick aware is a model change
   1 forward for the move. The header shows each slot's checkpoint, its kind
   and its val metric.
 
+## Chat (`POST /api/chat`, `frontend/chat.py`)
+
+A box under the next-move panel: type a sentence about the board, get a reply
+that cites the head's own numbers and the corpus evidence behind them. It
+never edits the board — it reports a ranking, and placing the pick stays the
+user's decision.
+
+### Why it is an inverted loop
+
+The adapter is good at one job and bad at the other, and the measurements are
+not close. Asked to *generate* a champion it reaches 7-8 % top-1, emits exactly
+one name and never learned `<|im_end|>` (`probe_roleboard_gen.py`). Asked to
+*select* from a shortlist it reaches 33.85 %, and 13 of those 16 points are the
+format, not learning. So the chat does not ask the model to recall anything.
+The server computes the legal pool, the head's distribution over it, and the
+evidence; the model (or, by default, a template) only has to say which of those
+numbers matters.
+
+### Insistence is a prior, not a rewrite
+
+"Kled is incredibly good here" is not a request to replace the ranking. It is
+evidence the head does not have, so it is added in log space:
+
+```
+log p'(c) = log p_head(c) + lambda * 1[c == named]
+```
+
+`lambda` is how many nats of prior the user is contributing, and the
+renormalisation means the boost comes *out of the other candidates* — a pin on
+Kled should cost Xayah its probability, not create mass. That is why the
+ladder below can be compared across messages, and why "incredibly good" and
+"alright" cannot produce the same answer:
+
+| utterance | `lambda` | effect on a rank-76 champion |
+|---|---|---|
+| "must be the pick", "insist" | +15.0 | rank 1 (99.97 %) |
+| "incredibly good", "clearly" | +6.0 | rank 1 (29.1 %) |
+| "I think", "prefer", "good" | +3.0 | rank ~20 |
+| "alright", "maybe", "fine" | +1.5 | rank ~37, pick unchanged |
+| a bare mention | +0.5 | rank ~114 |
+| "is bad", "don't pick" | −3.0 … −6.0 | last of the legal set |
+
+Every reply states the lambda it used, the rank the named champion moved from
+and to, and — when it did not reach the top — **how many nats it would have
+taken** (`log p_top − log p_named`). The ladder is uncalibrated; that number is
+not, so a wrong-looking answer shows the arithmetic that produced it.
+
+Negation reuses the same mechanism with a negative lambda, and has its own
+magnitude ladder: "he is bad" (−6) is a stronger claim than "don't pick him"
+(−3), which is exactly the distinction the positive ladder exists for.
+
+### The tools (`frontend/tools.py`, `POST /api/tool`)
+
+Deterministic, in Python, called by the server — **not** by the model. A 4B
+adapter with a LoRA r=16 does not need to be taught tool-calling to answer
+"how often has Kled faced Olaf"; it needs the answer handed to it.
+
+| tool | returns | power |
+|---|---|---|
+| `legal_pool` | what can still be named, ranked by the head | always exact |
+| `next_move_counts` | what the N nearest boards played next | leader 8-15 games |
+| `champ_evidence` | one champion: marginal + conditional counts | 0-2 games at a given move |
+| `pair_evidence` | same team / opposing / same lane | 55 / 58 / 1 for Kled-Olaf |
+| `similar_drafts` | the games the counts came from | — |
+
+**Every tool returns `n` and a `reliable` flag, and refuses to report a rate
+below `MIN_CELL = 30`.** That is the whole design constraint, and it comes from
+`_probe_tool_power.py`: a champion's marginal is 1,479 games (median), a
+cross-team pair 24, and the same-lane pair a counter-pick claim is actually
+about is **5**, with 73.6 % of those cells under 20. A rate of 0.60 over five
+games reads exactly like a rate of 0.60 over 500 once it is inside a prompt, so
+the tool reports the count and the reply says "12 games — a count, not a rate".
+
+`next_move_counts` exists because `champ_evidence` is usually empty: asking one
+champion for one move is one cell of a ten-way choice, and at move 9 a named
+champion is the next move in 0-2 of 120 nearest boards. Aggregating the same
+120 boards the way the decision is made gives a leader of 8-15 — still thin,
+but a count a coach can act on.
+
+### What it does not do
+
+- **It does not answer for the off-turn side.** The board fixes whose move it
+  is, and the two sides are not differentiated anyway (TV 0.015 against 0.147
+  for a control that swaps one enemy pick). A message framed "for Red" when
+  Blue is on the clock gets a sentence saying so, not a different answer.
+- **It answers from the head, even when the reranker is loaded.** A reranker
+  scores a shortlist and has no distribution to boost; the head does, and the
+  loop is defined over it. The reranker keeps its own panel.
+- **The remote model is optional and off by default** (`--chat-llm` +
+  `LLM_API_KEY`). When on, it phrases the same numbers and any failure —
+  timeout, refusal, bad JSON — falls back to the local composer, because the
+  template is always a valid answer.
+- The parser is a keyword scan, not NLU. It is right about "don't pick Kled,
+  he is bad" (the qualifier lands in the second clause and the message-level
+  cue catches it) and wrong about "I don't think Kled is bad", which it scores
+  as negative.
+
 ## Limits (prototype)
 
 - The UI board carries no roles, so the next-move path infers each picked
@@ -812,7 +909,8 @@ Jungle champion on this board. Making it counter-pick aware is a model change
 - Walkthrough data comes from the cached `data/pro play/pro_drafts.pt` (46.6k
   games, loaded lazily on first use).
 
-Tests: `python -m pytest frontend/test_server.py -q` and
+Tests: `python -m pytest frontend/test_server.py -q`,
+`python -m pytest frontend/test_chat.py -q` and
 `python -m pytest solo_queue/model/policy/test_infer.py -q`. The endpoint test pins the
 published `move_plan` to `infer.move_plan`, and a source-level guard keeps
 `renderTurn` board-derived rather than model-derived.
