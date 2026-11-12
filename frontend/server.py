@@ -1565,7 +1565,7 @@ class Handler(BaseHTTPRequestHandler):
             state, _old = state_store().set_board(
                 picks_idx, flat,
                 red_first=bool(int(payload.get("first_pick") or 0)),
-                patch=payload.get("patch"),
+                patch=self._state_patch(payload),
                 bans_blue=blue if split else None,
                 bans_red=red if split else None)
         except (ValueError, KeyError, TypeError) as exc:
@@ -1573,6 +1573,25 @@ class Handler(BaseHTTPRequestHandler):
             return None
         APP["state_error"] = None
         return state
+
+    def _state_patch(self, payload):
+        """The patch *label* the head will actually condition on.
+
+        The UI sends a `patch_id` (a row of the checkpoint's vocabulary), not a
+        label, and the head silently falls back to its default when none arrives.
+        A state that said "patch: not given" while the head answered 16.20 would
+        make the agent attribute a patch-specific ranking to no patch at all, so
+        the label is resolved here through the same `patch_key_for` the rest of
+        the frontend uses.
+        """
+        if payload.get("patch"):
+            return payload.get("patch")
+        pred = APP.get("policy")
+        pid = payload.get("patch_id")
+        if pid is None and hasattr(pred, "default_patch_id"):
+            pid = pred.default_patch_id()
+        key_for = getattr(pred, "patch_key_for", None)
+        return key_for(pid) if key_for is not None else None
 
     def _state_payload(self):
         """One shape for `real` and for the sandboxes, so the panel cannot drift.

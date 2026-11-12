@@ -1441,3 +1441,19 @@ def _explore_client(loop, champ):
                 "content": "Taking %s there changes nothing material." % champ,
                 "tool_calls": []}
     return call
+
+
+def test_the_published_state_names_the_patch_the_head_will_use(app, httpd,
+                                                               policy_ckpt,
+                                                               fresh_store):
+    """The UI sends a `patch_id`; the head silently defaults when it does not.
+
+    A state saying "patch: not given" while the head answered 16.20 would let the
+    agent attribute a patch-specific ranking to no patch at all.
+    """
+    S.load_predictor(Path(policy_ckpt))
+    _post(httpd, "/api/suggest", _empty_board())
+    status, st = _get(httpd, "/api/state")
+    assert status == 200, st
+    assert st["real"]["patch"] == S.infer.DEFAULT_PATCH
+    assert S.infer.DEFAULT_PATCH in st["real"]["rendered"]
