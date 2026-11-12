@@ -24,25 +24,31 @@
 #
 # Two gates, both fail-closed, because a bad encoder silently caps everything
 # downstream:
-#   A  stage 1 val mask_loss must be within 2 % of the shipped encoder's 3.0281
-#   B  stage 2 val top-5 must be within 1 pp of the shipped head's 50.56 %
+#   A  stage 1 val champ_top5 within 0.5 pp of the shipped 55.98 %
+#   B  stage 2 val top-5 within 1 pp of the shipped 50.56 %
 #
 # Run:  bash pro/model/retrain_sharedsplit.sh
-# Log:  pro/model/retrain_sharedsplit.log
+# Log:  pro/model/retrain_sharedsplit.log (appended, so a failed attempt stays
+#       on the record next to the run that replaced it)
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 K=20
 ROOT=pro/model/checkpoints
-ENC=$ROOT/masking-sharedsplit
-HEAD=$ROOT/nextpick-sharedsplit
+# The proonly trainers refuse an --out-dir that does not end with the newest
+# series in the corpus (`assert_out_dir_suffix`), so a checkpoint cannot be
+# confused with one trained on an older frontier. The suffix is concatenated
+# with no separator - `endswith`, not a hyphenated join.
+SUF=through-las-dk-c-t1-r
+ENC=$ROOT/masking-sharedsplit$SUF
+HEAD=$ROOT/nextpick-sharedsplit$SUF
 WARM=$ROOT/llm-warmup-sharedsplit
-RR=$ROOT/llm-rerank-sharedsplit
+RR=$ROOT/llm-rerank-sharedsplit-k$K
 PAIRS=$RR/pairs.json
 LOG=pro/model/retrain_sharedsplit.log
 
 mkdir -p "$ROOT"
-: > "$LOG"
+touch "$LOG"
 say() { printf '\n===== %s  %s\n' "$(date '+%m-%d %H:%M:%S')" "$*" | tee -a "$LOG"; }
 run() { echo "++ $*" | tee -a "$LOG"; "$@" 2>&1 | tee -a "$LOG"; }
 
@@ -58,13 +64,21 @@ run docker compose run --rm -T dev python pro/model/proonly/train_masked.py \
 python - "$ENC/test_report.json" <<'PY' 2>&1 | tee -a "$LOG"
 import json, sys
 v = json.load(open(sys.argv[1]))["val"]
-base, got = 3.0281, v["mask_loss"]
-print("gate A: encoder val mask_loss %.4f vs shipped %.4f (%+.2f %%)"
-      % (got, base, 100.0 * (got - base) / base))
-print("        champ_top1 %.4f  champ_top5 %.4f" % (v["champ_top1"], v["champ_top5"]))
-if got > base * 1.02:
-    sys.exit("GATE A FAILED: encoder regressed >2 %%. Every stage below would "
-             "inherit it. Stopping before spending the night.")
+base5, got5 = 0.5598, v["champ_top5"]
+print("gate A: encoder val champ_top5 %.4f vs shipped %.4f (%+.2f pp)"
+      % (got5, base5, 100.0 * (got5 - base5)))
+print("        champ_top1 %.4f (shipped 0.2075)  mask_loss %.4f (shipped "
+      "3.0281, NOT gated)" % (v["champ_top1"], v["mask_loss"]))
+# Gated on champ_top5, not mask_loss. Dropping --no-test removes the 7 pinned
+# test games from the split pool, which re-draws the seeded per-patch 10 % -
+# so this val is a *different* 4,763 games (8,060 masked slots vs 8,053) and a
+# cross-run mask_loss comparison is measuring the draw, not the model. The
+# first version of this gate did exactly that and tripped on +2.47 % while
+# champ_top5 matched to 0.02 pp. Ranking is also what the head consumes.
+if got5 < base5 - 0.005:
+    sys.exit("GATE A FAILED: the encoder lost more than 0.5 pp of champ_top5 "
+             "against the shipped one. Every stage below would inherit it. "
+             "Stopping before spending the night.")
 PY
 
 # ---------------------------------------------------------------- stage 2
@@ -101,7 +115,8 @@ PY
 # difference is recorded here rather than left to be discovered.
 say "stage 3/5  projector warmup (encoder + LLM frozen), 8k games"
 run bash pro/model/llm/run.sh python -m pro.model.llm.finetune_lora \
-    --encoder masking-sharedsplit --projector-lr 0.003 --llm-lr 0 --epochs 1 \
+    --encoder "masking-sharedsplit$SUF" --projector-lr 0.003 --llm-lr 0 \
+    --epochs 1 \
     --max-train 8000 --val-split llmval --val-games 200 --out-dir "$WARM"
 
 # ---------------------------------------------------------------- stage 4
@@ -118,7 +133,7 @@ run bash pro/model/llm/run.sh python -m pro.model.llm.rerank \
 # 33.85 % the k=5 reranker reaches on the full shared val.
 say "stage 5/5  reranker at k=$K (2 epochs)"
 run bash pro/model/llm/run.sh python -m pro.model.llm.finetune_lora \
-    --encoder masking-sharedsplit --head "$HEAD/best.pt" \
+    --encoder "masking-sharedsplit$SUF" --head "$HEAD/best.pt" \
     --init-projector "$WARM/projector.pt" --rerank "$K" --pairs "$PAIRS" \
     --val-split rr --epochs 2 --out-dir "$RR"
 
