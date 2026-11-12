@@ -844,11 +844,12 @@ magnitude ladder: "he is bad" (−6) is a stronger claim than "don't pick him"
 
 A reply that says "Kled sits at rank 72; +3 nats moves it to rank 6" is asking
 the reader to hold the head's list and the adjusted one in their head and diff
-them. So the same ranking is also drawn as a chip row directly under
-`Blue to ban · move 5/20`, one row above the head's own chips: dashed border,
-`CHAT` tag, the lambda, the named champion's `72 → 6 of 164`, and the sentence
-that produced it. The chips are the adjusted top eight at **head**
-probabilities, clickable like the head's own.
+them. So the same ranking is also drawn as a chip row directly **below** the
+head's own chips: dashed border, `CHAT` tag, the lambda, the named champion's
+`72 → 6 of 164`, and the sentence that produced it. Under rather than over,
+because the panel then reads top-down as one sentence — this is the answer, this
+is what it becomes once you have said your piece. The chips are the adjusted top
+eight at **head** probabilities, clickable like the head's own.
 
 Three rules make it honest rather than decorative:
 
@@ -902,6 +903,28 @@ but a count a coach can act on.
 
 ### What it does not do
 
+- **It does not read the reason.** "Kled is good here because he counters Olaf"
+  and "…because Wisconsin makes the most cheese" buy the same lambda; the reply
+  says so in as many words when the message contains a "because". The parser
+  finds champion names, a stance cue and a negation, and that is the whole
+  input. Measured on the real name table: all three of a true reason, a false
+  one ("because he is a strong support") and an irrelevant one produce
+  `+3.0` on Kled and nothing else.
+- **A champion named as the opponent is not a second pick.** A name that
+  follows `into / against / vs / facing / counters / beats` is marked
+  `opponent`, gets `lambda = 0` and is kept only so `pair_evidence` can be asked
+  about the pair. Before that rule "Kled is good into Olaf" boosted Olaf by the
+  same 3 nats, which read the sentence backwards — and `against` also sat in
+  `NEGATIVE`, so "good against Olaf" scored Kled at **−3** nats. Both are fixed;
+  "I am against picking Kled" is still −3, because there the cue has no champion
+  after it.
+- **The remote model phrases, it does not reason.** `--chat-llm` sends the same
+  numbers as JSON with the rule "cite only the numbers in the input", and any
+  failure falls back to the template. It never sees the reason as a premise and
+  it cannot change a lambda, so the three sentences above read the same with it
+  on. The chat is not in the decision path at all: the panel's suggestion list
+  still comes from `/api/next-move`, the reranker never sees a chat turn, and
+  the only thing a message changes is the ranking drawn in the second row.
 - **It does not answer for the off-turn side.** The board fixes whose move it
   is, and the two sides are not differentiated anyway (TV 0.015 against 0.147
   for a control that swaps one enemy pick). A message framed "for Red" when
@@ -916,7 +939,8 @@ but a count a coach can act on.
 - The parser is a keyword scan, not NLU. It is right about "don't pick Kled,
   he is bad" (the qualifier lands in the second clause and the message-level
   cue catches it) and wrong about "I don't think Kled is bad", which it scores
-  as negative.
+  as negative. It also has no idea that "he is a strong support" is a claim
+  about a *role* — the role head exists, but nothing in the chat reads it.
 
 ## Limits (prototype)
 

@@ -88,6 +88,21 @@ _CLAUSE = re.compile(r"[.,;!?\n]+")
 # "Dr" and "Mundo" and lose whatever qualifies it.
 _DR_MUNDO = re.compile(r"\bdr\.?\s*mundo\b", re.I)
 
+# "Kled is good into Olaf" names two champions and rates one. The second is the
+# champion being played *into*, and boosting it would be reading the sentence
+# backwards - it is evidence about the matchup, not a second pick. So a name
+# that follows one of these cues is marked `opponent` and gets no lambda.
+#
+# The cue also has to stop counting as negation. "against" is in `NEGATIVE`
+# because "I am against picking him" is a real thing to say, but in "good
+# against Olaf" it is the relationship, and reading it as a negation turned a
+# positive sentence into -3 nats on the champion it was praising.
+_OPP_CUES = (r"into|against|vs|versus|facing|counters?|counter ?picks?|"
+             r"beats?|shuts down|deals with")
+_OPP_BEFORE = re.compile(r"\b(?:" + _OPP_CUES + r")\s+(?:the\s+|a\s+|that\s+|"
+                         r"this\s+)?$")
+_OPP_ANY = re.compile(r"\b(?:" + _OPP_CUES + r")\b")
+
 
 def _norm(text):
     """Lowercase, and every run of non-alphanumerics becomes one space.
@@ -157,16 +172,43 @@ def parse(message, names):
         # Message order, not key length: the first name the user said is the one
         # the recommendation should be steered by.
         found.sort()
-        label, lam = _stance(norm, whole)
-        neg = _negation(norm) or _negation(whole)
+        opp = set()
+        for pos, idx, _name in found:
+            if _OPP_BEFORE.search(norm[:pos]):
+                opp.add(idx)
+        # In a clause that names an opponent, the cue is the relationship rather
+        # than a judgement: "good against Olaf" is not a negative sentence.
+        scan = _OPP_ANY.sub(" ", norm) if opp else norm
+        wscan = _OPP_ANY.sub(" ", whole) if opp else whole
+        label, lam = _stance(scan, wscan)
+        neg = _negation(scan) or _negation(wscan)
         if neg is not None:
             lam = -max(neg, abs(lam) if label != "mention" else 0.0)
             label = "against-" + label
         for _pos, idx, name in found:
-            mentions.append({"idx": idx, "name": name, "stance": label,
-                             "lam": lam})
+            if idx in opp:
+                # Kept in the list: the pair is the whole point of naming it,
+                # and `pair_evidence` is asked about exactly this pair.
+                mentions.append({"idx": idx, "name": name,
+                                 "stance": "opponent", "lam": 0.0})
+            else:
+                mentions.append({"idx": idx, "name": name, "stance": label,
+                                 "lam": lam})
     return {"mentions": mentions, "side": side, "raw": message,
             "empty": not (message or "").strip()}
+
+
+def primary_mention(parsed):
+    """The mention the recommendation is steered by.
+
+    The first one that is not the champion being played into: "into Olaf, Kled
+    is good" must steer on Kled, and a lambda of 0 on Olaf would otherwise make
+    the reply read "Olaf ... reading that as +0.0 nats moves it to rank 41".
+    """
+    for m in parsed.get("mentions") or []:
+        if m["stance"] != "opponent":
+            return m
+    return None
 
 
 def _stance(norm, whole=""):
@@ -283,7 +325,7 @@ def compose_local(board, names, parsed, inv, evidence):
             lines.append("That leader is %d games - a count, not a rate."
                          % c[0]["n"])
 
-    m = parsed["mentions"][0] if parsed["mentions"] else None
+    m = primary_mention(parsed)
     if m:
         idx, name, lam = m["idx"], m["name"], m["lam"]
         if idx not in inv["p"]:
@@ -304,8 +346,8 @@ def compose_local(board, names, parsed, inv, evidence):
                 lines.append("To push it off the list entirely would take more "
                              "than this.")
         if parsed["mentions"][1:]:
-            other = parsed["mentions"][1]
-            pair = evidence.get("pair_evidence")
+            other = next((x for x in parsed["mentions"] if x is not m), None)
+            pair = evidence.get("pair_evidence") if other else None
             if pair:
                 cc = pair["result"]["counts"]
                 lines.append("%s and %s have been on the same team %s, "
@@ -313,6 +355,17 @@ def compose_local(board, names, parsed, inv, evidence):
                              % (name, other["name"], _times(cc["same_team"]),
                                 _times(cc["opposing"]),
                                 _times(cc["same_role"])))
+        opp = [x for x in parsed["mentions"] if x["stance"] == "opponent"]
+        if opp:
+            lines.append("%s is read as the champion to play into, not as a "
+                         "pick, so it is not boosted." % opp[0]["name"])
+
+    # The one thing the parser cannot see, said out loud rather than left for
+    # the reader to discover: a reason is prose, and nothing here reads prose.
+    if re.search(r"\b(because|since|due to)\b", _norm(parsed.get("raw"))):
+        lines.append("The reason itself is not used - the boost comes from how "
+                     "strongly you rate the champion, not from the argument for "
+                     "it, so a false reason and a true one read the same.")
 
     if parsed["side"] is not None:
         lines.append("Note: the model answers for the side on the clock, and "
@@ -345,7 +398,7 @@ def respond(corpus, board, head_probs, names, message, client=None,
         take("legal_pool", k=5)
         take("next_move_counts", k=k_similar, top=5)
 
-    primary = parsed["mentions"][0] if parsed["mentions"] else None
+    primary = primary_mention(parsed)
     if primary and not board.complete:
         take("champ_evidence", idx=primary["idx"], k=k_similar)
     if len(parsed["mentions"]) > 1:

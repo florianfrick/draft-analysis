@@ -1009,11 +1009,13 @@ function renderNextMoveError(msg) {
   warn.classList.remove('hidden');
 }
 
-// ---- the chat's ranking, one row under the head's -----------------------
+// ---- the chat's ranking, under the head's -------------------------------
 // The chat adds the user's insistence as a prior in log space and renormalises,
 // so a turn produces a *second* ranking of the same board. Kept inside the chat
 // log it made the reader hold two lists in their head and diff them; here, one
-// row above the head's own chips, the difference is a glance.
+// row under the head's own chips, the difference is a glance. Under rather than
+// over: the head's list is the answer, this is what the answer becomes once you
+// have said your piece, and the panel reads top-down as that sentence.
 //
 // Two rules, both inherited from the rest of the panel:
 //   * a ranking belongs to the board it was computed for. `chatSig` is the set

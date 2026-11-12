@@ -747,10 +747,16 @@ refused at load rather than failing later.
   the server does. It answers from the head even when the reranker is loaded,
   because a reranker has no distribution to boost, and it does not answer for
   the off-turn side (§4: the two sides are not differentiated). The adjusted
-  ranking is drawn a second time in the panel, under the turn header, with the
-  named champion always present (after a `…` when it is outside the top eight)
-  and `chatSig` — picks, bans, first pick, fearless, patch, *not* the lane — as
-  its freshness key. One turn, not a running total: two messages do not stack.
+  ranking is drawn a second time in the panel, **below** the head's own chips,
+  with the named champion always present (after a `…` when it is outside the top
+  eight) and `chatSig` — picks, bans, first pick, fearless, patch, *not* the
+  lane — as its freshness key. One turn, not a running total: two messages do
+  not stack. **The reason is not read**: a true, a false and an irrelevant
+  "because …" all buy the same λ (measured on the real name table), and the
+  reply says so. A champion named after `into/against/vs/facing/counters` is
+  marked `opponent`, gets λ=0 and feeds `pair_evidence` only — before that rule
+  "good into Olaf" boosted Olaf and "good against Olaf" scored Kled at −3, since
+  `against` also sits in `NEGATIVE`.
 
 Verified against a live server on the seven test games, not by reading the
 loader: all five checkpoints load through `/api/load` and answer their own

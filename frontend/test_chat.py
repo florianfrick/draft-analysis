@@ -118,6 +118,50 @@ def test_side_is_read_from_the_message():
     assert chat.parse("Kled is good", REAL)["side"] is None
 
 
+# ------------------------------------------------------- opponent vs. negation
+def test_a_champion_named_as_the_opponent_is_not_boosted():
+    """'Kled is good into Olaf' rates one champion and names two. Boosting Olaf
+    would read the sentence backwards - it is the champion Kled is good *into*."""
+    got = chat.parse("Kled is good here because he counters Olaf", REAL)["mentions"]
+    lam = {m["name"]: (m["stance"], m["lam"]) for m in got}
+    assert lam["Kled"][1] > 0
+    assert lam["Olaf"] == ("opponent", 0.0)
+
+
+def test_against_a_champion_is_the_relationship_not_a_negation():
+    """"against" is a negation cue because "I am against picking him" is a real
+    thing to say. In "good against Olaf" it is the matchup, and reading it as a
+    negation turned a positive sentence into -3 nats on the champion praised."""
+    good = chat.parse("Kled is good against Olaf", REAL)["mentions"][0]
+    bad = chat.parse("I am against picking Kled", REAL)["mentions"][0]
+    assert good["name"] == "Kled" and good["lam"] > 0
+    assert bad["name"] == "Kled" and bad["lam"] < 0
+
+
+def test_the_steering_champion_is_never_the_opponent():
+    """'into Olaf, Kled is good' must steer on Kled even though Olaf is named
+    first, or the reply reports a lambda of 0 on the wrong champion."""
+    got = chat.parse("into Olaf, Kled is good", REAL)
+    assert got["mentions"][0]["name"] == "Olaf"
+    assert chat.primary_mention(got)["name"] == "Kled"
+
+
+def test_a_reason_is_not_evidence():
+    """The parser reads names and stance, never the argument. Pinned as a test
+    so the limit is a documented property rather than a surprise: a true reason,
+    a false one and an irrelevant one all buy the same lambda."""
+    true_ = "Kled is good here because he counters Olaf"
+    false_ = "Kled is good here because he is a strong support"
+    nonsense = "Kled is good here because Wisconsin makes the most cheese"
+    lams = [chat.parse(m, REAL)["mentions"][0]["lam"]
+            for m in (true_, false_, nonsense)]
+    assert lams == [lams[0]] * 3 and lams[0] > 0
+    out = chat.respond(corpus([]), tools.Board([None] * 10, [1, 2, 3],
+                                               first_pick=0, patch="16.20"),
+                       _flat_probs(), REAL, nonsense)
+    assert "reason itself is not used" in out["reply"]
+
+
 # ------------------------------------------------------------- the loop
 def _flat_probs(top=0.2):
     """A distribution with one clear leader and a long, equal tail."""
