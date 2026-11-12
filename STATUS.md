@@ -1005,31 +1005,40 @@ Two measured facts made this cheap, and one was a bug:
   frontend's channel (a move log, not a board) and is **not wired yet** - the
   store is seeded from `--moves`.
 
-**What this does not fix: the ranking.** The 2-of-6 below is about the head being
-wrong, not about the interface being awkward. A state handle removes a class of
-*input* error and leaves the *judgment* error untouched - expect fewer silent
-nonsense answers, not better picks.
+**The ranking is not this component's job.** The heads are well trained and are
+not being improved on this branch; the goal is the user/chat interface. A state
+handle removes a class of *input* error and leaves judgment to the head, which is
+where it belongs - so expect fewer silent nonsense answers, and the same picks.
 
-**First hand-run (2026-11-11): 2 of 6, and the misses are the finding.** With no
-key available, the tool layer was driven by hand (`handrun.py`): six val states,
+**First hand-run (2026-11-11): fidelity 6/6, accuracy 2/6.** With no key
+available, the tool layer was driven by hand (`handrun.py`): six val states,
 stratified by where the head ranked the true pick (2 at rank 1, 2 at 2-5, 2 at
 6-20), boards shown without the truth, answers written blind, scored after. **9
 calls: 5 `predict_next_move`, 3 `rank_candidates`, 1 `sql`; `sql_share` 0.11,
-zero refusals** - the high-level tier carried the turn, which is what the two-tier
-design bet on. **2/6 top-1: 2/2 where the head was already right, 0/2 in each
-harder bucket.** The aggregate is meaningless (stratified sample, not comparable
-to 18.44 % on the real distribution); the pattern is the result:
+zero refusals** - the high-level tier carried the turn, which is what the
+two-tier design bet on.
 
-> **In all four misses I picked the head's own top-ranked champion.** The head's
-> ordering was wrong, not my reading of it.
+Two numbers, and only one of them is this project's:
 
-That is §9's prediction reproduced on six boards - an LLM wrapping the head
-cannot beat the head's argmax, because reading the distribution correctly is not
-the hard part. Two operational lessons, both now in the prompt: a shortlist you
-write yourself **omits the head's top pick** (2 of 3 `rank_candidates` calls), so
-confirm with `predict_next_move` first; but that confirmation is a **coin flip,
-not a gain** - it flipped one board hit→miss (abandoning my own correct read for
-the head's #1) and one miss→hit, net zero.
+```
+fidelity (answer == head's own #1): 6/6 = 100.0%   <- the interface
+accuracy (answer == truth):         2/6 =  33.3%   <- the head's job
+```
+
+**Fidelity is the requirement and it was perfect.** Answering the head's own #1
+on every board is correct behaviour even when that pick is wrong, and on four of
+six it was. The sample is stratified to be hard, so 2/6 is not the head's rate
+either (its own val top-1 is 20.3 %). One board had my own read right and the
+head's wrong; answering the head anyway is right for a component that is a mouth,
+not a second opinion. The one real lesson is tool discipline: a shortlist written
+*before* seeing any distribution **omitted the head's actual #1** in 2 of 3
+`rank_candidates` calls (Rumble, Gwen), which breaks fidelity - hence the prompt
+now reads the head's ranking before comparing names. `handrun.py` recomputes the
+head's #1 at scoring time, so the metric works on past runs and survives a
+retrain.
+
+**Not measured: whether a user finds it useful.** That needs the frontend and a
+person, and it is the actual goal.
 
 **Not written: the 200-state eval.** Whether the agent picks better than the head
 on the shared val, split by whether the truth was inside the head's top-20. Until

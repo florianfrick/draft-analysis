@@ -24,9 +24,9 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 sys.path.insert(0, str(ROOT))
 
-from pro.model.agent import handrun, llm_client, loop, mcp_server, schema  # noqa: E402
+from pro.model.agent import handrun, llm_client, loop, mcp_server, model_tools, schema  # noqa: E402
 from pro.model.agent.session import Session                        # noqa: E402
-from pro.model.agent.test_agent import SPLIT, _rows                # noqa: E402
+from pro.model.agent.test_agent import NAMES, SPLIT, _rows         # noqa: E402
 
 BOARD = {"blue_picks": ["Aatrox", "Vi", "Ahri"], "red_picks": ["Poppy", "Lee Sin"],
          "bans": ["Kled", "Olaf"], "first_pick": 1, "patch": "16.20"}
@@ -276,6 +276,28 @@ def test_the_board_renders_the_way_a_user_would_type_it():
     assert "first pick: red" in text
     assert "16.20" in text
     assert "not given" in loop.render_board({})
+
+
+def test_scoring_separates_fidelity_from_accuracy(tmp_path, monkeypatch, capsys):
+    """Two numbers, two owners: the interface carries the head, the head is judged."""
+    monkeypatch.setattr(handrun, "STATE", tmp_path / "s.json")
+    board = {"blue_picks": [], "red_picks": [], "bans": ["olaf"],
+             "first_pick": 0, "patch": "16.20"}
+    (tmp_path / "s.json").write_text(json.dumps({
+        "states": {
+            "A": {"board": board, "truth": "vi", "bucket": "2-5",
+                  "head_rank": 3},
+            "B": {"board": board, "truth": "kled", "bucket": "1", "head_rank": 1},
+        }, "calls": [], "answers": {}}), encoding="utf-8")
+    from pro.model.agent.test_agent import StubPredictor
+    monkeypatch.setattr(handrun, "_session", lambda: types.SimpleNamespace(
+        predictor=StubPredictor(), champs=model_tools.ChampIndex(NAMES)))
+    handrun.cmd_score(types.SimpleNamespace(
+        answers='{"A": "Kled", "B": "Kled"}'))
+    out = capsys.readouterr().out
+    # Both answers are the head's #1 (Kled); only one is the truth.
+    assert "fidelity" in out and "2/2 = 100.0%" in out
+    assert "accuracy" in out and "1/2 = 50.0%" in out
 
 
 # ------------------------------------------------------------- the env contract

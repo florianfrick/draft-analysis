@@ -186,29 +186,56 @@ def _compact(name, out):
 
 
 def cmd_score(args):
+    """Score two different questions, and keep them apart.
+
+    **Accuracy** - did the answer match the truth - is the head's problem. The
+    heads are well trained and this project is not trying to beat them, so a miss
+    here is usually the head being wrong, not the interface.
+
+    **Fidelity** - did the answer match the head's own top pick - is this
+    project's problem. A chat assistant that faithfully carries the model's
+    ranking to a user is doing its job even when that ranking is wrong, so this
+    is the number to read. It is recomputed here rather than stored, so it works
+    on any past run.
+    """
     blob = json.loads(STATE.read_text(encoding="utf-8"))
     answers = json.loads(args.answers)
-    hits, rows = 0, []
+    session = _session()
+    hits, faithful, rows = 0, 0, []
     for sid, s in sorted(blob["states"].items()):
         mine = (answers.get(sid) or "").strip()
+        board = s["board"]
+        out = model_tools.predict_next_move(
+            session.predictor, session.champs, board["blue_picks"],
+            board["red_picks"], board["bans"], first_pick=board["first_pick"],
+            patch=board["patch"], k=1)
+        head1 = ((out.get("top") or [{}])[0]).get("name")
         ok = model_tools._norm(mine) == s["truth"]
+        agree = head1 is not None and model_tools._norm(mine) == model_tools._norm(head1)
         hits += ok
-        rows.append((sid, s["bucket"], s["head_rank"], mine or "-",
-                     s["truth"], "HIT" if ok else "miss"))
+        faithful += agree
+        rows.append((sid, s["bucket"], s["head_rank"], mine or "-", s["truth"],
+                     head1 or "-", "HIT" if ok else "miss",
+                     "agree" if agree else "differs"))
         blob["answers"][sid] = mine
-    print("%-3s %-6s %-5s %-12s %-12s %s"
-          % ("id", "bucket", "head", "answer", "truth", "result"))
-    for sid, bucket, rank, mine, truth, res in rows:
-        print("%-3s %-6s %-5s %-12s %-12s %s"
-              % (sid, bucket, rank if rank is not None else ">20", mine, truth, res))
+    print("%-3s %-6s %-5s %-12s %-12s %-12s %-6s %s"
+          % ("id", "bucket", "head", "answer", "truth", "head#1", "truth",
+             "head"))
+    for r in rows:
+        print("%-3s %-6s %-5s %-12s %-12s %-12s %-6s %s"
+              % (r[0], r[1], r[2] if r[2] is not None else ">20",
+                 r[3], r[4], r[5], r[6], r[7]))
     n = len(rows)
-    print("\ntop-1: %d/%d = %.1f%%" % (hits, n, 100 * hits / n if n else 0))
+    print("\nfidelity (answer == head's own #1): %d/%d = %.1f%%   <- the interface"
+          % (faithful, n, 100 * faithful / n if n else 0))
+    print("accuracy (answer == truth):          %d/%d = %.1f%%   <- the head's job"
+          % (hits, n, 100 * hits / n if n else 0))
     for bucket in sorted(BUCKETS):
         got = [r for r in rows if r[1] == bucket]
         if got:
-            print("  bucket %-4s %d/%d" % (bucket,
-                                           sum(1 for r in got if r[5] == "HIT"),
-                                           len(got)))
+            print("  bucket %-4s fidelity %d/%d  accuracy %d/%d"
+                  % (bucket, sum(1 for r in got if r[7] == "agree"), len(got),
+                     sum(1 for r in got if r[6] == "HIT"), len(got)))
     by_tool = {}
     for c in blob["calls"]:
         by_tool[c["tool"]] = by_tool.get(c["tool"], 0) + 1

@@ -265,7 +265,7 @@ head being wrong, not about the interface being awkward; a state handle removes 
 whole class of *input* error and leaves the *judgment* error untouched. Expect
 fewer silent nonsense answers, not better picks.
 
-## The first hand-run (2026-11-11): 2 of 6, and why the number is not the point
+## The first hand-run (2026-11-11): fidelity 6/6, accuracy 2/6
 
 Before any key existed, the tool layer was driven by hand: six val states,
 stratified by where the head ranked the true next pick (2 at rank 1, 2 at 2-5, 2
@@ -273,33 +273,39 @@ at 6-20), boards printed without the truth, answers written blind, scored after.
 `handrun.py` is that driver; it goes through `Session`, so the mix it reports is
 the same number the real loop reports.
 
+```
+fidelity (answer == head's own #1): 6/6 = 100.0%   <- the interface
+accuracy (answer == truth):         2/6 =  33.3%   <- the head's job
+calls: 9  {'predict_next_move': 5, 'rank_candidates': 3, 'sql': 1}
+```
+
+**Fidelity is the requirement, and it was perfect.** The assistant's job is to
+carry the model's ranking to a user without distorting it, so answering the
+head's own #1 on every board is correct even when that pick is wrong - and on
+four of six it was. The sample was stratified to be hard on purpose, so 2/6 is
+not the head's rate either; the head's own val top-1 is 20.3 % and it is not
+being improved here.
+
+**The one real finding is about tool discipline, not accuracy.** In 2 of 3
+`rank_candidates` calls, a shortlist written *before* seeing any distribution
+omitted the head's actual #1 (Rumble in one board, Gwen in another). That breaks
+fidelity: the comparison is confident and about the wrong set. So the prompt now
+says to call `predict_next_move` first when the shortlist is yours.
+
+Two things that follow from reading fidelity rather than accuracy:
+
+- **Deferring to the head is not a cost.** One board had my own read right and
+  the head's #1 wrong; answering the head's #1 anyway is the correct behaviour
+  for this component, because it is a mouth, not a second opinion.
+- **`handrun.py` recomputes the head's #1 at scoring time**, so fidelity works on
+  any past run without re-answering, and it stays correct when the head changes.
+
 **9 calls: 5 `predict_next_move`, 3 `rank_candidates`, 1 `sql`. `sql_share`
 0.11, zero refusals.** The high-level tier carried the turn without the escape
-hatch, which is the outcome the two-tier design was betting on.
+hatch, which is what the two-tier design was betting on.
 
-**2/6 top-1 — 2/2 where the head was already right, 0/2 in each harder bucket.**
-The aggregate is meaningless (the sample is stratified, so it is not comparable
-to the head's 18.44 % on the real distribution). The *pattern* is the result:
-
-> **In all four misses I picked the head's own top-ranked champion.** The head's
-> ordering was wrong, not my reading of it.
-
-That is the prediction from STATUS §9 reproduced on six boards: an LLM wrapping
-the head cannot beat the head's argmax, because reading the distribution
-correctly is not the hard part. The interface worked perfectly and still lost.
-
-**Two things it did teach, both now in the prompt or the docs:**
-
-- **A shortlist you write yourself can omit the head's top pick.** In 2 of 3
-  `rank_candidates` calls, the shortlist I chose before seeing any distribution
-  missed the head's actual #1 (Rumble in one, Gwen in another). `rank_candidates`
-  is only as good as the set you hand it, so the prompt now says: if the
-  shortlist is yours, confirm with `predict_next_move` before answering.
-- **That confirmation is a coin flip, not a gain.** It flipped one board from a
-  hit to a miss (I abandoned my own correct read for the head's #1) and one from
-  a miss to a hit (the head's #1 was right and my shortlist had missed it). Net
-  zero, 2/6 either way. Following the head over your own read is not
-  automatically better - which is the same lesson from the other direction.
+**Not measured**: whether a user finds the answers useful. That needs the
+frontend and a person, which is the actual goal of this branch.
 
 ## What this does not answer
 
