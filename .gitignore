@@ -46,6 +46,10 @@ data/solo queue/puuids/
 data/solo queue/process matchdata/drafts_*.pt
 data/pro play/*.csv
 data/pro play/*.pt
+# Built by pro/model/agent/build_db.py (938k rows, ~60MB). Rebuild rather
+# than commit: it is a function of pro_drafts.pt and the checkpoint's
+# patch table, and a stale copy would answer questions about old data.
+data/pro play/*.sqlite
 # Patch notes corpus: local only, deliberately not in the repo. It was removed
 # in 8a30a07 and stays out - the measurement in STATUS.md §P3.1 says the
 # input-side adapter cannot turn patch changes into a cold-start prior, which
