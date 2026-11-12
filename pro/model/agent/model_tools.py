@@ -234,12 +234,18 @@ def predict_next_move(predictor, champs, blue_picks=(), red_picks=(), bans=(),
 
 
 def rank_candidates(predictor, champs, blue_picks=(), red_picks=(), bans=(),
-                    candidates=(), first_pick=0, patch=None, rerank=None):
+                    candidates=(), first_pick=0, patch=None, unavailable=(),
+                    rerank=None):
     """Score a *named* set of candidates against each other.
 
     The head is asked for its whole distribution, not a top-k, so a champion it
     ranks 60th still gets a number and the comparison is between the candidates
     rather than between two different pools.
+
+    `unavailable` is the fearless pool. It has to be passed to the head, not just
+    checked against the candidates: without it the distribution contains
+    champions this series has already used, and `rank_in_pool` is a rank against
+    a pool that cannot be drafted.
     """
     cand_idx = champs.resolve_all(candidates)
     if len(cand_idx) < 2:
@@ -250,18 +256,25 @@ def rank_candidates(predictor, champs, blue_picks=(), red_picks=(), bans=(),
     blue_idx = champs.resolve_all(blue_picks)
     red_idx = champs.resolve_all(red_picks)
     bans_idx = champs.resolve_all(bans)
+    unavail_idx = champs.resolve_all(unavailable)
     _check(blue_idx, red_idx, bans_idx)
     on_board = [c for c in cand_idx
                 if c in blue_idx or c in red_idx or c in bans_idx]
     if on_board:
         raise ValueError("%s is already on the board, so it cannot be ranked "
                          "for this move" % champs.name(on_board[0]))
+    used = [c for c in cand_idx if c in unavail_idx]
+    if used:
+        raise ValueError("%s was picked in an earlier game of this series, so "
+                         "it is fearless-unavailable here - rank someone else"
+                         % champs.name(used[0]))
     head = _head(predictor)
     pid, resolved, known = _patch_state(predictor, patch)
 
     res = head.next_move(_slots(blue_idx, red_idx), bans_idx,
                          first_pick=1 if first_pick else 0,
-                         k=_num_champs(head), patch_id=pid)
+                         k=_num_champs(head), patch_id=pid,
+                         unavailable=list(unavail_idx))
     prob = {int(c["idx"]): float(c["prob"]) for c in res.get("suggestions") or []}
     total = sum(prob.get(c, 0.0) for c in cand_idx)
     rows = []
@@ -298,6 +311,12 @@ _BOARD_PROPS = {
                                   "not 'blue first'. Prefer passing a state id "
                                   "instead - the store gets this right."},
     "patch": {"type": "string", "description": "e.g. '16.20'"},
+    "unavailable": {"type": "array", "items": {"type": "string"},
+                    "description": "fearless pool: champions picked in earlier "
+                                   "games of this series. They are illegal "
+                                   "here even though this board does not show "
+                                   "them. A state id carries this already; pass "
+                                   "it only when you are naming a board."},
 }
 
 PREDICT_SPEC = {

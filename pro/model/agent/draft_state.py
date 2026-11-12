@@ -79,16 +79,24 @@ def render_board(board, display=None):
     def names(xs):
         xs = [display(x) if display else x for x in (xs or [])]
         return ", ".join(xs) if xs else "(none yet)"
-    return ("Board:\n"
-            "  blue picks: %s\n"
-            "  red picks:  %s\n"
-            "  bans:       %s\n"
-            "  first pick: %s\n"
-            "  patch:      %s"
-            % (names(board.get("blue_picks")), names(board.get("red_picks")),
-               names(board.get("bans")),
-               "red" if board.get("first_pick") else "blue",
-               board.get("patch") or "not given"))
+    out = ("Board:\n"
+           "  blue picks: %s\n"
+           "  red picks:  %s\n"
+           "  bans:       %s\n"
+           "  first pick: %s\n"
+           "  patch:      %s"
+           % (names(board.get("blue_picks")), names(board.get("red_picks")),
+              names(board.get("bans")),
+              "red" if board.get("first_pick") else "blue",
+              board.get("patch") or "not given"))
+    # The fearless pool is not on this board and is not derivable from it: those
+    # champions were picked in *earlier games of the same series*. A reader that
+    # cannot see the pool will happily propose one of them.
+    pool = board.get("unavailable") or []
+    if pool:
+        out += ("\n  fearless:   %s (picked earlier in this series, so not "
+                "available)" % names(pool))
+    return out
 
 
 @dataclass(frozen=True)
@@ -97,6 +105,12 @@ class DraftState:
     moves: tuple = ()          # ((kind, side, champ_key), ...)
     patch: str = None
     red_first: bool = False
+    # Fearless: champions picked in *earlier games of this series*. Not part of
+    # the move log - nothing in this draft produced them - but they are illegal
+    # here, and the head masks them before its top-k. Carried on the state
+    # because a state that cannot say "these ten are gone" produces a legal,
+    # confident, wrong answer, which is the failure this module exists to stop.
+    unavailable: tuple = ()
 
     @property
     def schedule(self):
@@ -116,12 +130,20 @@ class DraftState:
     def taken(self):
         return {champ for _k, _s, champ in self.moves}
 
+    def blocked(self):
+        """Champions this draft cannot use but that are not on its board."""
+        return set(self.unavailable) - self.taken()
+
+    def legal_count(self):
+        return N_CHAMPS - len(self.taken() | set(self.unavailable))
+
     def board(self):
         blue = [c for k, s, c in self.moves if k == PICK and s == BLUE]
         red = [c for k, s, c in self.moves if k == PICK and s == RED]
         bans = [c for k, _s, c in self.moves if k == BAN]
         return {"blue_picks": blue, "red_picks": red, "bans": bans,
-                "first_pick": 1 if self.red_first else 0, "patch": self.patch}
+                "first_pick": 1 if self.red_first else 0, "patch": self.patch,
+                "unavailable": list(self.unavailable)}
 
     def apply(self, champ, kind=None, side=None):
         """Play `champ` into the scheduled slot. -> a new DraftState.
@@ -147,6 +169,10 @@ class DraftState:
             where = next((("%s %s" % (k, s)) for k, s, c in self.moves
                           if c == champ), "already")
             raise IllegalMove("%s is already on the board (%s)" % (champ, where))
+        if champ in self.unavailable:
+            raise IllegalMove(
+                "%s was picked in an earlier game of this series, so it is "
+                "fearless-unavailable in this one - pick someone else" % champ)
         return replace(self, moves=self.moves + ((due["kind"], due["side"], champ),))
 
     def undo(self):
@@ -161,20 +187,20 @@ class DraftState:
                                           due["move_idx"], N_MOVES)
                 if due else "complete")
         return "%s - to move: %s\n%s\n  legal champions left: %d" % (
-            head, turn, render_board(self.board(), display),
-            N_CHAMPS - len(self.taken()))
+            head, turn, render_board(self.board(), display), self.legal_count())
 
     def summary(self, label=None):
         due = self.to_move()
         return {"state": label, "move_idx": self.move_idx,
                 "kind": (due or {}).get("kind"), "side": (due or {}).get("side"),
-                "n_legal": N_CHAMPS - len(self.taken()),
+                "n_legal": self.legal_count(),
                 "red_first": self.red_first, "patch": self.patch,
+                "fearless": list(self.unavailable),
                 "complete": due is None}
 
 
 def log_from_board(picks, bans=(), red_first=False, patch=None,
-                   bans_blue=None, bans_red=None):
+                   bans_blue=None, bans_red=None, unavailable=()):
     """The frontend's board -> the chronological move log. -> DraftState.
 
     The two shapes are not the same question. The UI keeps **slots** (ten, two
@@ -199,6 +225,12 @@ def log_from_board(picks, bans=(), red_first=False, patch=None,
     gap and keeps going, because it scores each placed pick independently; a
     state cannot, because move 7 cannot exist without move 6. So the log is the
     longest prefix the board supports, and `move_idx` is its length.
+
+    `unavailable` is the fearless pool - champions picked in earlier games of
+    the series. It is not in the log and cannot be: this draft did not produce
+    them. It rides on the state so the head can mask it and `apply` can refuse
+    it; a pool entry that is also on this board is dropped, which is not a
+    silent repair - `taken()` already blocks it, so legality is unchanged.
     """
     schedule = SCHEDULE_RED_FIRST if red_first else SCHEDULE_BLUE_FIRST
     picks = list(picks or [])
@@ -237,7 +269,12 @@ def log_from_board(picks, bans=(), red_first=False, patch=None,
                               "state disagree" % champ)
         seen.add(champ)
         moves.append((kind, side, champ))
-    return DraftState(moves=tuple(moves), patch=patch, red_first=bool(red_first))
+    pool = []
+    for champ in (key(c) for c in (unavailable or [])):
+        if champ and champ not in seen and champ not in pool:
+            pool.append(champ)
+    return DraftState(moves=tuple(moves), patch=patch,
+                      red_first=bool(red_first), unavailable=tuple(pool))
 
 
 class Store:
@@ -305,13 +342,15 @@ class Store:
         return REAL_ID
 
     def set_board(self, picks, bans=(), red_first=False, patch=None,
-                  bans_blue=None, bans_red=None):
+                  bans_blue=None, bans_red=None, unavailable=()):
         """A UI board -> the live state. -> (state, the state it replaced).
 
         The translation from indices to canonical keys lives here rather than in
         the server because the store is what holds the name table. An index the
         table cannot spell is refused: silently dropping it would shorten the
         log and hand the model a board that is not the one on screen.
+
+        `unavailable` is the UI's fearless pool, in the same index space.
         """
         names = list(getattr(self.champs, "names", None) or [])
 
@@ -330,7 +369,8 @@ class Store:
                                bans_blue=None if bans_blue is None
                                else [nm(b) for b in bans_blue],
                                bans_red=None if bans_red is None
-                               else [nm(b) for b in bans_red])
+                               else [nm(b) for b in bans_red],
+                               unavailable=[nm(u) for u in (unavailable or [])])
         old = self.get(REAL_ID)
         self.set_real(state)
         return state, old

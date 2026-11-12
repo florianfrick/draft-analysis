@@ -312,6 +312,65 @@ def test_the_store_converts_indices_and_keeps_the_name_table():
     assert "outside the name table" in str(exc.value)
 
 
+# ------------------------------------------------------------------ fearless
+# A fearless series removes every champion picked in an earlier game. Nothing on
+# this board produced that list, so a state without it is legal-looking and
+# wrong - which is how the agent came to recommend a champion the series had
+# already used.
+def test_a_fearless_champion_cannot_be_played_into_a_state():
+    st = D.DraftState(unavailable=("kled",))
+    with pytest.raises(D.IllegalMove) as exc:
+        st.apply("kled")
+    assert "fearless" in str(exc.value) and "kled" in str(exc.value)
+    assert st.apply("olaf").move_idx == 1        # a legal one still works
+
+
+def test_the_pool_is_rendered_and_counted_out_of_the_legal_pool():
+    plain, pooled = D.DraftState(), D.DraftState(unavailable=("kled", "olaf"))
+    assert "fearless" not in plain.render()
+    assert "kled, olaf" in pooled.render()
+    assert pooled.legal_count() == plain.legal_count() - 2
+    assert pooled.summary()["fearless"] == ["kled", "olaf"]
+
+
+def test_a_pool_entry_already_on_the_board_is_not_counted_twice():
+    """The UI seeds the pool from the series; overlap cannot change legality."""
+    st = D.log_from_board([None] * 10, bans=["kled"],
+                          unavailable=["kled", "olaf"])
+    assert st.unavailable == ("olaf",)
+    assert st.legal_count() == D.N_CHAMPS - 2
+
+
+def test_a_clone_inherits_the_pool():
+    s = store()
+    s.set_real(D.DraftState(unavailable=("kled",)))
+    assert s.get(s.clone()).unavailable == ("kled",)
+
+
+def test_the_store_takes_the_pool_in_the_board_index_space():
+    s = store()
+    idx = model_tools.ChampIndex(NAMES).resolve("Kled")
+    state, _old = s.set_board([None] * 10, [], unavailable=[idx])
+    assert state.unavailable == ("kled",)
+
+
+def test_predicting_on_a_state_never_offers_a_fearless_champion():
+    """The reported bug, at the level it happened: a state-based prediction."""
+    s = session(store())
+    s.store.set_real(D.DraftState(unavailable=("kled",)))
+    out = s.call("predict_next_move", state=D.REAL_ID, k=8)
+    assert "kled" not in [r["name"].lower() for r in out["top"]]
+    assert out["n_legal"] == 7                   # the stub head has 8 champions
+
+
+def test_ranking_on_a_state_refuses_a_fearless_candidate():
+    s = session(store())
+    s.store.set_real(D.DraftState(unavailable=("kled",)))
+    out = s.call("rank_candidates", state=D.REAL_ID, candidates=["Kled", "Olaf"])
+    assert out.get("ok") is False or "error" in out
+    assert "fearless" in (out.get("error") or "")
+
+
 # ------------------------------------------------------------------- session
 def test_state_tools_are_offered_only_with_a_store():
     without = Session(predictor=Predictor(),

@@ -1562,12 +1562,25 @@ class Handler(BaseHTTPRequestHandler):
             # normal, but an empty pair next to a populated flat list means the
             # split is the stale half and the flat list is the board.
             split = bool(blue or red)
+            # The fearless pool: champions picked in earlier games of this
+            # series. It is not derivable from the board, so if it is dropped
+            # here the head is free to suggest one of them - which it did.
+            #
+            # Absent is not empty. The panel sends `fearless` on every board it
+            # publishes, but a caller that forwards a board without the pool is
+            # saying nothing about it, and reading that as "no pool" would clear
+            # a real one. `[]` is the explicit "this series has no pool".
+            raw = payload.get("fearless")
+            pool = (list(state_store().get(draft_state.REAL_ID).unavailable)
+                    if raw is None
+                    else [mapping[f] for f in raw if f in mapping])
             state, _old = state_store().set_board(
                 picks_idx, flat,
                 red_first=bool(int(payload.get("first_pick") or 0)),
                 patch=self._state_patch(payload),
                 bans_blue=blue if split else None,
-                bans_red=red if split else None)
+                bans_red=red if split else None,
+                unavailable=pool)
         except (ValueError, KeyError, TypeError) as exc:
             APP["state_error"] = str(exc)
             return None

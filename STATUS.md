@@ -1027,6 +1027,18 @@ Two measured facts made this cheap, and one was a bug:
   side), and the log stops at the first empty pick slot because move 7 cannot
   exist without move 6. Checked by converting every prefix of eight real drafts
   back to the corpus.
+- **The fearless pool is a third thing neither shape can say.** Champions picked
+  in earlier games of the series are illegal and absent from this board, so a
+  state of moves alone looks legal and is not - and the agent recommended one.
+  `DraftState.unavailable` carries them, `board()` feeds every model tool,
+  `head.next_move` masks before top-k, `apply_move` refuses with a sentence, and
+  the rendered state lists them. Two guards because the failure was *reported*:
+  the mask stops the suggestion, `apply` stops the simulation. Three holes made
+  it possible - no field, no `unavailable` parameter on `rank_candidates` at all,
+  and `_publish_state` dropped it - and `StubHead` accepting-and-ignoring the
+  argument is why no test could see it. Measured after the fix: Lee Sin is the
+  head's #1 at 15.4 % on a board where it is fearless, and 0 % of the answer.
+  `fearless` absent from a publish means "unchanged", `[]` means "no pool".
 - **`GET/POST /api/state` and `POST /api/agent`** expose the service to the
   panel; the chat has a `head` / `agent` toggle. `/api/agent` needs `langgraph`
   (503 without it), a policy (400) and a key (200, `stop: "no client"`), and it

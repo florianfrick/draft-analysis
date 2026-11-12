@@ -237,7 +237,9 @@ class StubHead:
                   patch_id=None):
         probs = {0: 0.30, 1: 0.20, 2: 0.10, 3: 0.05, 4: 0.04, 5: 0.03,
                  6: 0.02, 7: 0.01}
-        for c in list(picks) + list(bans):
+        # The real head masks the fearless pool before its top-k; a stub that
+        # accepts `unavailable` and ignores it hid exactly that bug once.
+        for c in list(picks) + list(bans) + list(unavailable):
             probs.pop(c, None)
         sug = [{"idx": i, "prob": p}
                for i, p in sorted(probs.items(), key=lambda kv: -kv[1])][:k]
@@ -280,6 +282,40 @@ def test_predict_next_move_attaches_rank_and_pool_share(champs):
     assert out["top"][0]["rank"] == 1 and out["top"][0]["p_head"] > 0
     assert out["patch_known"] is True and out["patch_resolved"] == "16.20"
     assert "legal champions" in out["note"]
+
+
+def test_the_fearless_pool_is_masked_out_of_the_distribution(champs):
+    """The pool is not on the board, so only the head's own mask can remove it.
+
+    `unavailable` is fearless: champions picked in an earlier game of the same
+    series. A tool that subtracts picks and bans from its pool and nothing else
+    ranks a champion that cannot be drafted, at a plausible probability.
+    """
+    first = model_tools.predict_next_move(StubPredictor(), champs)
+    top = first["top"][0]["name"]
+    out = model_tools.predict_next_move(StubPredictor(), champs,
+                                        unavailable=[top])
+    assert top not in [r["name"] for r in out["top"]]
+    assert out["n_legal"] == first["n_legal"] - 1
+
+
+def test_rank_candidates_refuses_a_fearless_candidate(champs):
+    with pytest.raises(ValueError, match="fearless"):
+        model_tools.rank_candidates(StubPredictor(), champs,
+                                    candidates=["Kled", "Olaf"],
+                                    unavailable=["Olaf"])
+
+
+def test_rank_candidates_ranks_against_the_pool_that_can_be_drafted(champs):
+    """`rank_in_pool` has to exclude the pool, or the rank is against ghosts."""
+    without = model_tools.rank_candidates(StubPredictor(), champs,
+                                          candidates=["Olaf", "Nocturne"])
+    with_pool = model_tools.rank_candidates(StubPredictor(), champs,
+                                            candidates=["Olaf", "Nocturne"],
+                                            unavailable=["Kled"])
+    olaf = lambda out: next(r for r in out["candidates"] if r["name"] == "Olaf")
+    assert olaf(without)["rank_in_pool"] == 2      # Kled is the head's #1
+    assert olaf(with_pool)["rank_in_pool"] == 1
 
 
 def test_the_sides_are_placed_in_their_own_slots(champs):

@@ -1457,3 +1457,35 @@ def test_the_published_state_names_the_patch_the_head_will_use(app, httpd,
     assert status == 200, st
     assert st["real"]["patch"] == S.infer.DEFAULT_PATCH
     assert S.infer.DEFAULT_PATCH in st["real"]["rendered"]
+
+
+def test_the_fearless_pool_reaches_the_published_state(app, httpd, fresh_store):
+    """Reported: the agent recommended a champion picked in an earlier game.
+
+    The pool was already in the request - the UI seeds it from the series - and
+    nothing between the payload and the store read it, so the state looked legal
+    and the head was free to suggest a champion that was not in the pool.
+    """
+    names = list(app["mapping"])
+    bans, pool = names[:6], names[6:8]
+    board = {"picks": [None] * 10, "bans": bans, "first_pick": 0}
+    _post(httpd, "/api/suggest", json.dumps(board))
+    _, plain = _get(httpd, "/api/state")
+    _post(httpd, "/api/suggest", json.dumps(dict(board, fearless=pool)))
+    status, st = _get(httpd, "/api/state")
+    assert status == 200, st
+    assert len(st["real"]["fearless"]) == 2
+    assert st["real"]["n_legal"] == plain["real"]["n_legal"] - 2
+    assert "fearless" in st["real"]["rendered"]
+
+    # A board without the key says nothing about the pool. Reading that as
+    # "no pool" is how the pool got lost in the first place - every other
+    # handler republishes the board it was given.
+    _post(httpd, "/api/suggest", json.dumps(board))
+    _, after = _get(httpd, "/api/state")
+    assert len(after["real"]["fearless"]) == 2
+
+    # ... and an explicit empty list clears it, because the UI sends one.
+    _post(httpd, "/api/suggest", json.dumps(dict(board, fearless=[])))
+    _, cleared = _get(httpd, "/api/state")
+    assert cleared["real"]["fearless"] == []

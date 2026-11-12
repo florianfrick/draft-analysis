@@ -139,7 +139,11 @@ Three rules, each for a failure that would otherwise be invisible:
   board it was actually asked about.
 - **The step budget is a routing decision.** A graph that runs out of steps and
   raises `GraphRecursionError` loses the log. The router sends the last assistant
-  message to `END` and records `stop="step budget"`.
+  message to `END` and records `stop="step budget"`. It also does not end on the
+  refused tool call: that left `answer` empty and the panel showed an empty
+  bubble. One last call is made with `tools=None` plus a note saying the budget
+  is spent, so the model answers from the results it already has. (Measured on a
+  real turn: 8 steps of SQL, no prose before this, a paragraph after.)
 - **No key is not a crash.** `client_from_env` returns `None`, `run` returns
   `stop="no client"` with the tools it would have offered.
 
@@ -308,6 +312,26 @@ what the UI cannot say:
 `test_a_ui_board_rebuilds_every_prefix_of_a_real_game` converts every prefix of
 eight real drafts and compares against the corpus, so the conversion is checked
 against the data rather than against itself.
+
+**The fearless pool is a third thing the board cannot say.** In a fearless series
+the champions picked in earlier games are gone, and they are not on this board -
+so a state that carries only moves looks legal and is not. The pool rides on
+`DraftState.unavailable` (canonical keys, inherited by clones), `board()` passes
+it to every model tool, the head masks it before its top-k, `apply_move` refuses
+it with a sentence, and the rendered state lists it. Two guards, because the
+failure was reported rather than caught: the head's mask stops the suggestion,
+and `apply` stops the simulation.
+
+The first version of this had the pool in the request and nothing reading it, so
+the agent recommended a champion the series had already used. Three separate
+holes: `DraftState` had no field for it, `rank_candidates` had no `unavailable`
+parameter at all, and `_publish_state` dropped it. `StubHead` accepted
+`unavailable` and ignored it, which is why the tests could not see any of this;
+it now masks, as the real head does.
+
+`fearless` absent from a publish means "unchanged", not "empty": the panel sends
+it on every board, and a caller that forwards a board without the pool is saying
+nothing about it. `[]` is the explicit "this series has no pool".
 
 ### Over HTTP
 

@@ -77,6 +77,7 @@ def client_that_records():
     return call
 
 
+
 # ---------------------------------------------------------------------- run
 def test_the_board_is_filled_when_the_model_omits_it(session):
     """Every model tool takes the whole board; re-typing nine names is the tax."""
@@ -146,14 +147,43 @@ def test_the_answer_is_the_last_assistant_message(session):
     assert [c["name"] for c in out["calls"]] == ["sql"]
 
 
-def test_the_loop_stops_at_the_step_budget_and_keeps_the_log(session):
-    """A graph that runs out of steps must return, not raise."""
+def test_the_loop_stops_at_the_step_budget_and_still_answers(session):
+    """A graph that runs out of steps must return, not raise.
+
+    And it must not return nothing. The first version ended on the tool call the
+    budget refused, so `answer` was empty and the panel rendered an empty bubble
+    - a bug from the reader's side. The last call is now made without tools, so
+    the model answers from the results it already has.
+    """
+    seen = []
+
+    def client(messages, tools=None):
+        seen.append((tools, messages))
+        if tools:
+            return reply("", [("sql", {"query": "SELECT 1 AS one"})])
+        return reply("One, from the query I already ran.")
+
+    out = loop.run(session, "x", client=client, board=BOARD, max_steps=2)
+    assert out["stop"] == "step budget"
+    assert out["answer"] == "One, from the query I already ran."
+    assert len(out["calls"]) == 2          # two tool rounds, then the router
+    assert out["summary"]["by_tool"] == {"sql": 2}
+    assert seen[-1][0] is None             # the last call offered no tools
+    assert "every tool call" in seen[-1][1][-1]["content"]
+
+
+def test_a_model_that_ignores_the_budget_note_gets_no_answer(session):
+    """The residual case: it keeps asking even when nothing is offered.
+
+    Nothing in the loop can invent an answer, so this pins the limit rather than
+    a behaviour - and it is why the budget path drops the tools as well as
+    sending the note, instead of relying on the model to notice.
+    """
     out = loop.run(session, "x", client=client_that_records(), board=BOARD,
                    max_steps=2)
     assert out["stop"] == "step budget"
+    assert len(out["calls"]) == 2
     assert out["answer"] is None
-    assert len(out["calls"]) == 2          # two tool rounds, then the router
-    assert out["summary"]["by_tool"] == {"sql": 2}
 
 
 def test_a_tool_error_does_not_end_the_loop(session):

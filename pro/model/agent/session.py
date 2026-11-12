@@ -146,7 +146,8 @@ class Session:
         board = st.board()
         args.update(blue_picks=board["blue_picks"], red_picks=board["red_picks"],
                     bans=board["bans"], first_pick=board["first_pick"],
-                    patch=board["patch"] or args.get("patch"))
+                    patch=board["patch"] or args.get("patch"),
+                    unavailable=board["unavailable"])
         return args, sid, st
 
     def _model_call(self, name, args):
@@ -165,7 +166,7 @@ class Session:
             out = model_tools.rank_candidates(
                 *common, args.get("candidates") or [],
                 first_pick=args.get("first_pick") or 0, patch=args.get("patch"),
-                rerank=self.rerank)
+                unavailable=args.get("unavailable") or (), rerank=self.rerank)
         if st is not None:
             out["state"] = st.summary(sid)
             due = st.to_move() or {}

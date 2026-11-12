@@ -155,7 +155,8 @@ def _write(stdout, payload):
 
 
 # ----------------------------------------------------------------------- cli
-def _load(ckpt, db, ablate, max_calls, moves=(), red_first=False, patch=None):
+def _load(ckpt, db, ablate, max_calls, moves=(), red_first=False, patch=None,
+          fearless=()):
     names = model_tools.ChampIndex(schema.names())
     predictor = champs = con = None
     if Path(ckpt).exists():
@@ -172,7 +173,9 @@ def _load(ckpt, db, ablate, max_calls, moves=(), red_first=False, patch=None):
     # `--moves` is the channel a frontend would use: a chronological move log,
     # which the store turns into the board the tools read. Nothing in the tool
     # layer can write to it.
-    live = draft_state.DraftState(patch=patch, red_first=red_first)
+    live = draft_state.DraftState(
+        patch=patch, red_first=red_first,
+        unavailable=tuple(draft_state.key(f) for f in fearless))
     for move in moves:
         live = live.apply(move)
     return Session(con=con, predictor=predictor, champs=champs,
@@ -219,6 +222,9 @@ def main(argv=None):
                          "e.g. 'Kled,Olaf,Aatrox'")
     ap.add_argument("--red-first", action="store_true",
                     help="red has the first pick of the game")
+    ap.add_argument("--fearless", default="",
+                    help="champions picked in earlier games of this series; "
+                         "they are illegal here and the head masks them")
     ap.add_argument("--patch", default=None)
     ap.add_argument("--self-test", action="store_true",
                     help="pipe canned messages through the server and exit")
@@ -238,7 +244,9 @@ def main(argv=None):
                     {x.strip() for x in args.ablate.split(",") if x.strip()},
                     args.max_calls,
                     moves=[x.strip() for x in args.moves.split(",") if x.strip()],
-                    red_first=args.red_first, patch=args.patch)
+                    red_first=args.red_first, patch=args.patch,
+                    fearless=[x.strip() for x in args.fearless.split(",")
+                              if x.strip()])
     print("mcp: serving %s (ablate=%s)"
           % (", ".join(session.names()) or "no tools",
              ",".join(sorted(session.ablate)) or "-"), file=sys.stderr)

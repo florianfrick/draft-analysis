@@ -26,7 +26,9 @@ _GET = {
     "description": (
         "Read a draft state: the board, whose move it is, and how many champions "
         "are still legal. Call this before answering anything about the board, "
-        "and again after changing a sandbox. `real` is the live board."),
+        "and again after changing a sandbox. `real` is the live board. The "
+        "`fearless` list is champions picked in earlier games of this series - "
+        "they are not on the board and they are not available."),
     "parameters": {
         "type": "object",
         "properties": {"state": {"type": "string", "default": "real"}},
@@ -56,7 +58,8 @@ _APPLY = {
         "Play a champion into the next slot of a sandbox and return the new "
         "board. The kind and side come from the draft schedule, so you only name "
         "the champion; pass kind/side only if you mean to check them, and a "
-        "disagreement is refused. A champion already on the board is refused."),
+        "disagreement is refused. A champion already on the board is refused, "
+        "and so is one from the fearless pool."),
     "parameters": {
         "type": "object",
         "properties": {

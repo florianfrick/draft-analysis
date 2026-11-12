@@ -101,6 +101,11 @@ them, and always quote the rank when you quote a probability.
 as if patch did not matter. Say so if you rely on it.
 - The model cannot see which side is blue. Do not ask it to tell you.
 
+Fearless series: `get_state` may list `fearless` champions. Those were picked in \
+earlier games of this series. They are not on the board, they are not available, \
+and they must not appear in an answer as a suggestion - the tools already mask \
+them, so a name from that list means you did not read the state.
+
 If a tool refuses, read the error and change the call. Do not retype it and \
 hope. If it says a champion is already on the board, you misread the board - \
 call `get_state`.
@@ -112,6 +117,14 @@ wrong.
 Answer in at most four sentences: name the champion, then the reason, citing \
 the numbers the tools returned. No preamble, no summary of what you did.
 """
+
+# Sent as a final user turn when the step budget runs out. Without it the turn
+# ends on a tool call and `answer` is empty, which the panel renders as nothing
+# at all - a bug from the reader's side, not a decision.
+BUDGET_NOTE = """\
+You have used every tool call this turn allows. Answer now from the results you \
+already have, in at most four sentences, and name anything you could not check. \
+Do not ask for another tool."""
 
 
 class State(TypedDict, total=False):
@@ -205,10 +218,21 @@ def build(session, client, system=SYSTEM, max_steps=MAX_STEPS, board=None):
             return {"answer": "", "stop": "llm error: %s" % exc,
                     "pending": []}
         calls = reply.get("tool_calls") or []
+        if calls and state.get("steps", 0) >= max_steps:
+            # Out of budget. The results it already has are usually enough, so
+            # the choice is an empty reply or one last call with no tools.
+            try:
+                reply = client(msgs + [{"role": "user", "content": BUDGET_NOTE}],
+                               tools=None)
+            except llm_client.LLMError as exc:
+                return {"answer": "", "stop": "step budget: %s" % exc,
+                        "pending": []}
+            return {"messages": [_to_wire(reply)], "pending": [],
+                    "answer": reply.get("content") or "",
+                    "stop": "step budget", "model": reply.get("model")}
         stop = "answered"
         if calls:
-            stop = ("step budget" if state.get("steps", 0) >= max_steps
-                    else "tool calls")
+            stop = "tool calls"
         return {"messages": [_to_wire(reply)], "pending": calls,
                 "answer": reply.get("content") or "", "stop": stop,
                 "model": reply.get("model")}
