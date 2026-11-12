@@ -97,6 +97,17 @@ def run(con, query, max_rows=MAX_ROWS, timeout=TIMEOUT_S):
         columns = [d[0] for d in cur.description] if cur.description else []
         raw = cur.fetchmany(max_rows + 1)
     except sqlite3.Error as exc:
+        # `interrupted` is this tool's own watchdog, not a broken query, and the
+        # difference matters: "no rows" and "aborted" lead to opposite
+        # conclusions, and the second one is actionable. A model that reads
+        # `rows: 0` reports that the corpus has nothing; a model that reads
+        # "aborted after 2.0 s" narrows the query or says it could not check.
+        if "interrupt" in str(exc).lower():
+            return {"error": "the query was aborted after %.1f s" % timeout,
+                    "timed_out": True, "query": body,
+                    "hint": "narrow it: filter on kind / move_idx / role / "
+                            "split, or aggregate fewer rows. A GROUP BY over "
+                            "the whole move table (938k rows) is a full scan."}
         return {"error": "%s: %s" % (type(exc).__name__, exc), "query": body,
                 "hint": hint(body, 0)}
     finally:

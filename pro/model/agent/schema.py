@@ -39,7 +39,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
+import shutil
 import sqlite3
 from pathlib import Path
 
@@ -211,9 +213,61 @@ def build(rows, out_path=DB_PATH, known_patches=None, split=None,
             "patches": len(order), "split": {k: len(v) for k, v in split.items()}}
 
 
-def connect(path=DB_PATH):
-    """Read-only connection. Writes are impossible, not merely discouraged."""
-    con = sqlite3.connect("file:%s?mode=ro" % Path(path).as_posix(), uri=True)
+def _local_copy(src, cache_dir):
+    """Copy the corpus next to the process, once per build. Returns the path.
+
+    Not an optimisation in the ordinary sense. The database is on a bind mount,
+    and Docker Desktop's gRPC-FUSE charges about a millisecond per random 4 KB
+    read - which is every index probe and every table lookup. Six
+    representative queries (a first-pick frequency, a role win rate, a
+    patch window, a self-join, a ban rate, a role split) took:
+
+        bind mount, as shipped            24.05 s
+        container-local disk, same file    0.46 s     52x
+
+    and the SQL is identical, so the 2 s deadline in `sql_tool` was firing on
+    queries the corpus answers in milliseconds. Indexes do not fix it: they
+    make it worse on the mount, because each hit is a random read (the covering
+    index that made one query instant made another 270x slower by attracting a
+    plan it was not designed for). On local disk even a full scan is cheap
+    enough that no index is worth adding.
+
+    `copy2` preserves the mtime, so the size+mtime check is the staleness test
+    and a rebuilt corpus is picked up on the next connection. The copy goes
+    through a `.part` file and `os.replace` so two processes starting at once
+    cannot read a half-written database.
+    """
+    dst = Path(cache_dir) / src.name
+    try:
+        st = src.stat()
+        if dst.exists():
+            d = dst.stat()
+            if d.st_size == st.st_size and d.st_mtime >= st.st_mtime:
+                return dst
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dst.with_name(dst.name + ".part")
+        shutil.copy2(src, tmp)
+        os.replace(tmp, dst)
+        return dst
+    except OSError:
+        # A cache that cannot be written is not a reason to fail a query; the
+        # mount is just slower.
+        return src
+
+
+def connect(path=DB_PATH, cache_dir=None):
+    """Read-only connection. Writes are impossible, not merely discouraged.
+
+    `cache_dir` (or the `LOL_DB_CACHE` environment variable, which
+    docker-compose sets to `/tmp`) opens a local copy - see `_local_copy` for
+    why that is 52x on the six queries measured. Unset means open in place,
+    which is what the tests and the host-side CLIs do.
+    """
+    src = Path(path)
+    where = os.environ.get("LOL_DB_CACHE") if cache_dir is None else cache_dir
+    if where and src.exists():
+        src = _local_copy(src, where)
+    con = sqlite3.connect("file:%s?mode=ro" % src.as_posix(), uri=True)
     con.execute("PRAGMA query_only = ON")
     return con
 

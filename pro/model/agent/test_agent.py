@@ -7,6 +7,7 @@ answers a real question correctly - is `build_db.py --query`.
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -153,6 +154,50 @@ def test_the_query_is_returned_with_the_rows(con):
 def test_a_syntax_error_is_a_result_not_an_exception(con):
     out = sql_tool.run(con, "SELECT FROM")
     assert "error" in out and out["query"]
+
+
+def test_a_query_the_watchdog_kills_is_not_reported_as_no_rows(con):
+    """The failure this tool exists to avoid: a confident empty answer.
+
+    `rows: 0` is a claim about the corpus, so an aborted query must not look
+    like one. It cost a real answer: on the bind mount the deadline fired on
+    queries the corpus answers in milliseconds, and the model reported that
+    the evidence did not exist.
+    """
+    out = sql_tool.run(con, "SELECT COUNT(*) FROM move a, move b, move c",
+                       timeout=0.001)
+    assert out.get("timed_out") is True
+    assert "aborted" in out["error"]
+    assert "rows" not in out
+
+
+# ---------------------------------------------------------------- local copy
+def test_the_cache_opens_a_copy_of_the_mount(db, tmp_path, monkeypatch):
+    """52x, measured: see `schema._local_copy` for the six queries."""
+    monkeypatch.setenv("LOL_DB_CACHE", str(tmp_path))
+    con = schema.connect(db[1])
+    opened = Path(con.execute("PRAGMA database_list").fetchone()[2])
+    assert opened == tmp_path / Path(db[1]).name
+    assert opened.exists() and opened != Path(db[1])
+
+
+def test_a_rebuilt_corpus_is_copied_again(db, tmp_path, monkeypatch):
+    """Size+mtime is the staleness test, so a rebuild cannot be missed."""
+    monkeypatch.setenv("LOL_DB_CACHE", str(tmp_path))
+    src = Path(db[1])
+    schema.connect(src).close()
+    copy = tmp_path / src.name
+    before = copy.stat().st_mtime
+    st = src.stat()
+    os.utime(src, (st.st_atime, st.st_mtime + 10))
+    schema.connect(src).close()
+    assert copy.stat().st_mtime > before
+
+
+def test_without_the_variable_the_database_is_opened_in_place(db, monkeypatch):
+    monkeypatch.delenv("LOL_DB_CACHE", raising=False)
+    con = schema.connect(db[1])
+    assert Path(con.execute("PRAGMA database_list").fetchone()[2]) == Path(db[1])
 
 
 def test_the_hint_teaches_the_mistake_it_caught(con):

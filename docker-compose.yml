@@ -28,6 +28,10 @@ services:
       # be a silent global override of that per-trainer default.
       WANDB_START_METHOD: thread
       PYTHONUNBUFFERED: "1"
+      # The corpus DB is on the bind mount, where gRPC-FUSE charges ~1 ms per
+      # random read; `schema.connect` copies it here and opens the copy. Same
+      # six queries: 24.05 s on the mount, 0.46 s local (see `_local_copy`).
+      LOL_DB_CACHE: /tmp
     # DataLoader workers + torch allocator need more than the 64MB default
     shm_size: 2gb
     # PID 1 reaper, so Ctrl-C on a training run actually kills the process
@@ -71,6 +75,7 @@ services:
       # fragments and reserves past the card (measured in pro/model/llm/run.sh).
       PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
       WANDB_START_METHOD: thread
+      LOL_DB_CACHE: /tmp
     shm_size: 2gb
     init: true
     stdin_open: true

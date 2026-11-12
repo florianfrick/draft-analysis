@@ -57,6 +57,34 @@ the unsupported-claim metric cannot be computed.
 `hint` is the part that pays for itself in a loop: a flash model writes
 `WHERE kind = 1` or `patch > '16.20'` often enough that the error has to teach.
 
+**The watchdog has to say it fired.** An aborted query is not an empty one, and
+the two lead to opposite conclusions - "the corpus has nothing" versus "I could
+not check". The first version let `interrupted` surface as an ordinary SQL error
+and the reply said the evidence did not exist; it now returns `timed_out: true`
+and a sentence naming the budget.
+
+**The database is copied off the bind mount.** `schema.connect` copies the
+corpus to `LOL_DB_CACHE` (docker-compose sets it to `/tmp`) and opens the copy,
+because gRPC-FUSE charges about a millisecond per random 4 KB read and every
+index probe is one. Six representative queries - a first-pick frequency, a role
+win rate, a patch window, a self-join, a ban rate, a role split:
+
+| where | total |
+| --- | --- |
+| bind mount, as shipped | 24.05 s |
+| container-local disk, same file | 0.46 s |
+
+52x, with identical SQL. The 2 s deadline was firing on queries the corpus
+answers in milliseconds, so the tool looked broken for exactly the questions it
+exists to answer. Adding indexes does **not** fix it - on the mount it makes
+things worse, because a non-covering index turns one sequential scan into
+hundreds of thousands of random reads (a covering index that made one query
+instant made another 270x slower by attracting a plan it was not written for).
+On local disk even a full scan is cheap enough that no index earns its place.
+The copy is checked by size+mtime and replaced atomically, so a rebuilt corpus
+is picked up on the next connection and two processes cannot read a half-written
+file.
+
 ## The model tier carries the judgment
 
 `predict_next_move` answers "what should we pick" (the head's distribution, 50.5 %

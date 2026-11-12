@@ -971,6 +971,22 @@ spec *and* refuses the call. Hiding tests the shipped configuration; refusing
 catches the model that invents a tool it was never offered. Both are logged as
 `ablated`, not as errors.
 
+**The SQL tool was measuring the filesystem, not the corpus.** The corpus DB
+lives on the bind mount, and gRPC-FUSE charges ~1 ms per random 4 KB read. Six
+representative queries took **24.05 s** over the mount and **0.46 s** on
+container-local disk - 52x, identical SQL - so the 2 s watchdog was aborting
+questions the corpus answers in milliseconds. Two fixes, both required:
+`schema.connect` now copies the DB to `LOL_DB_CACHE` (compose sets `/tmp`) and
+opens the copy, and an aborted query returns `timed_out: true` instead of an
+ordinary SQL error, because `rows: 0` reads as "the corpus has nothing" and the
+first real reply said exactly that. **Indexes are not the fix and are
+counterproductive here**: a non-covering index converts one sequential scan into
+hundreds of thousands of random reads, and a covering index that made one query
+instant made another 270x slower by attracting a plan it was not written for.
+On local disk no index earns its place - `schema.build` keeps only the four it
+always had.
+
+
 **One structural finding already.** Every model tool takes the whole board, so the
 model re-types nine champion names per call. The loop fills an *omitted* board
 (the turn's board is unambiguous) but **flags** a board the model retyped
