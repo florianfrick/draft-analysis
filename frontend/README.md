@@ -840,6 +840,38 @@ Negation reuses the same mechanism with a negative lambda, and has its own
 magnitude ladder: "he is bad" (−6) is a stronger claim than "don't pick him"
 (−3), which is exactly the distinction the positive ladder exists for.
 
+### The second ranking, drawn in the panel
+
+A reply that says "Kled sits at rank 72; +3 nats moves it to rank 6" is asking
+the reader to hold the head's list and the adjusted one in their head and diff
+them. So the same ranking is also drawn as a chip row directly under
+`Blue to ban · move 5/20`, one row above the head's own chips: dashed border,
+`CHAT` tag, the lambda, the named champion's `72 → 6 of 164`, and the sentence
+that produced it. The chips are the adjusted top eight at **head**
+probabilities, clickable like the head's own.
+
+Three rules make it honest rather than decorative:
+
+- **The named champion is always drawn**, appended after a `…` when the boost
+  did not lift it into the top eight. A weak stance's whole content is "this
+  champion is still 37th", and a row that silently dropped it would look like
+  no answer at all.
+- **It disappears when the board moves.** `chatSig()` is the set of inputs the
+  turn actually read — picks, bans, first pick, fearless pool, patch —
+  deliberately *not* `boardSig()`, which also carries the lane: the chat ranks
+  the whole legal pool (a pin on the head's 47th choice is the point), so
+  changing the lane does not make its numbers wrong.
+- **It says whose units they are.** The row is labelled `head %` because the
+  head's chips show the reranker's k-way numbers when one is loaded, and 31 % of
+  five candidates is not 31 % of 173 champions.
+
+**One turn, not a running total.** Each message is scored against the head, so
+"Kled is good" followed by "Olaf is better" leaves Olaf boosted and Kled back at
+its own probability — the row quotes the message it belongs to for exactly that
+reason. Accumulating the two would need a per-champion prior carried across
+turns (`invert` takes one champion and one lambda today), which is a real change
+to the loop rather than to the panel.
+
 ### The tools (`frontend/tools.py`, `POST /api/tool`)
 
 Deterministic, in Python, called by the server — **not** by the model. A 4B

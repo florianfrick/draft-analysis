@@ -272,3 +272,42 @@ def test_a_mention_of_a_taken_champion_is_refused_not_boosted():
                        "Champ100 is the pick")
     assert "already off the board" in out["reply"]
     assert out["pick"]["idx"] != 100
+
+
+def test_the_answer_carries_every_field_the_panel_row_draws():
+    """The row under the header draws `lambda`, the named champion's two ranks
+    and its boosted probability, and an adjusted top-k with `idx` so a chip can
+    be placed on the board. All of it has to come out of `respond`: the panel
+    is not allowed to re-derive a ranking of its own, or the two rows would be
+    two different claims wearing the same numbers.
+    """
+    rows = [make_row("g%d" % i, [1, 2, 3, 50, 60], [70, 71, 72, 73, 74])
+            for i in range(40)]
+    board = tools.Board([None] * 10, [1, 2, 3], first_pick=0, patch="16.20")
+    out = chat.respond(corpus(rows), board, _flat_probs(), NAMES,
+                       "Champ100 is incredibly good here")
+    assert out["lambda"] == 6.0
+    moved = out["moved"]
+    assert {"name", "before_rank", "after_rank", "before_p",
+            "after_p"} <= set(moved)
+    assert moved["after_p"] > moved["before_p"]
+    assert out["ranking"] and all(
+        {"idx", "name", "prob"} <= set(c) for c in out["ranking"])
+    # `pick` is the first chip, not a separate opinion about the board
+    assert out["pick"]["idx"] == out["ranking"][0]["idx"]
+    # and the named champion has to be findable in that list by index, because
+    # that is how the chip learns which one the message was about
+    assert out["mentions"][0]["idx"] in [c["idx"] for c in out["ranking"]]
+
+
+def test_a_weak_mention_still_reports_its_probability_from_outside_the_list():
+    """The row draws the named champion even when the boost did not lift it into
+    the top eight - that is the whole point of a weak stance. So `after_p` has
+    to be there for a champion the ranking does not contain.
+    """
+    probs = {i: 0.25 * (0.97 ** i) for i in range(173)}
+    board = tools.Board([None] * 10, [1, 2, 3], first_pick=0, patch="16.20")
+    out = chat.respond(corpus([]), board, probs, NAMES, "Champ100")
+    assert out["lambda"] == chat.MENTION_LAM
+    assert out["moved"]["after_rank"] > len(out["ranking"])
+    assert 0 < out["moved"]["before_p"] < out["moved"]["after_p"]

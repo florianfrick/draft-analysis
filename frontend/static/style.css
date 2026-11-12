@@ -334,6 +334,43 @@ footer { padding: 8px 18px; border-top: 1px solid var(--line);
 }
 .nm-assumed { color: var(--muted); font-size: 11px; }
 
+/* The chat's ranking of the same board, one row under the head's. Dashed and
+   blue rather than solid and green: it is a second opinion, not the model's
+   own answer, and the tag plus the quoted message say whose it is. */
+.nm-chat-row {
+  margin-top: 9px; padding: 8px 10px 9px; border-radius: 8px;
+  background: #1b2130; border: 1px dashed #3a4a66;
+}
+.nm-chat-row.hidden { display: none; }
+.nm-cc-head {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 12px;
+}
+.nm-cc-tag {
+  font-size: 10px; letter-spacing: .04em; text-transform: uppercase;
+  padding: 1px 5px; border-radius: 4px; background: #2f4260; color: #cfe0f5;
+}
+.nm-cc-lam { color: #9ec1ea; font-variant-numeric: tabular-nums; }
+.nm-cc-move { font-variant-numeric: tabular-nums; }
+.nm-cc-same { color: var(--muted); }
+.nm-cc-msg {
+  color: var(--muted); font-style: italic; max-width: 40ch;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.nm-cc-unit { color: var(--muted); font-size: 11px; }
+.nm-cc-close {
+  background: none; border: 0; color: var(--muted); cursor: pointer;
+  font: inherit; padding: 0 2px;
+}
+.nm-cc-close:hover { background: none; color: var(--text); }
+.nm-cc-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.nm-chip.nm-cc-chip { background: #202836; border-style: dashed; }
+.nm-chip.nm-cc-chip.named {
+  background: #24314a; border-style: solid; border-color: #4a6c9c;
+}
+.nm-cc-rank { color: #9ec1ea; font-size: 11px; font-variant-numeric: tabular-nums; }
+.nm-cc-gap { color: var(--muted); align-self: center; }
+
 /* a next-move policy is role-free: the role board does not apply */
 body.no-role-model .role-row { display: none; }
 

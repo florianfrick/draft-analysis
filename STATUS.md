@@ -746,7 +746,11 @@ refused at load rather than failing later.
   same 120 boards gives a leader of 8-15. The model does not call the tools —
   the server does. It answers from the head even when the reranker is loaded,
   because a reranker has no distribution to boost, and it does not answer for
-  the off-turn side (§4: the two sides are not differentiated).
+  the off-turn side (§4: the two sides are not differentiated). The adjusted
+  ranking is drawn a second time in the panel, under the turn header, with the
+  named champion always present (after a `…` when it is outside the top eight)
+  and `chatSig` — picks, bans, first pick, fearless, patch, *not* the lane — as
+  its freshness key. One turn, not a running total: two messages do not stack.
 
 Verified against a live server on the seven test games, not by reading the
 loader: all five checkpoints load through `/api/load` and answer their own

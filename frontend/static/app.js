@@ -478,7 +478,7 @@ function addPick(team, idx) {
 
 function renderAll() {
   renderSlots(); renderBans(); renderRoles();
-  renderTurn(); renderNextMove();
+  renderTurn(); renderNextMove(); renderChatRow();
   renderSeries(); renderFearless();
 }
 
@@ -1007,6 +1007,111 @@ function renderNextMoveError(msg) {
   const warn = document.getElementById('nm-warning');
   warn.textContent = msg;
   warn.classList.remove('hidden');
+}
+
+// ---- the chat's ranking, one row under the head's -----------------------
+// The chat adds the user's insistence as a prior in log space and renormalises,
+// so a turn produces a *second* ranking of the same board. Kept inside the chat
+// log it made the reader hold two lists in their head and diff them; here, one
+// row above the head's own chips, the difference is a glance.
+//
+// Two rules, both inherited from the rest of the panel:
+//   * a ranking belongs to the board it was computed for. `chatSig` is the set
+//     of inputs the chat turn actually read, and the row hides the moment one
+//     of them changes. Deliberately not `boardSig`, which carries the lane: the
+//     chat ranks the whole legal pool (a pin on the head's 47th choice is the
+//     point), so changing the lane does not make its numbers wrong.
+//   * a row that says nothing is worse than no row. With no message, or one
+//     naming a champion that is already off the board, there is no second
+//     ranking to show and the row hides itself.
+let CHAT_ROW = null;   // {sig, res, message}: the one turn on screen
+
+function chatSig() {
+  return JSON.stringify([picks, bans.blue, bans.red, currentFirstPick(),
+                         SERIES ? fearlessPool() : [], currentPatchId()]);
+}
+
+function short(s, n) {
+  s = String(s == null ? '' : s);
+  return s.length > n ? s.slice(0, n - 1).trim() + '\u2026' : s;
+}
+
+function renderChatRow() {
+  const box = document.getElementById('nm-chat-row');
+  if (!box) return;
+  if (CHAT_ROW && CHAT_ROW.sig !== chatSig()) CHAT_ROW = null;
+  const res = CHAT_ROW ? CHAT_ROW.res : null;
+  const m = res && res.moved;
+  if (!m || m.after_rank == null) {
+    box.classList.add('hidden');
+    box.innerHTML = '';
+    return;
+  }
+  const t = nextTurn(currentFirstPick());
+  const top = res.ranking || [];
+  const named = (res.mentions || [])[0] || null;
+  const nLegal = res.board ? res.board.n_legal : null;
+  const namedInTop = !!(named && top.some(c => c.idx === named.idx));
+
+  box.innerHTML = '';
+  const head = document.createElement('div');
+  head.className = 'nm-cc-head';
+  head.innerHTML =
+    '<span class="nm-cc-tag">chat</span>'
+    + '<span class="nm-cc-lam">\u03bb ' + (res.lambda > 0 ? '+' : '')
+    + Number(res.lambda).toFixed(1) + ' nats</span>'
+    + '<span class="nm-cc-move">' + esc(m.name) + ' ' + m.before_rank
+    + ' \u2192 ' + m.after_rank
+    + (nLegal != null ? ' of ' + nLegal : '') + '</span>'
+    + (m.before_rank === m.after_rank
+      ? '<span class="nm-cc-same">pick unchanged</span>' : '')
+    + '<span class="nm-cc-msg" title="' + esc(CHAT_ROW.message) + '">'
+    + '\u201c' + esc(short(CHAT_ROW.message, 46)) + '\u201d</span>'
+    + '<span class="spacer"></span>'
+    + '<span class="nm-cc-unit" title="head probability over the whole legal '
+    + 'pool; the chips above are the reranker k-way numbers when one is '
+    + 'loaded, so the two rows are not the same units">head %</span>'
+    + '<button class="nm-cc-close" title="hide this row">\u2715</button>';
+  box.appendChild(head);
+  head.querySelector('.nm-cc-close').addEventListener('click', () => {
+    CHAT_ROW = null;
+    renderChatRow();
+  });
+
+  const chips = document.createElement('div');
+  chips.className = 'nm-cc-chips';
+  const mk = (c, isNamed) => {
+    const ch = BY_IDX[c.idx];
+    if (!ch) return null;
+    const b = document.createElement('button');
+    b.className = 'nm-chip nm-cc-chip' + (isNamed ? ' named' : '');
+    b.innerHTML = imgTag(ch)
+      + '<span class="nm">' + esc(c.name) + '</span>'
+      + '<span class="p">' + (100 * c.prob).toFixed(1) + '%</span>'
+      + (isNamed ? '<span class="nm-cc-rank">#' + m.after_rank + '</span>' : '');
+    b.title = 'after the message: ' + c.name + ' \u2014 head '
+      + (100 * c.prob).toFixed(2) + '%'
+      + (isNamed ? ', rank ' + m.after_rank + ' of ' + (nLegal || '?')
+        + ' (was ' + m.before_rank + ')' : '');
+    if (t) b.addEventListener('click', () => applyMove(t.kind, t.side, c.idx));
+    return b;
+  };
+  top.forEach(c => {
+    const b = mk(c, !!(named && c.idx === named.idx));
+    if (b) chips.appendChild(b);
+  });
+  // The champion the message named is the reason the row exists, so it is shown
+  // even when the boost did not lift it into the head's top eight.
+  if (named && !namedInTop && m.after_p != null) {
+    const gap = document.createElement('span');
+    gap.className = 'nm-cc-gap';
+    gap.textContent = '\u2026';
+    chips.appendChild(gap);
+    const b = mk({ idx: named.idx, name: named.name, prob: m.after_p }, true);
+    if (b) chips.appendChild(b);
+  }
+  box.appendChild(chips);
+  box.classList.remove('hidden');
 }
 
 // ---- explanation panel -------------------------------------------------

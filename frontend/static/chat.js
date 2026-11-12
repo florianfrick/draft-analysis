@@ -110,6 +110,11 @@
     el('chat-send').disabled = true;
     add('user', text);
     const pending = add('model pending', 'thinking\u2026');
+    // Taken before the request, not after: the reply describes the board that
+    // was sent. If a pick lands while it is in flight the signature no longer
+    // matches and the panel's row stays hidden, instead of showing numbers
+    // computed for the previous move under the new one.
+    const sig = chatSig();
     try {
       const body = Object.assign(boardBody(), { message: text });
       const r = await fetch('/api/chat', {
@@ -119,7 +124,15 @@
       const res = await r.json();
       pending.remove();
       if (!r.ok || res.error) { add('error', res.error || ('HTTP ' + r.status)); }
-      else { turns++; render(res); }
+      else {
+        turns++;
+        render(res);
+        // The same ranking, published to the next-move panel: the chat log is
+        // where the reasoning is, the row under the header is where the numbers
+        // get compared with the head's own.
+        CHAT_ROW = { sig: sig, res: res, message: text };
+        renderChatRow();
+      }
     } catch (e) {
       pending.remove();
       add('error', String(e));
@@ -138,6 +151,10 @@
     el('chat-clear').addEventListener('click', () => {
       el('chat-log').innerHTML = '';
       turns = 0;
+      // The row in the panel is a record of a turn, and its provenance is the
+      // message it quotes. Forget the turns and the record has to go with them.
+      CHAT_ROW = null;
+      renderChatRow();
       greet();
     });
     el('chat-form').addEventListener('submit', ev => {
