@@ -31,7 +31,7 @@ they are here so nobody re-runs them.
 
 ## 1. Where it stands
 
-Nine checkpoints, each in its track's store: `solo_queue/model/checkpoints/`
+The kept checkpoints, each in its track's store: `solo_queue/model/checkpoints/`
 for `masking-soloqueue`, `masking-finetune` and `nextpick-policy`; everything
 else under `pro/model/checkpoints/`. The track says which data trained the
 model; the directory name states the inference it serves and the stage that
@@ -47,10 +47,34 @@ of the two UI slots may load it.
 | policy (pro-only) | `nextpick-proonly/best.pt` | next-move ranking |
 | pro-only, all data, 16.20 val | `masking-proonly-through-wlds-ig-tes/best.pt` | masked completion, role board |
 | pro-only, all data, 16.20 val | `nextpick-proonly-through-wlds-ig-tes/best.pt` | next-move ranking |
-| pro-only, all data, random val | `masking-proonly-randomvalsplit-through-wlds-ig-tes/best.pt` | masked completion, role board — **the shipped default** |
+| pro-only, all data, random val | `masking-proonly-randomvalsplit-through-wlds-ig-tes/best.pt` | masked completion, role board — the shipped default until 2026-11-14 |
 | pro-only, all data, random val | `nextpick-proonly-randomvalsplit-through-wlds-ig-tes/best.pt` | next-move ranking — the shipped default until 2026-11-05 |
 | pro-only, seeded 80/10/10 split | `nextpick-proto-ensemble/ensemble.json` | next-move ranking — the shipped default until 2026-11-07 (mean of 3 members' logits; +1.33 pp top-5 over the row above on the rows neither trained on — `pro/model/proto/README.md` §6) |
-| pro-only, ban-aware | `nextpick-bans-aware-through-wlds-ig-tes/best.pt` | next-move ranking — **the shipped default** (same corpus and split as the `-randomvalsplit-` row, plus `ban_side` / `ban_fearless` / `counter_rank`; +0.60 pp top-5 over its own control, p 4.3e-8, **one seed** — `pro/model/bans/README.md`) |
+| pro-only, ban-aware | `nextpick-bans-aware-through-wlds-ig-tes/best.pt` | next-move ranking — the shipped default 2026-11-07..11-14 (same corpus and split as the `-randomvalsplit-` row, plus `ban_side` / `ban_fearless` / `counter_rank`; +0.60 pp top-5 over its own control, p 4.3e-8, **one seed** — `pro/model/bans/README.md`) |
+| pro-only, 2026-11-13 corpus, 85/10/5 | `masking-proonly-nov13-through-lcp-df-sw/best.pt` | masked completion, role board — **the shipped default** |
+| pro-only, 2026-11-13 corpus, 85/10/5 | `nextpick-proonly-nov13-k5-through-lcp-df-sw/best.pt` | next-move ranking — **the shipped default** (5 prefixes/game/epoch) |
+| pro-only, same, k=10 | `nextpick-proonly-nov13-k10-through-lcp-df-sw/best.pt` | selectable; top-5 tied with k=5 (p 0.07), top-10 +1.0 pp, best epoch 14 |
+
+The `-nov13-` pair (2026-11-14) is **not comparable with any row above** and
+must not be put in the same table of numbers: it trains on an *unfrozen* corpus
+(46,939 drafts through 2026-11-13, `--corpus 2022-full`), the three pinned test
+series are ordinary rows (`--no-pin`), and the split is the fractional 85/10/5
+within-patch tail — 39,720 / 4,771 / 2,448, no fixed holdout. It is the only
+pair with a 2,448-game out-of-sample set instead of 7. Its own scores: masked
+top-5 0.5638 (rel 1.407x), next-move top-5 0.5083 (rel 3.36x). The k axis was
+measured on it: k=5 beats k=1 by +2.55 pp top-5 (paired, p 2.7e-51) and k=10 is
+tied with k=5 (p 0.07), so 5 is shipped.
+
+The four **flat baselines** (`nextpick-mlp-flat-v1`, `masking-mlp-flat-v1`,
+`nextpick-forest-flat-v1`, `masking-forest-flat-v1`) are also directories in
+`pro/model/checkpoints/`, but they are not checkpoints in the sense of the table:
+each ships a `flat.json` plus a non-transformer estimator, and `registry.py`
+scores them as baselines rather than as candidates for shipping. They exist to
+size the architecture — how much of the result is attention and set structure —
+and they train on the same canonical split as the `-nov13-` pair, so they are
+comparable rows. Sources in `pro/model/mlp/` and `pro/model/forest/`; the numbers
+are in `pro/model/test_split/REPORT_suite.md` and are deliberately not restated
+here.
 
 The `-through-` checkpoints were added on 2026-11-04: same architecture and seed,
 retrained on the whole corpus with no test split (§7). The suffix states which
@@ -452,6 +476,18 @@ trunk-dependent, not a rule.
 
 ## 7. The test split — current numbers
 
+> **Superseded for new comparisons (2026-11-15).** This section measures a
+> 7-game pinned test split: 140 next-move states and 70 masked slots, where a
+> 95 % Wilson interval is ~22 points wide, so it can detect a broken model and
+> rank nothing. It also is not the split the shipped `-nov13-` pair trained
+> under. The canonical split is now `pro/model/test_split/split.py`
+> (39,720 / 4,771 / 2,448 on the unfrozen 46,939-draft corpus, no pin) and the
+> harness is `pro/model/test_split/suite.py`, with two task suites that score
+> any checkpoint against the shipped pair. **Use that for a comparison; use
+> this section for the per-state tables it is good at, and for the numbers
+> recorded before the split moved.** The old harness is preserved at
+> `pro/model/archive/test_split_legacy/`.
+
 Everything above is pooled over thousands of games, which answers "how good on
 average" and never "what would it say here". This is the opposite, and it is the
 only split nothing trains on.
@@ -526,8 +562,8 @@ games — they catch a broken model and refuse to rank working ones. The per-sta
 tables carry the information, because every model is scored on the identical
 board.
 
-Full report: `pro/model/test_split/REPORT_test_split_evaluation.{md,html}`; evidence:
-`pro/model/test_split/reports/test_split.json`.
+Full report: `pro/model/archive/test_split_legacy/REPORT_test_split_evaluation.{md,html}`; evidence:
+`pro/model/archive/test_split_legacy/reports/test_split.json`.
 
 **The all-data refresh has no number here, by construction.** The two
 `-through-wlds-ig-tes` checkpoints (2026-11-04) are trained with `--no-test` on
@@ -655,6 +691,13 @@ Evidence: `pro/model/proonly/reports/compare_shared_random_{masked,policy}.json`
 ---
 
 ## 8. The frontend
+
+> **Read this as a record.** As of 2026-11-13 the frontend is four things - the
+> board, `/api/next-move`, `/api/suggest` and `/api/agent` - and `/api/explain`,
+> `/api/breakdown`, `/api/draft-score`, `/api/tool`, `/api/chat` and the reranker
+> slot below no longer exist (§9, "The frontend was replaced"). Their measured
+> results are kept because they are why the agent exists; `frontend/README.md`
+> describes what ships.
 
 Two model slots, loaded at once and chosen independently: `masking-*` drives the
 role board (`/api/suggest`), `nextpick-*` drives the next-move panel
@@ -799,6 +842,108 @@ policy's own inferred roles agree with the board's on the same board. The
 `/breakdown` page scores both checkpoints on one game and is the place to check
 the third question without writing anything new. No change was made on the
 strength of this.
+
+### A hosted API instead of the reranker — measured, and it is a third of the gain
+
+The question was whether the 4 B Qwen could be dropped from the shipped image
+and replaced by a pay-per-token API call, on the theory that the +13 pp the
+reranker adds is mostly the shortlist rather than the model. `pro/model/llm/
+eval_api_rerank.py` scores that directly: it sends the LoRA's own v4 text
+(board + `Candidates:` line) to a hosted model, keeps the head's top-5, and
+scores the answer against the head **on the same rows**, so nothing depends on
+reproducing 95,260 states.
+
+200 games of the shared val, 4,000 states, `deepseek-chat`, k=5:
+
+| | top-1 (exact champion id) |
+|---|---|
+| head argmax | 18.65 % |
+| ceiling (head recall@5) | 51.08 % |
+| API + shortlist | **22.68 %** [21.40, 24.00] |
+| API + shortlist, tool-shaped state | 22.25 % |
+| API + shortlist, names only | 18.27 % |
+| shipped reranker | 33.15 % `exact` |
+
++4.03 pp over the head's argmax, McNemar p=2.3e-14 (305/144 discordant), 44 %
+of the ceiling converted against the reranker's 67 %. So: **the API recovers
+about a third of the reranker's gain, and the adapter is the rest.**
+
+Two details decide how to read it. **All of the gain is the head's own
+numbers**: with the percentages stripped from the `Candidates:` line the API
+scores 18.27 %, i.e. the head to within noise (p=0.63) — it is not exercising
+independent draft judgement, it is re-reading a distribution and occasionally
+overriding it. And the gain is entirely on **picks** (+8.90 pp) with bans flat
+(-0.85), the reverse of where the trained reranker improved (+4.39 on bans,
++1.92 on picks), so it is not a cheaper version of the same thing.
+
+**The tools do not substitute for the soft block.** Since `pad`/`mean` say the
+block is only a "a real draft is in progress" key, the agent's own
+`DraftState.render()` — which names the move, glosses the fearless pool and
+gives the legal count — should have supplied the same thing and freed the model
+to reason. It scores 22.25 %, 0.43 pp *below* the LoRA's board text and **more**
+deferential to the head (196 rows won against the head, 52 lost, versus 305 and
+144), and it does not shorten `deepseek-flash`'s reasoning (median 1,669 →
+3,142 chars). Pre-digesting the state does not create judgement.
+
+Operationally: `deepseek-flash` is unusable here — it is a reasoning model,
+spends a median 1,739 characters thinking (tail 30,202), and fails specifically
+in ban phase 2, where `Turn: Red 4 (Ban 7 of 10)` sends it reconstructing the
+pro draft schedule; 17-33 % of rows come back with empty `content` and
+`finish_reason: length`. `deepseek-chat` answers in 0.15 s/board with no
+truncation, which is what the numbers above use. The full shared val would be
+~4 h of API calls at 12 workers, against one 0.167 s GPU step.
+
+Not tested, and the only thing left that could change the conclusion: k=20,
+where the 4 B model converted 29 % of an 86 % ceiling and a larger model has
+room the 4 B did not.
+
+### The tool loop instead of the reranker — built, and it lands 3.6 pp short
+
+The next question was the agent one: with state management, a next-move tool
+whose `k` the model picks, and a lane table — no SQL, no `rank_candidates` —
+does the model's reasoning do the middle-man's job? `pro/model/llm/
+eval_api_agent.py` runs the real loop on the same 4,000 states;
+`pro/model/agent/prompt_explained.py` gives it the head's provenance and its
+measured accuracy (18.7 / 51.1 / 85.2 %); `predict_lanes` is new and exposes the
+lane table with `p_lane` as the confidence.
+
+| | top-1 |
+|---|---|
+| head argmax, tool path (inferred lanes) | 18.35 % |
+| **agent + state + next-move + lanes** | **19.08 %** [17.89, 20.32] |
+| single-turn, k=5, lane given | 22.68 % |
+| shipped reranker | 33.85 % |
+
++0.73 pp over the head it can see (McNemar p=0.0038, 62 won / 33 lost), and
+3.6 pp behind a single-turn call that was handed the target's lane. It defers to
+the head's #1 on 90.0 % of rows and overrules on 9.9 %; on those it overrules the
+head was right only 8.29 % of the time, so the *decision* is well-targeted and
+the replacement is worth +7.3 pp there. That trade is the whole gain.
+
+**The lane set is not the lane.** On the 2,000 pick rows, the head's #1 cannot
+fill any open lane on 6.6 % of them, and "first lane-legal in the top 20" is
+worth +1.0 pp (21.45 → 22.45). The agent's picks score 22.40 % — exactly the
+mechanical rule. "Best champion in the *right* lane" is worth +12.3 pp (33.70),
+and the right lane is in the label, not the board. The single-turn arm was told
+it; the agent has to guess among two or three open lanes. That is the 3.6 pp, not
+reasoning quality. It also reconciles `--no-probs`: numbers alone buy nothing
+(18.27), numbers + a lane buy 4 pp, numbers + only the lane set buy 0.7 pp.
+
+**It asks for the widest list every time**: k=20 on 3,979 of 4,000 rows (10 on
+15, 12 on 6), converting 22 % of an 85.2 % ceiling against the single-turn arm's
+44 % of a 51.1 % ceiling. That is the reranker's k=20 dead end reproduced with a
+different model — the bottleneck is comparing twenty names, not seeing them.
+Partly prompt-induced: the guidance says k=20 is the widest read that pays.
+
+Loop cost: 2.9 calls/row, 34 min for 4,000 rows at 8 workers, `predict_lanes` on
+3,190 rows (bans have no lane), exploration on ~4 %, 3,998/4,000 answers parsed
+from a required `PICK:` line. Two silent defects fixed: `rerank.load_head` never
+attached `patch_vocab` (every tool call answered as UNK while the batch path used
+the real patch, worth 0.3 pp), and `model_tools` stringified
+`PolicyPredictor.model`, dumping the module repr into every tool result.
+
+Untested and worth one run each: the same loop *given* the lane (expected near
+31 %); a forced k=5/8; `deepseek-flash` at `--max-tokens 8192`.
 
 ---
 
@@ -1040,9 +1185,11 @@ Two measured facts made this cheap, and one was a bug:
   head's #1 at 15.4 % on a board where it is fearless, and 0 % of the answer.
   `fearless` absent from a publish means "unchanged", `[]` means "no pool".
 - **`GET/POST /api/state` and `POST /api/agent`** expose the service to the
-  panel; the chat has a `head` / `agent` toggle. `/api/agent` needs `langgraph`
-  (503 without it), a policy (400) and a key (200, `stop: "no client"`), and it
-  reads the board from the store rather than the request.
+  panel; the panel's chat is the agent, with no toggle (§"The frontend was
+  replaced", below). `/api/agent` needs `langgraph` (503 without it) and a key
+  (200, `stop: "no client"`); no checkpoint, since the model tools are simply
+  not offered without one. It reads the board from the store rather than the
+  request.
 
 **The ranking is not this component's job.** The heads are well trained and are
 not being improved on this branch; the goal is the user/chat interface. A state
@@ -1099,6 +1246,482 @@ that off-peak. `loop.py --ping` validates a provider in one round trip, includin
 whether it can call tools at all - the three failure modes (bad URL, retired
 model, no tool support) are otherwise indistinguishable from inside a batch.
 
+### The frontend was replaced, and the tool surface with it (2026-11-12/13)
+
+The agent is now the *only* assistant surface. Removed from `frontend/`:
+`chat.py` (rule-based chat), `rerank.py` and the `llm-*` slot, `draftscore.py`
+and the draft-score panel, `tools.py` + `POST /api/tool`, `llm.py` and the
+explain route, `roles.py`, `breakdown.html`/`breakdown.js`, and their JS and CSS.
+What is left is four things: the board, `/api/next-move`, `/api/suggest` (the
+role board) and `/api/agent`. **No numbers changed** - the deletions are the
+surfaces, and the measurements that justified them are §8 above.
+
+Three contract changes came with it:
+
+- **`predict_lanes` → `predict_roles`, one-to-one per side.** Five picks, five
+  roles: the assignment maximises summed log-likelihood over ≤120 injective
+  assignments per side, from `data/champ_roles.json`. It **travels on the
+  state** (`DraftState.roles`, with `p_lane` per slot), so `get_state` returns it
+  without a second call and a sandbox carries the roles its moves imply.
+- **`rank_candidates` is gone.** Comparing a named shortlist is the harnessed
+  model's own job, so the tool that re-asked the head a question its top-k
+  already answers was removed rather than kept for symmetry. The ablation in
+  `eval_api_agent.py` is `{"sql", "soloq_matchup"}` (the free-form data tools,
+  not just the pro-corpus query).
+- **The state is engine-bound, and the server never hands a board to a model
+  function.** `_publish_state` writes the board into the store; `Store.attach`
+  rebinds the engine under every live state when a checkpoint loads. `/api/next-move`
+  now **400s on a board the store refused** rather than answering from the last
+  good one - a distribution for an illegal board is indistinguishable from a good
+  one. `/api/suggest` may stay lenient and let the panel show `state_error`.
+
+Tests: `frontend/` 47, `pro/model/agent/` 137. The panel's JS is checked against
+the route table, so a retired route cannot be called from a stale panel.
+
+### The reranking arm became a button (2026-11-13)
+
+`POST /api/agent-suggest` + a **suggest next move** button in the agent panel.
+It is the *agent* answering a next-move question, not `/api/next-move` with prose
+attached: `suggest.py` shares the question, the explained prompt, the
+`{"sql", "soloq_matchup"}` ablation and the 5-step / 8-call budget with
+`eval_api_agent.py`, so the button
+serves the arm §8 measured (19.08 % top-1, +0.73 pp over the head on 4,000
+states) instead of a second experiment with the same name. **No new number was
+measured** - no live provider was called for this change.
+
+Three contract changes, all in the state rather than in a prompt:
+
+- **The series travels on the draft state.** `picks`, `bans`, `first_pick`,
+  patch and the fearless pool were already published; `series` (game n of m,
+  per-game pick counts) is now rendered into `DraftState.render()` and reported
+  by `get_state`, inherited by clones. Absent means *unchanged*, exactly like
+  `fearless`: a role-board publish without the field must not turn game 3 into
+  game 1. Every board route sends it, from one `seriesBody()` helper.
+- **The answer is a move.** The final `PICK:` / `BAN:` line is parsed into a
+  champion, whose legality (not on the board, not in the pool, right move kind)
+  decides whether "play it" is offered. The panel never edits the board itself.
+- **Fidelity is shown, not accuracy.** The head's own #1 on `real` is recomputed
+  at serving time and shipped next to the parsed move (`matches`), because this
+  component's job is the interface; accuracy belongs to the head (§8).
+
+Degradation is explicit: no key -> `stop: "no client"` with the state and head
+attached, no head -> `head: null`, complete draft -> no LLM call, refused board
+-> 400. Tests: `frontend/` 53 (6 new), `pro/model/agent/` 149 (12 new), plus
+`pro/model/llm/test_eval_api_agent.py`. One **pre-existing** failure remained in
+`frontend/test_server.py::test_policy_default_is_the_ban_aware_arm`: the working
+tree's `POLICY_DEFAULT` was already `nextpick-proonly-randomvalsplit-*` while
+the server docstring, `frontend/README.md` and that test named
+`nextpick-bans-aware-through-wlds-ig-tes`. The next change resolved it (below):
+the randomvalsplit pair is the decision, and the docs and test now say so.
+
+### Role names, model defaults and the page layout (2026-11-13)
+
+**Role 4 is `SUPPORT`, not `UTILITY`.** The pro corpus stores role *ids*, and
+`data/champ_roles.json` / `pipeline.ROLE_NAMES` only named them, so the rename
+is display-only: no count and no assignment moved. `lanes.lane_name(4)`,
+`ROLE_ROWS`, `app.js`'s `ROLES`, the CSS comment and `test_lanes.py` now agree.
+The soloQ analysis store is deliberately **not** renamed - its `pos` column
+holds Riot's raw strings in a built DuckDB, and changing the SQL literals would
+silently drop every support row. Older entries in this file keep `UTILITY`
+because they are records of measurements made under that spelling.
+
+**The `undefined` badge was a type mismatch, not a missing role.** `/api/suggest`
+keys roles by display name (`"SUPPORT"`) while `app.js` indexed its `ROLES`
+array with that value as if it were a number. `ROLES["SUPPORT"]` printed
+`undefined` under the champion, and `roleSlot["SUPPORT"]` was never found by
+the loop that checked `roleSlot[4]`, so the correct role cell stayed empty.
+`roleIndex()` now normalises either shape; `/api/champions` publishes the
+server's own list and `init()` adopts it, so the two vocabularies cannot drift
+again.
+
+**Both model defaults are the `-randomvalsplit-` pair**
+(`masking-` / `nextpick-proonly-randomvalsplit-through-wlds-ig-tes`). The
+ban-aware arm and the 3-member ensemble remain selectable with
+`--policy-ckpt`; their numbers are still not comparable. Browser model picking
+is gone - no dropdowns, Load buttons or file upload - while `--ckpt`,
+`--policy-ckpt` and `--no-policy` stay, and the `/api/load` + `/api/upload`
+routes survive as a tested local scripting surface with no UI. The CLI help,
+server docstring, `frontend/README.md`, `serve.sh` and the default test now
+name the same two directories. **No new number was measured.**
+
+**Layout.** `first pick` and `Reset draft` moved into `<main>` above the Blue /
+Red panels; `ask the agent` sits directly below the head's suggestion panel;
+the "Real draft" walkthrough starts collapsed behind a toggle row above where
+it appears, and its comparison panel cannot reopen on its own. `.hidden` needed an explicit
+`#wt-bar.hidden` rule because the ID selector otherwise wins.
+
+### A soloQ matchup tool for the agent (2026-11-13)
+
+A new tool, `soloq_matchup`, lets the agent answer two-champion pairwise
+questions - *"does Ahri beat Zed in mid?"* - against the soloQ analytical store
+(`solo_queue/analysis`, the DuckDB `cube2`), the same population the
+`solo_queue/data analysis/exploration` folder works from. It is registered in
+`session.py` alongside `sql` (the pro-corpus SQLite query) and dispatched through
+the same `available()` / `_dispatch()` / ablation machinery, so it shows up in the
+free-form "ask the agent" panel, the MCP server, and the tool log exactly like
+every other tool.
+
+Why a parameterised tool and not a second free-text SQL: the agent's escape
+hatch is the *pro* corpus schema, not DuckDB, so reusing `sql` would force the
+model to write DuckDB SQL against an unadvertised cube. `soloq_matchup` takes
+`champion`, `partner`, `kind` (`vs` / `with`), optional `patch` and `role`, and
+returns a precomputed 2-way aggregate plus the honesty the pairwise numbers need:
+
+- **baseline** - the champion's own win rate with no partner filter over the
+  same patch scope - so the *marginal* effect of the partner shows instead of
+  being buried in champion strength;
+- **`delta_win = observed.win − baseline.win`**, surfaced explicitly;
+- **`reliable` flag on `n >= min_n`** (default 30) - the `pair_reliability`
+  experiment showed pairwise deviations are mostly champion strength + noise, so
+  a small cell is reported but flagged;
+- the exact query is returned, like `sql`, so a wrong answer is debuggable;
+- a `note` that the rates are **soloQ**, a different population from the pro
+  drafts the head learned on - a complementary signal, never a substitute for
+  `predict_next_move`.
+
+Names and Riot ids both resolve (fuzzy, like `ChampIndex`); the connection is
+opened lazily and cached (`_CON` / `_LOCK`), so importing or advertising the
+tool opens no file; a missing or locked store is a returned `{"error": ...}`,
+never a raised exception. It is offered only when the soloQ store is on disk
+(`soloq_tool.available()`), and **ablated** from the one-click reranking button
+(`suggest.ABLATE` now `{"sql", "soloq_matchup"}`) - that turn is a rerank of the
+head, not a data dive - while the free-form panel and the MCP server keep both
+data tools. `patch` is a legitimate scope filter here, so the
+`test_no_tool_takes_a_board` guard now excludes it from the board-field set.
+
+Tests: `frontend/` 61, `pro/model/agent/` 164 (incl. `test_soloq_tool.py`), plus
+`pro/model/llm/test_eval_api_agent.py` and `test_eval_api_rerank.py`. **No new
+model number was measured** - the tool reads a prebuilt cube and ablates from the
+measured reranking arm.
+
+### The agent suggestions column — a top-k rerank, always on (2026-11-13)
+
+The agent chat now opens by **default** (the `#agent` panel is no longer `hidden`),
+with an **agent features** header checkbox that hides both the chat and the new
+rerank column, leaving only the base model's own suggestions and board updates.
+Directly below the head's `#nextmove` list sits a second column,
+**Agent suggestions**, filled by a new `POST /api/agent-rank` endpoint.
+
+The endpoint reuses the *same* ablated, explained-prompt configuration as the
+single-move button (`suggest.py`: `rank_question` / `rank_config` /
+`parse_ranking`, `RANK_ABLATE = {"sql","soloq_matchup"}`, 5 steps / 8 calls) but
+asks the agent to **order** the head's top-k rather than commit to one. The
+server computes `head_top` (the head's own k=20 legal shortlist via
+`_head_top_legal`), runs the agent, and `parse_ranking` reads back a list of
+`NAME (NN%)` lines. The list is honest by construction: only champions the head
+listed are accepted, any untouched slot is filled from `head_top`, each suggestion
+carries `source` (`model` = the agent's own `(NN%)`, `head` = the head's
+`p_head`), and `conf <= 0` is dropped. It always shows `k=8` names and never
+invents one the head did not produce.
+
+The column reruns (debounced) on every board change (`changed()` in `app.js` calls
+`AgentPanel.scheduleAutoRank`) and after any chat turn - the chat is carried into
+the rerank as `seed` context (a new optional `seed` arg on `loop.run`), so a
+conversation that changes the agent's mind changes this list too. The chat log
+records each board change ("Board changed: picked Ahri") and the agent's top
+picks. **Clear chat** drops the conversation context and resets the column to the
+agent's fresh top-k on the current board.
+
+Frontend: `index.html` (panel shown by default, `#agentsuggest` below
+`#nextmove`, toggle), `app.js` (`changed()` hook), `agent.js` (`scheduleAutoRank`,
+`renderRank`, board-change logging, chat-driven rerank, clear reset). No key still
+degrades cleanly to the head's own list with `source: "head"`.
+
+Tests added: `test_suggest.py` (6 `parse_ranking` cases - order, Vi/Viktor
+collision, head fallback, truncation, illegal, config) and `test_server.py` (5
+`/api/agent-rank` HTTP cases - no-key outcome, live board wiring, conversation
+seed, refused board, complete draft).
+
+### The rerank arm measured against the head — a tie, at 500 games (2026-11-14)
+
+`pro/model/agent/eval_rank_api.py` scores exactly what the column ships: the
+`rank_question`/`rank_config`/`parse_ranking` arm with both data tools ablated,
+on the `2022-full` split (`--no-pin`), one uniform prefix per game
+(`prefix_mode="all"`, seeded), `deepseek-flash`, 8 workers, head = the shipped
+`nextpick-proonly-nov13-k5` checkpoint. The only deviation from the browser
+column is the list length: the eval asks for 10 names (the column asks for 8) so
+that top-10 is measurable. The head-only baseline is the same `LockedHead` on
+the same rows, so the comparison is paired.
+
+| n = 500 | agent | head | delta | agent-only / head-only | p |
+|---|---|---|---|---|---|
+| top-1 | 19.80 % | 20.60 % | −0.80 pp | 3 / 7 | 0.344 |
+| top-5 | 50.00 % | 49.60 % | +0.40 pp | 12 / 10 | 0.832 |
+| top-10 | 68.40 % | 68.40 % | 0.00 pp | 6 / 6 | 1 |
+
+Exact McNemar on the paired cells. By phase (top-5): ban1 32.7 vs 33.3 (2/3),
+ban2 43.2 vs 36.8 (8/2, p 0.109), pick1 62.8 vs 65.5 (0/4, p 0.125), pick2 65.3
+vs 64.4 (2/1). The one suggestive cell is ban2 and it is n = 95.
+
+So the column re-orders the head's own shortlist and changes the answer in
+~2 % of cases in either direction. It is honest and it is free of invention, but
+it is not a lift — price it as a UI feature, not as accuracy. Report:
+`pro/model/agent/reports/rank_api_nov13_500.json`.
+
+**`deepseek-chat` on 100 of the same rows** (`--model deepseek-chat`, same seed,
+so the first 100 games of the run above): top-1 16.00 vs 16.00 (0/0 discordant —
+it echoed the head's #1 on **99 of 100** rows), top-5 42.0 vs 43.0 (1/2, p 1),
+top-10 67.0 vs 63.0 (5/1, p 0.219). Paired against `deepseek-flash` on those
+same 100 rows: top-1 +1/−0, top-5 +1/−5 (p 0.219), top-10 +3/−1 (p 0.625). It is
+also *cheaper and faster*: 1.08M tokens over 270 calls, 3.9 s per example, no
+step-budget hits — against flash's 19.6k tokens, 3.6 calls and 15.2 s. The
+reasoning model spends its budget thinking and still does not move the answer.
+
+So the arm is flat across two model families and two capability levels, which
+locates the ceiling in the **prompt**, not the model: `rank_question` ends with
+"if you trust the head, echo its order", and the stronger the instruction
+follower, the more literally that is obeyed (chat 99/100 vs flash 92/100). A
+binary keep-or-switch question with a calibrated threshold is the untested fix;
+see the theory note in `.workbuddy-ai/memory/2026-11-14.md`.
+
+Measured cost: 9.80M tokens (8.78M prompt / 1.01M completion) over 1,799 calls,
+15.2 s per example, 3.6 calls each (histogram 2:124 3:211 4:20 5:56 6:65 7:24),
+24/500 hit the 5-step budget, 499/500 answered in the agent's own words (1 fell
+back to the head). 84 % of prompt tokens are cache hits, so at deepseek-flash's
+¥0.02 / 1.00 / 4.00 per M (hit / miss / out) 500 examples is ≈ ¥5.6; the full
+2,448-game test set is ≈ 48M tokens ≈ ¥28 (≈ ¥55 at peak rates) and ~78 min at
+8 workers. `mcnemar` is the exact binomial, not the continuity-corrected
+chi-square: the approximation returns p ≈ 0.48 for a 1-1 tie.
+
+### Three ways to replace the adapter with a prompt — all three lose (2026-11-14)
+
+The adapter is worth +14.5 pp over the head (34.61 vs 18.32 on its own slice)
+and a prompted chat model is worth +4.0 (22.68 on 4,000 shared-val rows). Three
+candidate explanations were tested; none closes the gap. **The ladder is the
+result**: head 18.05 → a linear rule on the head's own numbers +0.5 → a chat
+model that answers the original question +4.0 → the finetuned trunk +14.5.
+
+**(a) A calibration gate, no LLM** (`pro/model/llm/gate.py`). Fit on 1,000
+shared-val games (20,000 states), scored on the 200-game sample (4,000 states):
+
+| scorer | params | top-1 | vs head | paired | p |
+|---|---|---|---|---|---|
+| head argmax | - | 18.05 % | - | - | - |
+| switch-to-#2 iff p1−p2 < τ | 1 | 18.10 % | +0.05 | 40 / 38 | 0.910 |
+| log p + rank offsets | 5 | 18.05 % | +0.00 | 0 / 0 | 1 |
+| + lane legality | 7 | **18.55 %** | +0.50 | 26 / 6 | 0.0005 |
+| + ban interactions | 9 | 18.55 % | +0.50 | 26 / 6 | 0.0005 |
+
+The fitted weights say it plainly: `logp +0.86`, rank offsets −0.06 to −0.01,
+`role_open +1.54`, `role_head1 0.00`. **The head's own numbers carry no
+switching signal at all** — the five-parameter re-ranking changes zero of 4,000
+answers — and the only thing that pays is whether a candidate fills a lane the
+side has not filled (+0.6 on pick1, +1.4 on pick2, exactly 0 on both ban
+phases). That is a real +0.5 pp and it is a rule, not a model.
+
+Caveat on the baseline: the head reads 18.05 % here and 18.65 % in the API run
+because the `2022` corpus cache has grown 39 drafts since (46,918 vs 46,879), so
+the seeded 200-game sample is not literally the same games. The gap the gate
+fails to close is unaffected.
+
+**(b) A keep-or-switch question** (`pro/model/agent/eval_keep_switch.py`), same
+model, one call per row, the board plus the head's top-5 and its measured
+accuracy: "KEEP X or SWITCH <champion>". 200 test games, τ tuned on half and
+reported on the other half (n = 100):
+
+| arm | top-1 | vs head | paired | p |
+|---|---|---|---|---|
+| head argmax | 23.00 % | - | - | - |
+| as answered | 16.00 % | −7.00 | 2 / 9 | 0.065 |
+| with the gate (τ 0.135) | 18.00 % | −5.00 | 1 / 6 | 0.125 |
+
+It switches on 50 of 100 rows, and of the 36 switches the gate lets through
+**1 is right** (precision 2.8 %). Asked to adjudicate, the model overrides on
+the rows where the head is least sure and is almost never right; asked to rank
+(the shipped arm), it echoes. Neither behaviour is calibrated, and the two
+failure modes are opposite.
+
+**(c) The same question with twenty candidates instead of five** (`--k 20`):
+raw 14.00 % (5 / 14, p 0.064), gated 21.00 % with τ 0.02 and 13 switches kept
+(precision 7.7 %). Widening the list makes it override more (63 of 100) and
+score worse; the gate's only job becomes suppression.
+
+So: not calibration (0.5 pp), not the question format (−5 pp), not list width
+(−2 pp). The adapter's advantage is a trunk fitted on 95k labelled states, and
+the +4 pp a chat model does have comes from **answering the original question**
+("name the best move", the v4 text) rather than from adjudicating the head —
+which is why the shipped rank column, which asks it to reorder, measures a tie.
+If the agent column stays, it should ask the single-move question; if accuracy
+is the goal, it should not be sold as one.
+
+Reports: `pro/model/llm/gate_report.json`,
+`pro/model/agent/reports/keep_switch_chat_200{,_k20}.json`. Tests:
+`pro/model/llm/test_gate.py`, `pro/model/agent/test_eval_keep_switch.py` (12).
+
+### Can the local 4B do the agent's job? No — and the answer position is why (2026-11-14)
+
+The hosted arms cap at +4 pp and the adapter is +16.0, which invites the obvious
+product question: run the finetuned model locally, drop the API, and serve the
+agent's panels from it. `pro/model/llm/eval_agent_local.py` answers it. Base and
+adapter are the *same* trunk (21.2 M LoRA weights of difference), the same
+shared-val rows, the same soft block spliced exactly as training does it,
+greedy, 4-bit on the 4060.
+
+**What shipping the model would buy, on one slice.** 4,000 held-out states (200
+games x 20 moves), v4 prompt, k=5, the same head for every arm. `exact` is the
+champion-level "did the pipeline name the pro's move", which is the end-to-end
+number: out-of-shortlist states count as misses.
+
+| arm | top-1 (group) | exact | conditional on being in the 5 | vs head |
+|---|---|---|---|---|
+| head only (ships today) | 18.32 % | 18.32 % | 35.8 % | - |
+| base trunk + mask | 19.57 % | 18.70 % | 36.5 % | +0.4 |
+| + full2 adapter | 31.90 % | 29.75 % | 58.1 % | +11.4 |
+| **+ rerank5 fitting (the shipped reranker)** | **34.88 %** | **34.27 %** | **67.0 %** | **+16.0** |
+
+Ceiling: the head's top-5 contains the pro's move **51.18 %** of the time, and
+nothing downstream can be right on the other 48.82 %. So the end-to-end number
+decomposes as 51.18 % x conversion, and conversion is the whole story: **the base
+trunk converts 36.5 % of its shortlist - 0.7 pp above the head and 16 pp above
+the 20 % a random pick among five gets, i.e. it does not choose at all - while
+the shipped reranker converts 67.0 %.** Three readings of "35 %" are all correct
+and only the third is interesting: the pipeline is right 35 % of the time, it is
+offered an answer 51 % of the time, and it picks the offered answer 2 times in 3.
+Quoting the first without the second is what made this look like a draft
+predictor rather than a chooser with a recall ceiling.
+
+**Correction (2026-11-15): the table's "head" row is a different checkpoint on a
+different sample, and the 34.27 % is role-conditional.** Two independent
+problems, both measured:
+
+* **The baseline is not the shipped head.** The 18.32 % is `C.BASELINE_VAL`,
+  which is `nextpick-proonly-**randomvalsplit**-…/test_report.json` over
+  **95,160** states. The head that actually proposes the reranker's candidates
+  is `nextpick-bans-aware-through-wlds-ig-tes` (`rerank.HEAD_CKPT`), and the
+  shipped frontend head is `nextpick-proonly-nov13-k5-…`. Three checkpoints, and
+  the table names one of them as "the head". Measured on the same 4,000 rows
+  (`pro/model/llm/eval_served_next_move.py`, through `predict_next_move`):
+  bans-aware **18.25 %** raw / 18.45 % served - so 18.32 was right for *that*
+  checkpoint, on this split, and it is the correct row for the ladder. It is not
+  the shipped head, whose served top-1 on these rows is **24.90 %** (raw 25.40)
+  - and that number is **not held out**, because the `-nov13-` head trained on a
+  different corpus and a different split (fractional within-patch tail), so some
+  of these rows may be its training data. No clean shared-split comparison of
+  the shipped head against the reranker exists yet.
+* **The prompt names the true lane.** v4's task line is "Choose the best Blue
+  Side pick **for Top lane**", and `target_role` in the training rows is the
+  lane of the pro's own pick. Delete the clause and the same weights score
+  **20.85 %** on the same 4,000 rows (`eval_rerank5_nolane4k.json`): 13.4 of the
+  16 points are the lane, not drafting skill. The next-move panel asks the
+  no-lane question - it cannot name a lane, that is what "the next move" means -
+  so the panel's arm is the 20.85 % one, on candidates that were *not*
+  legality-filtered. Against the 18.25 % of the proposer it is +2.6 pp; against
+  the served shipped head it is below it. At ~2 s/board.
+
+* **The role-conditioned question is not the reranker's to win.** The comparator
+  for a lane-named query is not the head, it is §7's masker, which already
+  answers that question at 2.5 M parameters on CPU. `masking-proonly` scores
+  **35.7 %** top-1 on masked completion (70 slots, `--mask-mode slot`) against
+  the reranker's **34.27 %** on 4,000 rows - and the masker is the one being
+  handed more: `masked_ranks_slot` hides a single slot and keeps the other nine
+  *including the picks after it*, plus the full true `role_ids` vector, while
+  the reranker sees the prefix only. A tie under more information is a loss for
+  the 4.2 B model. Two caveats, both against over-reading the 35.7 %: it is 25
+  of 70 queries from 7 games (CI [25.5 %, 47.4 %]), and it is the best-case
+  protocol - the same family reports **20.2 %** on 4,193 randomly-masked test
+  slots and **21.3 %** on 8,069 val slots, the 14 pp gap being protocol (one
+  hole with full context vs ~1.5). So the masker's number is a band, 20-36 %,
+  and the reranker's 34.27 % lands at the top of a band a CPU model of 2.5 M
+  params also reaches. Neither number ranks the two models; what they jointly
+  establish is that the reranker's headline is **not a capability the repo
+  lacked**.
+
+What that leaves: the +16.0 pp headline is the gap between two different
+checkpoints on two different questions, and it should not be quoted. What is
+real is (a) the mask/adapter interaction below, (b) the +3.0 from rerank fitting
+with the mask held fixed, and (c) the ordering gain on a **lane-conditioned**
+question - which is the role board's question rather than the panel's, and on
+which the masker is the incumbent rather than the head.
+`pro/model/llm/eval_role_cells.py` measures that surface (800 eligible
+pick-phase states, head vs reranker paired, both through `predict_in_lane`);
+**it has not completed**, so the role-board gain is currently unmeasured and the
+frontend serves the head by default with `--rerank` as an opt-in.
+
+**First, where the 30 % comes from — the emphasis in §"Three ways" was wrong, and
+so was the first version of this section.** The +13 pp is not the format. The
+missing cell was *the base trunk with the same mask*, which nobody had run. Same
+4,000 llmval rows, same prompt (v4), same k=5, same head, so the only variable
+is the adapter:
+
+| | no shortlist, free generation | masked to the head's 5 |
+|---|---|---|
+| base trunk + warmup projector | not run (head: 18.32) | **19.58 %** (exact 18.70) |
+| + full2 adapter (46,915 drafts) | 19.13 % | **31.90 %** (exact 29.75) |
+| `deepseek-chat`, shortlist in prose | 22.68 % (its own head: 18.65) | n/a - no logits access |
+
+Read the columns: **the mask alone is worth +1.3 pp** (19.58 vs the head's
+18.32), and **the adapter alone is worth +0.0** (19.13, i.e. the head's own
+19.14). Together they are +13.6. This is an interaction, not a sum, and it kills
+the reading that the format carries the gain - the format carries almost none of
+it. `evaluate_llm --rerank 5` with and without `--adapter`, reports in
+`pro/model/llm/eval_{base,full2}_mask4k.json`.
+
+The mechanism is visible in the action split, and it is the cleanest single
+number in this file: **with the mask, the base trunk scores 8.6 % on bans** -
+below the 20 % a random pick among five would get. It is not choosing at all; it
+is copying the head's order, whose ban #1 is right 8.6 % of the time. The
+adapter scores 18.5 % on the same rows and 45.3 % on picks (base 30.5 %). The
+adapter is the only arm in the project that *chooses* rather than echoes, and
+choosing is worth 12 pp.
+
+The one number that is purely the weights is the last step of the ladder:
+31.90 -> 34.88 (+3.0) from 2 epochs of rerank fitting, with the mask held fixed.
+(Earlier revisions of this section compared 31.90 against a 35.31 measured on a
+*different* 478-game slice; the ceiling was 51.85 % there against 51.18 % here,
+so the two are close but were not the same experiment. All four rows above are
+one slice: `eval_{base,full2,rerank5}_mask4k.json`.)
+
+**The adapter has not forgotten how to talk.** The first read of this experiment
+said it had — every answer was "A pro team uses a lane swap to get a xayah
+lane." — but that was the prompt: the v2/v4 training text has no assistant turn,
+so a completion-format prompt makes the model continue a list instead of
+answering a question. With `<|im_start|>assistant` in the prompt, 10 of 12
+answers are coherent, board-reading prose ("A lane swap is when two champions
+from different lanes trade positions..."), 7 of 12 open a thinking block, and 0
+are empty. What the adapter loses is **task shape, not knowledge**: on the two
+board-anchored questions it answered with a bare champion (`Zeri`) or a table
+fragment (`blue: 100 % win rate`), i.e. it read "board + question" as "emit a
+move". That is exactly what a loss on answer tokens only would do, and it is not
+amnesia. The base trunk spends its whole budget inside `<think>` on all 12.
+
+**The rank arm is the tie again, from a fourth direction.** n = 60, same rows,
+head computed on the same rows so the comparison is paired:
+
+| arm | format | top-1 | top-5 | vs head | paired | empty | invented | s/row |
+|---|---|---|---|---|---|---|---|---|
+| adapter | chat | 21.7 % | 60.0 % | ±0.0 | **0 / 0** | 0 | 0 | 20.6 |
+| adapter | completion | 18.3 % | 56.7 % | −3.3 | 1 / 3 | 25 | 4 rows | 5.2 |
+| head | - | 21.7 % | 60.0 % | - | - | - | - | - |
+
+The chat-format arm reproduces the head's top-1 on **all 60 rows** (zero
+discordant pairs) and its top-5 *order* on 58 of 60. So: head 21.7, base 25.0
+(= head), adapter 21.7 (= head), `deepseek-chat` 22.68, all within noise of each
+other, and the only arm that ever beats it is the masked 5-way one at 35.31.
+Five prompt designs and four models now agree, which is the strongest form this
+negative result can take.
+
+The completion-format arm is the cautionary one: it *looks* like a model that
+tried and failed (−3.3 pp, 4 rows naming champions the head never listed), but
+42 % of its answers were empty because the prompt had no `Answer:` cue. An empty
+answer is not a wrong answer, and averaging them together understates the model
+and overstates the head.
+
+**A parser bug this exposed.** `suggest.parse_ranking` matched `(\d+)%`, so the
+adapter's `15.6%` was invisible: its whole list was discarded and the head's
+order substituted, with `parse: "head"` as the only trace. The hosted arms write
+integers, so no earlier number is affected. Fixed to accept one decimal, with a
+test (`test_parse_ranking_accepts_a_decimal_confidence`).
+
+**Verdict.** Do not replace the API with the 4B for the agent column. The rank
+panel would ship the head's own list at 5-20 s per row on a 4060, which is the
+head's answer with the head's latency budget destroyed. The chat panel is the
+one place a local model is viable — the base trunk explains a board well and
+costs nothing per token — but it has no tools, no multi-turn state and no
+refusal, and those are the agent's actual value.
+
+Reports: `pro/model/llm/eval_agent_local_{chat,rank}_*.json`. Harness:
+`pro/model/llm/eval_agent_local.py`.
+
 ---
 
 ## 10. Reproduce
@@ -1146,8 +1769,8 @@ docker compose run --rm dev python pro/model/proonly/compare.py --task masked \
     --b pro/model/checkpoints/masking-proonly-randomvalsplit-through-wlds-ig-tes/best.pt
 
 # the comparison
-docker compose run --rm dev python pro/model/test_split/eval_test_split.py
-docker compose run --rm dev python pro/model/test_split/render_test_split.py
+docker compose run --rm dev python pro/model/archive/test_split_legacy/eval_test_split.py
+docker compose run --rm dev python pro/model/archive/test_split_legacy/render_test_split.py
 ```
 
 `--out-dir` writes a run straight to its final name; without it a run lands in
@@ -1183,15 +1806,18 @@ and three of that file's tests then call the wrong `evaluate` signature. The old
 `model.py` shadowing is gone: the package is `solo_queue.model`, so
 `pytest solo_queue/model/policy/test_infer.py` and the directory form are now
 equivalent.
-Green today (2026-11-07, after the `solo_queue/` + `pro/` split):
+Green today (2026-11-13, after the frontend replacement):
 `pytest solo_queue/model/tests` 52 passed 1 skipped;
 `pytest solo_queue/model/finetune` 25 passed;
-`pytest solo_queue/model/policy` 59 passed, 1 failed
+`pytest solo_queue/model/policy` 69 passed, 1 failed
 (`test_swap_sides_flips_econ_team_pairs`, pre-existing);
 `pytest pro/model/proonly pro/model/bans pro/model/test_split` 47 passed 1 skipped;
 `pytest "data/pro play"` 41 passed;
-`pytest frontend` 76 passed 1 skipped (the ensemble-symlink test skips on
-Windows, where `os.symlink` needs a privilege the shell does not have).
+`pytest pro/model/agent` 137 passed;
+`pytest frontend` 47 passed (the suite was rewritten with the surface: the 76
+count included the chat, rerank and draft-score tests, and those modules are
+gone). `pro/model/llm` still needs `bash pro/model/llm/run.sh python -m pytest
+pro/model/llm/test_llm_prompt.py -q`, since it imports `transformers`.
 
 **`pytest frontend` read 58 passed 18 skipped for a while after the split, and
 that was a lie.** Three globs in `test_server.py` still named pre-split paths

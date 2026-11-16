@@ -22,9 +22,13 @@ at sampling time, stored in the state file, and only shown by `score`.
 back; the reveal is a separate command.
 
     python pro/model/agent/handrun.py sample --n 6
-    python pro/model/agent/handrun.py call --calls '[{"id":"A",
-        "tool":"rank_candidates","args":{"candidates":["Xayah","Jinx"]}}]'
+    python pro/model/agent/handrun.py call --state A --calls '[{"id":"A",
+        "tool":"predict_next_move","args":{"state":"real","k":5}}]'
     python pro/model/agent/handrun.py score --answers '{"A":"Xayah"}'
+
+`call --state A` publishes state A's board as `real` before running the calls,
+because no tool takes a board any more: the board is the state, and the sampled
+one has to be put somewhere the tools can read it.
 
 `call` goes through `Session`, so the tool mix it reports is the same number the
 real loop reports - the instrumentation is not a mock.
@@ -43,9 +47,8 @@ ROOT = HERE.parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from pro.model.agent import model_tools, schema      # noqa: E402
+from pro.model.agent import draft_state, model_tools, schema  # noqa: E402
 from pro.model.agent.loop import DEFAULT_CKPT, _load, render_board  # noqa: E402
-from pro.model.agent.session import Session          # noqa: E402
 
 STATE = ROOT / ".handrun.json"
 MIN_MOVE = 11          # the first pick of the second round: a real decision point
@@ -64,6 +67,19 @@ def _board(con, gameid, move_idx):
     bans = [k for kind, side, k in rows if kind == "ban"]
     return {"blue_picks": blue, "red_picks": red, "bans": bans,
             "first_pick": int(game[0]), "patch": game[1]}
+
+
+def _flat_picks(board):
+    """`blue_picks` / `red_picks` -> the UI's ten-slot pick list.
+
+    `log_from_board` reads the board the frontend publishes, which is slots
+    (blue 0-4, red 5-9), not two per-side lists. Handing it only blue's picks
+    would publish a shorter draft than the one that was sampled.
+    """
+    blue = list(board.get("blue_picks") or [])[:5]
+    red = list(board.get("red_picks") or [])[:5]
+    return (blue + [None] * (5 - len(blue))
+            + red + [None] * (5 - len(red)))
 
 
 def _candidates(con, limit=None):
@@ -150,6 +166,22 @@ def cmd_sample(args):
 def cmd_call(args):
     blob = json.loads(STATE.read_text(encoding="utf-8"))
     session = _session()
+    if args.state:
+        sampled = blob["states"].get(args.state)
+        if sampled is None:
+            print("no sampled state %r; have: %s"
+                  % (args.state, ", ".join(sorted(blob["states"]))),
+                  file=sys.stderr)
+            return 2
+        board = sampled["board"]
+        session.store.set_real(draft_state.log_from_board(
+            _flat_picks(board), board["bans"],
+            red_first=bool(board["first_pick"]), patch=board["patch"],
+            unavailable=board.get("unavailable") or (),
+            engine=session.store.engine))
+        print("published state %s as `real`: move %d, %s %s"
+              % (args.state, session.store.get("real").move_idx,
+                 sampled["side"], sampled["kind"]))
     raw = args.calls
     # `@file` because a board is ten champion names and six boards is more JSON
     # than a shell argument survives.
@@ -175,11 +207,13 @@ def _compact(name, out):
             out["side"], out["kind"], out["move_idx"],
             ", ".join("%s %.1f%% #%s" % (c["name"], 100 * c["p_head"], c["rank"])
                       for c in out["top"]))
-    if name == "rank_candidates":
-        return ", ".join("%s %.1f%% (pool #%s, #%s of set)"
-                         % (c["name"], 100 * c["share_of_candidates"],
-                            c["rank_in_pool"], c["rank_in_candidates"])
-                         for c in out["candidates"])
+    if name == "predict_roles":
+        return "blue %s | red %s | open %s" % (
+            ", ".join("%s %s %.2f" % (r["champion"], r["role"], r["p_lane"])
+                      for r in out["blue"]) or "-",
+            ", ".join("%s %s %.2f" % (r["champion"], r["role"], r["p_lane"])
+                      for r in out["red"]) or "-",
+            out["open_roles"])
     if name == "sql":
         return "%d row(s): %s" % (out["n_rows"], json.dumps(out["rows"][:5]))
     return json.dumps(out)[:300]
@@ -253,6 +287,9 @@ def main(argv=None):
     s.set_defaults(func=cmd_sample)
     c = sub.add_parser("call")
     c.add_argument("--calls", required=True)
+    c.add_argument("--state", default=None,
+                   help="a sampled state id (A, B, ...) to publish as `real` "
+                        "before the calls run")
     c.set_defaults(func=cmd_call)
     r = sub.add_parser("score")
     r.add_argument("--answers", required=True)

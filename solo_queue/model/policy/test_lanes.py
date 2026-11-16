@@ -37,7 +37,10 @@ def _corpus():
 
 def test_the_table_covers_every_champion():
     t = L.table()
-    assert t["roles"] == ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"]
+    # Role 4 is SUPPORT everywhere the app names a role. The corpus stores ids
+    # only, so a rename cannot change any count or assignment.
+    assert t["roles"] == ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "SUPPORT"]
+    assert L.lane_name(4) == "SUPPORT"
     assert len(t["counts"]) == 173
     for champ, counts in t["counts"].items():
         assert len(counts) == 5, champ

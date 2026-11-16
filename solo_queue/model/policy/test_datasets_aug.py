@@ -222,6 +222,51 @@ def test_bad_prefix_mode_rejected():
         PRO_DATA.ProNextMoveDataset([make_row()], prefix_mode="nope")
 
 
+def test_k_prefix_gives_k_distinct_examples_per_game():
+    rows = [make_row(seed=i) for i in range(8)]
+    ds = PRO_DATA.ProNextMoveDataset(rows, prefix_mode="k", prefix_k=5)
+    assert len(ds) == 8 * 5
+    assert len(ds.weights()) == len(ds)
+    for game in range(8):
+        moves = [int(ds[game * 5 + j]["move_idx"]) for j in range(5)]
+        assert len(set(moves)) == 5, "a game repeated a prefix inside one epoch"
+        assert all(0 <= m < N_MOVES for m in moves)
+
+
+def test_k_prefix_redraws_per_epoch_and_covers_all_moves():
+    rows = [make_row(seed=i) for i in range(8)]
+    a = PRO_DATA.ProNextMoveDataset(rows, prefix_mode="k", prefix_k=4, seed=5)
+    b = PRO_DATA.ProNextMoveDataset(rows, prefix_mode="k", prefix_k=4, seed=5)
+    a.set_epoch(3)
+    b.set_epoch(3)
+    assert torch.equal(a._moves, b._moves), "k-mode draw is not seeded"
+    first = a._moves.clone()
+    per_game = [set() for _ in rows]
+    for epoch in range(100):
+        a.set_epoch(epoch)
+        for game in range(len(rows)):
+            per_game[game].update(a._moves[game].tolist())
+    # 100 epochs x k=4 = 400 draws per game. A given depth is missed with
+    # p = 0.95**400 ~ 1e-9, so full coverage is a real assertion, not luck:
+    # at 20 epochs (80 draws) p(missing one depth) is 1.6% per depth and this
+    # test failed on a legitimate draw.
+    for game, seen in enumerate(per_game):
+        assert seen == set(range(N_MOVES)), \
+            "game %d never saw depth(s) %s" % (game,
+                                               sorted(set(range(N_MOVES))
+                                                      - seen))
+    assert not torch.equal(first, a._moves)
+
+
+def test_k_prefix_endpoints_are_rejected():
+    # 1 is 'random' and 20 is 'all'; aliasing them silently would make a
+    # checkpoint's recorded prefix_k a lie about how it trained.
+    for bad in (1, N_MOVES, 0, -3):
+        with pytest.raises(ValueError):
+            PRO_DATA.ProNextMoveDataset([make_row()], prefix_mode="k",
+                                        prefix_k=bad)
+
+
 def test_swap_aug_only_in_train_mode():
     rows = [make_row(seed=i) for i in range(40)]
     ds = PRO_DATA.ProNextMoveDataset(rows, prefix_mode="random",

@@ -1,14 +1,13 @@
 """An OpenAI-compatible chat client, with tool calling, over urllib.
 
-No dependency, and the same env contract as `frontend/llm.py`:
+No dependency, and the same env contract the frontend's agent panel reads:
 `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_TIMEOUT`. That matters because
 the two now have to agree about which model answered - a transcript that says
 "the LLM said" without a model id is not reproducible.
 
-The frontend client returns a string, because it only ever asks for prose. This
-one returns the assistant message verbatim (`content` plus normalised
-`tool_calls`), because the loop needs to know whether the model asked for a tool
-before it decides whether to answer.
+The panel's client returns prose; this one returns the assistant message verbatim
+(`content` plus normalised `tool_calls`), because the loop needs to know whether
+the model asked for a tool before it decides whether to answer.
 
 `tool_calls` is normalised to `[{id, name, args}]` with `args` already parsed:
 every provider nests it slightly differently, and a JSON parse error inside the
@@ -84,16 +83,26 @@ def _normalise(message):
         calls.append({"id": c.get("id") or "call_%d" % len(calls),
                       "name": fn.get("name"), "args": args})
     return {"role": "assistant", "content": message.get("content") or "",
-            "tool_calls": calls}
+            "tool_calls": calls,
+            # Audit only, and never sent back: `loop._to_wire` rebuilds the
+            # wire message from `content`/`tool_calls`, so a reasoning trace
+            # here cannot end up in the next request. A reasoning model that
+            # spends its budget thinking and returns empty `content` looks
+            # like a refusal otherwise, and the trace is what tells them apart.
+            "reasoning": message.get("reasoning_content") or ""}
 
 
-def client_from_env(env=None, temperature=0.2):
+def client_from_env(env=None, temperature=0.2, max_tokens=None):
     """-> callable(messages, tools=None) -> normalised assistant message.
 
     Returns None when no key is configured, which is the same contract the
     frontend uses: the caller decides whether that is an error or a degraded
     path. It is not an error here - a run without a key still exercises the
     graph and the tools, it just gets no answer.
+
+    `max_tokens` is opt-in and absent from the body when None, because the
+    loop's answers are prose of unknown length while a reranker eval asks for
+    one name and pays for every token it does not need.
     """
     env = os.environ if env is None else env
     key = (env.get("LLM_API_KEY") or "").strip()
@@ -106,6 +115,8 @@ def client_from_env(env=None, temperature=0.2):
     def call(messages, tools=None):
         body = {"model": model, "messages": messages,
                 "temperature": temperature}
+        if max_tokens:
+            body["max_tokens"] = int(max_tokens)
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"
@@ -128,6 +139,17 @@ def client_from_env(env=None, temperature=0.2):
             raise LLMError("unexpected response shape: %s" % exc)
         out = _normalise(msg)
         out["model"] = payload.get("model") or model
+        # Token accounting, audit only and never sent back. The agent loop
+        # makes several calls per question, so a cost estimate has to be able
+        # to sum them - and an estimate from character counts is off by a
+        # different factor for every tokenizer.
+        out["usage"] = payload.get("usage") or {}
+        # `length` is how a caller learns that a small `max_tokens` was spent
+        # on reasoning tokens rather than on the answer.
+        try:
+            out["finish_reason"] = payload["choices"][0].get("finish_reason")
+        except (KeyError, IndexError):
+            out["finish_reason"] = None
         return out
 
     call.model = model

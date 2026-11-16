@@ -39,10 +39,10 @@ Patch conditioning
 ------------------
 `patch_id` is a row in the checkpoint's OWN patch vocabulary, not a patch
 string. `GET /api/champions` publishes that vocabulary; the UI sends the
-selected id on `/api/next-move` and `/api/explain`. Unknown or out-of-range
+selected id on `/api/next-move` and `/api/suggest`. Unknown or out-of-range
 ids - and every id on a checkpoint with no patch table - fall back to
-`PATCH_UNK_ID`. Breakdown scoring is the exception: it uses each real pro
-game's own patch, not the UI's selection.
+`PATCH_UNK_ID`. The agent's tools resolve a patch *label* through
+`predictor.patch_vocab` for the same reason.
 """
 from __future__ import annotations
 
@@ -79,7 +79,13 @@ MOVE_BAN, MOVE_PICK = 0, 1
 PHASE_OF = [0] * 6 + [1] * 6 + [2] * 4 + [3] * 4
 PHASE_NAMES = {0: "bans1", 1: "picks1", 2: "bans2", 3: "picks2"}
 PATCH_UNK_ID = 0            # index 0 of the patch vocab is reserved for UNK
-DEFAULT_PATCH = "16.20"     # the patch the frozen corpus ends on
+# The patch the UI opens on. It is a *preference*, not a description of the
+# corpus: `default_patch_id` falls back to the newest known patch when the
+# checkpoint never saw this one. 16.20 is the Worlds 2026 knockout patch - the
+# one the walkthrough's default WLDs filter lands on - and it carries the bulk
+# of the recent corpus, whereas 16.22 has only the handful of games played
+# after the freeze.
+DEFAULT_PATCH = "16.20"
 
 
 def move_plan(first_pick):
@@ -279,7 +285,9 @@ def _policy_class(cfg):
     if not any(flags):
         return PolicyValueModel, flags
     try:                       # ROOT on sys.path (frontend, entry scripts)
-        from pro.model.proto.policy import ProtoPolicy
+        # The proto arm is archived (pro/model/archive/proto), not deleted: its
+        # three-member ensemble is still CLI-selectable and still loads here.
+        from pro.model.archive.proto.policy import ProtoPolicy
     except ImportError:        # bare `python solo_queue/model/policy/infer.py`
         from proto.policy import ProtoPolicy
     return ProtoPolicy, flags

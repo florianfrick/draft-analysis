@@ -71,7 +71,7 @@ for t in "data/pro play/test_eval_protocol.py" \
          "solo_queue/model/finetune" \
          "solo_queue/model/policy" \
          "pro/model/proonly" \
-         "pro/model/bans" \
+         "pro/model/archive/bans" \
          "pro/model/test_split" \
          "frontend/test_server.py"; do
   echo "=== $t"
@@ -90,12 +90,12 @@ the same path are equivalent.
 live smoke script that curls `http://127.0.0.1:8778` and executes at import, so
 pytest reports a collection error. Start the explorer first and run it directly.
 
-`pro/model/llm` is deliberately not in that loop: its tests build a Qwen
+`pro/model/archive/llm` is deliberately not in that loop: its tests build a Qwen
 tokenizer, and `transformers` lives in the derived image, not in `lol-draft:dev`.
 Run them through the folder's own wrapper:
 
 ```bash
-bash pro/model/llm/run.sh python -m pytest pro/model/llm/test_llm_prompt.py -q
+bash pro/model/archive/llm/run.sh python -m pytest pro/model/archive/llm/test_llm_prompt.py -q
 ```
 
 ## Long runs
@@ -140,7 +140,7 @@ bash frontend/serve.sh --port 8780     # publish spec and server agree
 
 `serve.sh` is the command above with `llm` instead of `dev` and `--device cuda`
 added. It exists because the pieces are easy to get half-right:
-`pro/model/llm/run.sh` is the *training* wrapper and publishes no port (a server
+`pro/model/archive/llm/run.sh` is the *training* wrapper and publishes no port (a server
 started through it runs fine and is unreachable from the browser), and
 `bash -lc` inside the image resets `PATH`, so `python` becomes the system
 interpreter that has none of the packages. Startup is ~110 s (27 s load + kernel

@@ -1,0 +1,175 @@
+{
+ "checkpoint": "nextpick-bans-aware-through-wlds-ig-tes",
+ "split": "heldout",
+ "val_games": 200,
+ "n_rows": 4000,
+ "model": "deepseek-chat",
+ "max_steps": 5,
+ "system_sha": "e16d9465",
+ "overall": {
+  "n": 4000,
+  "acc": 0.1908,
+  "acc_ci": [
+   0.1788730831383904,
+   0.2032203543242704
+  ],
+  "head_top1": 0.1835,
+  "ceiling_top5": 0.5085,
+  "named_but_illegal": 1,
+  "no_name": 1
+ },
+ "paired_vs_head": {
+  "both": 701,
+  "api_only": 62,
+  "head_only": 33,
+  "neither": 3204,
+  "p": 0.00383287238487556
+ },
+ "by_action": {
+  "pick": {
+   "n": 2000,
+   "acc": 0.224,
+   "acc_ci": [
+    0.20626656651852232,
+    0.24279168239696086
+   ],
+   "head_top1": 0.2145,
+   "ceiling_top5": 0.564,
+   "named_but_illegal": 1,
+   "no_name": 1
+  },
+  "ban": {
+   "n": 2000,
+   "acc": 0.1575,
+   "acc_ci": [
+    0.14219350957286103,
+    0.17411971598349035
+   ],
+   "head_top1": 0.1525,
+   "ceiling_top5": 0.453,
+   "named_but_illegal": 0,
+   "no_name": 0
+  }
+ },
+ "by_phase": {
+  "bans1": {
+   "n": 1200,
+   "acc": 0.1942,
+   "acc_ci": [
+    0.17277626299632332,
+    0.21750897054270701
+   ],
+   "head_top1": 0.1892,
+   "ceiling_top5": 0.4967,
+   "named_but_illegal": 0,
+   "no_name": 0
+  },
+  "picks1": {
+   "n": 1200,
+   "acc": 0.2333,
+   "acc_ci": [
+    0.2102765669246843,
+    0.2580920290766501
+   ],
+   "head_top1": 0.23,
+   "ceiling_top5": 0.58,
+   "named_but_illegal": 0,
+   "no_name": 0
+  },
+  "bans2": {
+   "n": 800,
+   "acc": 0.1025,
+   "acc_ci": [
+    0.08334613199304637,
+    0.12545321354965755
+   ],
+   "head_top1": 0.0975,
+   "ceiling_top5": 0.3875,
+   "named_but_illegal": 0,
+   "no_name": 0
+  },
+  "picks2": {
+   "n": 800,
+   "acc": 0.21,
+   "acc_ci": [
+    0.18319434186194683,
+    0.23957750771637804
+   ],
+   "head_top1": 0.1913,
+   "ceiling_top5": 0.54,
+   "named_but_illegal": 1,
+   "no_name": 1
+  }
+ },
+ "by_choice": {
+  "deferred": {
+   "n": 3601,
+   "acc": 0.1947,
+   "acc_ci": [
+    0.18206392292055518,
+    0.20792314336274564
+   ],
+   "head_top1": 0.1947,
+   "ceiling_top5": 0.5204,
+   "named_but_illegal": 0,
+   "no_name": 0
+  },
+  "overruled": {
+   "n": 398,
+   "acc": 0.1558,
+   "acc_ci": [
+    0.12345952873454617,
+    0.19467975798937695
+   ],
+   "head_top1": 0.0829,
+   "ceiling_top5": 0.402,
+   "named_but_illegal": 0,
+   "no_name": 0
+  }
+ },
+ "overruled_outside_top20": 1,
+ "head_serving_cost": {
+  "top1_batch": 0.1865,
+  "top1_tool": 0.1835,
+  "both_paths_hit_argmax": 694
+ },
+ "k_asked": {
+  "20": 3979,
+  "10": 15,
+  "12": 6
+ },
+ "tool_mix": {
+  "predict_next_move": 4155,
+  "get_state": 4000,
+  "predict_lanes": 3190,
+  "clone_state": 120,
+  "apply_move": 105
+ },
+ "stop": {
+  "answered": 3996,
+  "step budget": 4
+ },
+ "parse": {
+  "marker": 3998,
+  "first-sentence": 1,
+  "none": 1
+ },
+ "mean_calls": 2.89,
+ "seconds": 0.1,
+ "reference": {
+  "heldout_95260": {
+   "ceiling": 0.5051,
+   "reranker_top1": 0.3385,
+   "reranker_exact": 0.3315,
+   "note": "shipped; the number to beat"
+  },
+  "common_478games": {
+   "ceiling": 0.5185,
+   "zeroshot_top1": 0.3217,
+   "zeroshot_exact": 0.3,
+   "trained_top1": 0.3532,
+   "trained_exact": 0.3461,
+   "note": "RETIRED split; history only"
+  }
+ }
+}

@@ -8,41 +8,23 @@
 <body>
 <header>
   <h1>Draft Assistant</h1>
-  <div id="model-info" class="muted">loading models…</div>
-  <div class="model-pick" title="masked checkpoint: the role board, the role
-    of each pick and the target champion for every empty role">
-    <span class="mp-label">role</span>
-    <select id="ckpt-select"></select>
-    <button id="btn-load-ckpt" title="load the selected role model">Load</button>
-  </div>
-  <div class="model-pick" title="policy checkpoint: the next pick/ban and the
-    explanation panel - loaded alongside the role model">
-    <span class="mp-label">next move</span>
-    <select id="policy-select"></select>
-    <button id="btn-load-policy" title="load the selected next-move model">Load</button>
-    <button id="btn-upload" title="upload a .pt file from this machine (filed
-      by its kind)">From file…</button>
-    <span id="policy-note" class="muted hidden"></span>
-  </div>
   <div class="spacer"></div>
   <label class="muted fp-label" title="Patch the next-move model conditions on:
     one row of the loaded checkpoint's own patch vocabulary, not a free-text
-    label. Defaults to 16.20, the patch the frozen corpus ends on. Also the
-    default patch for the 'why this move?' notes. Disabled when the
+    label. Opens on 16.20, the Worlds knockout patch, because that is where the
+    walkthrough's default filter lands and where most of the recent corpus is.
+    Also the default patch for the 'why this move?' notes. Disabled when the
     checkpoint has no patch table, because then the choice would do nothing.">patch
     <select id="patch-select"></select>
   </label>
-  <label class="muted fp-label" title="who has first pick in the game on the
-    board (mirrors the whole draft order; ignored while a real game is
-    loaded). Per game: the side holding it stays the same across a series
-    in 94% of pro games, even though the teams swap sides.">first pick
-    <select id="first-pick">
-      <option value="0">blue</option>
-      <option value="1">red</option>
-    </select>
+  <label class="muted agent-feat" title="When on, the agent chat and the LLM's
+    reranked suggestions are shown. When off, only the base model's own
+    suggestions and the board updates remain - the agent never runs.">
+    <input type="checkbox" id="agent-features" checked> agent features
   </label>
-  <button id="btn-reset">Reset draft</button>
-  <input id="file-input" type="file" accept=".pt" class="hidden">
+  <button id="btn-wt" aria-expanded="false" title="show or hide the walkthrough
+    of real pro games - a game picker, its moves one at a time, and how the
+    head ranked the move the pros actually made">Real draft ▾</button>
 </header>
 
 <div id="board-error" class="hidden"></div>
@@ -77,66 +59,51 @@
   <div class="nm-head">
     <span id="nm-turn"></span>
     <span id="nm-meta" class="muted"></span>
-    <span id="nm-lane" class="muted"></span>
     <span class="spacer"></span>
-    <button id="nm-compare" title="ask the loaded model which side's draft it
-      rates more highly, from its own ranking of every pick made so far">which
-      draft is better?</button>
-    <button id="nm-explain" title="explain this move from the loaded model's
-      own numbers, comparable pro drafts and the patch notes">why this
-      move?</button>
-    <button id="nm-chat" title="talk about this board: name a champion and say
-      how strongly you rate it, and the reply shows what that is worth against
-      the model's own ranking">chat</button>
   </div>
+  <div id="nm-subtitle" class="nm-subtitle">Base model suggestions</div>
   <div id="nm-warning" class="nm-warn hidden"></div>
   <div class="nm-chips" id="nm-chips"></div>
-  <div id="nm-chat-row" class="nm-chat-row hidden"></div>
 </section>
 
-<section id="compare" class="hidden">
-  <div class="ex-head">
-    <span id="cmp-title">Which draft is better</span>
-    <span id="cmp-meta" class="muted"></span>
+<section id="agentsuggest">
+  <div class="nm-head">
+    <span class="nm-title">Agent suggestions <span class="muted">(rerank
+      of the head's list)</span></span>
+    <span id="as-meta" class="muted"></span>
     <span class="spacer"></span>
-    <button id="cmp-close" title="hide this panel">✕</button>
   </div>
-  <div id="cmp-body"></div>
+  <div id="as-warning" class="nm-warn hidden"></div>
+  <div class="nm-chips" id="as-chips"></div>
 </section>
 
-<section id="explain" class="hidden">
+<section id="agent">
   <div class="ex-head">
-    <span id="ex-title">Why this move</span>
-    <span id="ex-meta" class="muted"></span>
+    <span id="agent-title">Agent</span>
+    <span id="agent-model" class="agent-model"></span>
+    <span id="agent-meta" class="muted"></span>
     <span class="spacer"></span>
-    <button id="ex-reask" title="ignore the cached answer and ask again">re-ask</button>
-    <button id="ex-close" title="hide this panel">✕</button>
+    <button id="agent-suggest" title="one click: ask the agent (not the
+      next-move head) to recommend the single best move on this board. It reads
+      the live state - patch, first pick, series game, fearless pool, picks and
+      bans - calls the head and the role table through tools, and commits to one
+      champion. Needs LLM_API_KEY.">suggest next move</button>
+    <button id="agent-clear" title="forget the conversation, keep the board">clear</button>
+    <button id="agent-close" title="hide this panel">✕</button>
   </div>
-  <div id="ex-body"></div>
-</section>
-
-<section id="chat" class="hidden">
-  <div class="ex-head">
-    <span id="chat-title">Chat</span>
-    <span id="chat-meta" class="muted"></span>
-    <span class="spacer"></span>
-    <button id="chat-mode" title="which model answers: the head's own numbers, or
-      an LLM driving the tools (needs LLM_API_KEY and langgraph)">head</button>
-    <button id="chat-clear" title="forget the conversation, keep the board">clear</button>
-    <button id="chat-close" title="hide this panel">✕</button>
-  </div>
-  <div id="chat-log"></div>
-  <form id="chat-form">
-    <input id="chat-input" autocomplete="off"
-      placeholder="e.g. I think Kled is incredibly good here">
-    <button id="chat-send" type="submit">ask</button>
+  <div id="agent-log"></div>
+  <form id="agent-form">
+    <input id="agent-input" autocomplete="off"
+      placeholder="e.g. what does the model take for red's jungle?">
+    <button id="agent-send" type="submit">ask</button>
   </form>
 </section>
 
-<div id="wt-bar">
+<div id="wt-bar" class="hidden">
   <span class="wt-title">Real draft</span>
   <select id="wt-select"><option value="">— pick a game —</option></select>
-  <input id="wt-filter" type="text" placeholder="filter team / league / date…">
+  <input id="wt-filter" type="text" value="WLDs"
+    placeholder="filter team / league / date…">
   <button id="wt-random" title="load a random game">🎲 random</button>
   <span class="spacer"></span>
   <span id="wt-info" class="muted">no game loaded</span>
@@ -148,6 +115,20 @@
 <div id="wt-compare" class="hidden"></div>
 
 <main>
+  <div class="board-tools">
+    <label class="muted fp-label" title="who has first pick in the game on the
+      board (mirrors the whole draft order; ignored while a real game is
+      loaded). Per game: the side holding it stays the same across a series
+      in 94% of pro games, even though the teams swap sides.">first pick
+      <select id="first-pick">
+        <option value="0">blue</option>
+        <option value="1">red</option>
+      </select>
+    </label>
+    <button id="btn-reset" title="clear this game's picks and bans, keeping
+      the fearless pool">Reset draft</button>
+  </div>
+
   <section class="team" id="team-blue">
     <h2>Blue side <span class="turn" id="turn-blue"></span></h2>
     <div class="row">
@@ -183,24 +164,6 @@
   </section>
 </main>
 
-<footer class="muted">
-  Two models, loaded at the same time and chosen independently. <b>Role
-  model</b> (masked checkpoint): each team's five roles in
-  TOP&rarr;UTILITY order, picked champions placed in their most likely role
-  &mdash; the champion you just picked always keeps the role the model likes
-  best for it &mdash; and the model's target for every empty role (top-3
-  from the role-conditioned masked queries). <b>Next move</b> (policy
-  checkpoint): one ranked list for the side on the clock, plus ban
-  candidates ranked by how likely the opponent was to take them.
-  <b>Fearless</b> is an input to the next-move model and is masked on picks
-  only, so a champion picked in an earlier game can still be banned; the
-  role model has no such input, so there its answers are <i>filtered</i>,
-  not conditioned. Banned &amp; picked champions are always excluded
-  &middot; highlighted slot = next move in a standard pro draft (highlight
-  only, nothing enforced) &middot; champion art from Riot's dDragon CDN
-  (needs internet once) &middot; local only
-</footer>
-
 <div id="picker" class="hidden">
   <div class="picker-box">
     <div class="picker-head">
@@ -214,6 +177,6 @@
 
 <script src="/draft-order.js"></script>
 <script src="/app.js"></script>
-<script src="/chat.js"></script>
+<script src="/agent.js"></script>
 </body>
 </html>

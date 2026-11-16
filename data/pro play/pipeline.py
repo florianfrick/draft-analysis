@@ -75,7 +75,10 @@ IGNORE_INDEX = -100
 
 # position (OE lowercase) -> role id, matching SoloQ ROLE_TO_ID
 POS_TO_ROLE = {"top": 0, "jng": 1, "mid": 2, "bot": 3, "sup": 4}
-ROLE_NAMES = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"]
+# Display names for the five role ids (`POS_TO_ROLE` maps the raw Oracle's
+# Elixir "sup" to id 4). "SUPPORT" is the app's name for that role; the pro
+# cache stores ids only, so nothing downstream depends on the spelling.
+ROLE_NAMES = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "SUPPORT"]
 
 BASE_DIR = Path(__file__).resolve().parent          # .../data/pro play
 SOLOQ_PROC_DIR = BASE_DIR.parent / "solo queue" / "process matchdata"
@@ -531,16 +534,24 @@ def _game_date(g):
     return _parse_date(blue.get("date") or "")
 
 
-def scan_and_index(csv_paths, name_to_idx, limit=0):
-    """One full pass over CSV(s) -> {'rows', 'stats', 'csvs'}."""
+def scan_and_index(csv_paths, name_to_idx, limit=0, max_date=None):
+    """One full pass over CSV(s) -> {'rows', 'stats', 'csvs'}.
+
+    `max_date` overrides the corpus freeze for this scan only: `None`
+    (default) means `CORPUS_MAX_DATE`, `""` means no freeze at all (every game
+    in the exports is kept). An override is only safe together with its own
+    cache file - see `build_rows`, which stores the value it scanned with and
+    refuses a cache built under a different one.
+    """
     if not isinstance(csv_paths, (list, tuple)):
         csv_paths = [csv_paths]
+    freeze = CORPUS_MAX_DATE if max_date is None else max_date
     games = assign_series(group_games(csv_paths))
     total_games = len(games)
-    if CORPUS_MAX_DATE:
+    if freeze:
         # Freeze the corpus: anything newer than the pin is held out, not
         # trained on. Counted as a skip reason so the stats identity holds.
-        cutoff = _parse_date(CORPUS_MAX_DATE)
+        cutoff = _parse_date(freeze)
         games = [g for g in games
                  if (_game_date(g) is None or _game_date(g) <= cutoff)]
     rows, reasons = [], Counter()
@@ -558,7 +569,7 @@ def scan_and_index(csv_paths, name_to_idx, limit=0):
     attach_fearless(rows)
     stats = {"total_games": total_games, "kept": len(rows),
              "skipped": sum(reasons.values()),
-             "skip_reasons": dict(reasons)}
+             "skip_reasons": dict(reasons), "max_date": freeze}
     return {"rows": rows, "stats": stats,
             "csvs": [Path(p).name for p in csv_paths]}
 
@@ -579,30 +590,43 @@ def _csv_signature(csv_paths):
     return sig
 
 
-def build_rows(csv_glob=CSV_GLOB, rescan=False, limit=0, cache_path=None):
-    """Cached scan: loads pro_drafts.pt unless rescan/limit/missing."""
+def build_rows(csv_glob=CSV_GLOB, rescan=False, limit=0, cache_path=None,
+               max_date=None):
+    """Cached scan: loads pro_drafts.pt unless rescan/limit/missing.
+
+    `max_date` is the corpus freeze for this build (`None` = `CORPUS_MAX_DATE`,
+    `""` = no freeze). The value is part of the cache contract: a cache built
+    under a different freeze is rescanned, because its rows are a different
+    corpus even though the CSV signature matches.
+    """
     cache_path = Path(cache_path) if cache_path is not None else CACHE_PATH
     csv_paths = list_csvs(csv_glob)
     names = [p.name for p in csv_paths]
     sig = _csv_signature(csv_paths)
+    freeze = CORPUS_MAX_DATE if max_date is None else max_date
     if not rescan and not limit and cache_path.exists():
         payload = torch.load(str(cache_path), map_location="cpu",
                              weights_only=False)  # our own cache
+        cached_freeze = payload.get("max_date", CORPUS_MAX_DATE)
         if payload.get("version") == CACHE_VERSION and \
-                payload.get("csv_sig") == sig:
+                payload.get("csv_sig") == sig and cached_freeze == freeze:
             print("loaded cache: %d drafts (%s)" %
                   (len(payload["rows"]), cache_path.name))
             return payload["rows"], payload["stats"]
         if payload.get("csv_sig") is None:
             print("cache predates content signatures; rescanning")
+        elif cached_freeze != freeze:
+            print("corpus freeze changed since the cache was built (%r -> %r); "
+                  "rescanning" % (cached_freeze, freeze))
         else:
             print("csvs changed since the cache was built; rescanning")
     print("scanning %d CSVs: %s ..." % (len(csv_paths),
                                         ", ".join(names)))
-    payload = scan_and_index(csv_paths, load_name_to_idx()[0], limit=limit)
+    payload = scan_and_index(csv_paths, load_name_to_idx()[0], limit=limit,
+                             max_date=max_date)
     if not limit:
-        torch.save(dict(payload, version=CACHE_VERSION, csv_sig=sig),
-                   str(cache_path))
+        torch.save(dict(payload, version=CACHE_VERSION, csv_sig=sig,
+                        max_date=freeze), str(cache_path))
         print("cached %d drafts -> %s" % (len(payload["rows"]),
                                           cache_path.name))
     print("kept %d / %d games (skipped %d: %s)" % (

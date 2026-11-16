@@ -1,6 +1,6 @@
 """Pro-only next-move policy: encoder + policy head, no soloQ anywhere.
 
-    python pro/model/proonly/train_policy.py --init-ckpt pro/model/checkpoints/masking-proonly/best.pt
+    python pro/model/proonly/train_policy.py --init-ckpt pro/model/archive/checkpoints/masking-proonly/best.pt
     python pro/model/proonly/train_policy.py --init-ckpt scratch --patch-emb
 
 Second half of the branch's question. `train_masked.py` asks whether a
@@ -66,7 +66,7 @@ def parse_args(argv=None):
     ap.add_argument("--num-heads", type=int, default=8)
     ap.add_argument("--dropout", type=float, default=0.1)
     ap.add_argument("--state-dim", type=int, default=64)
-    # ---- ban-awareness (pro/model/bans/). All off = the shipped model, so a
+    # ---- ban-awareness (pro/model/archive/bans/). All off = the shipped model, so a
     # run with these omitted is a control that must reproduce the baseline.
     ap.add_argument("--ban-side", dest="ban_side", action="store_true",
                     default=False,
@@ -92,10 +92,17 @@ def parse_args(argv=None):
     ap.add_argument("--patch-emb", dest="patch_emb", action="store_true",
                     default=True)
     ap.add_argument("--no-patch-emb", dest="patch_emb", action="store_false")
-    ap.add_argument("--prefix-mode", choices=("random", "all"), default="random",
+    ap.add_argument("--prefix-mode", choices=("random", "k", "all"),
+                    default="random",
                     help="random = one prefix per game per epoch (the repo "
                          "default: the 20 prefixes of a game are near-"
-                         "duplicates, so unrolling all of them memorises)")
+                         "duplicates, so unrolling all of them memorises). "
+                         "k = --prefix-k DISTINCT prefixes per game per "
+                         "epoch, redrawn every epoch. all = every prefix "
+                         "(val/test always use this)")
+    ap.add_argument("--prefix-k", type=int, default=5,
+                    help="examples per game per epoch under --prefix-mode k; "
+                         "1 < k < 20 (use random for 1, all for 20)")
     ap.add_argument("--swap-aug", dest="swap_aug", action="store_true",
                     default=True, help="mirror blue<->red with p=0.5")
     ap.add_argument("--no-swap-aug", dest="swap_aug", action="store_false")
@@ -119,7 +126,7 @@ def parse_args(argv=None):
     ap.add_argument("--out-dir", default="",
                     help="write the run here instead of ckpt/run_<ts>_<name>. "
                          "Used to give the kept artefacts a stable, "
-                         "self-describing name (pro/model/checkpoints/nextpick-proonly).")
+                         "self-describing name (pro/model/archive/checkpoints/nextpick-proonly).")
     return ap.parse_args(argv)
 
 
@@ -238,7 +245,7 @@ def train(args):
     frontier = C.corpus_frontier(rows)
     through = C.through_suffix(frontier)
     C.check_out_dir_name(args.out_dir, through,
-                         "pro/model/checkpoints/nextpick-proonly-" + through)
+                         "pro/model/archive/checkpoints/nextpick-proonly-" + through)
     print("data frontier: %s (%s, patch %s) -> %s"
           % (frontier["series_id"], frontier["date"], frontier["patch"],
              through))
@@ -288,7 +295,8 @@ def train(args):
     def loader(idxs, mode, shuffle, seed):
         ds = PRO_DATA.ProNextMoveDataset(
             rows, idxs, num_champs=num_champs, patch_index=patch_index,
-            prefix_mode=mode, swap_aug=(args.swap_aug and shuffle), seed=seed,
+            prefix_mode=mode, prefix_k=args.prefix_k,
+            swap_aug=(args.swap_aug and shuffle), seed=seed,
             fearless_roles=fearless_roles)
         return ds, DataLoader(ds, batch_size=args.batch_size, shuffle=shuffle,
                               collate_fn=PRO_DATA.pro_collate, num_workers=0,
@@ -419,10 +427,14 @@ def train(args):
         "ban_fearless": bool(args.ban_fearless),
         "counter_rank": int(args.counter_rank),
         "pool_order": str(args.pool_order),
-        "split": C.split_description(args.val_split, bool(splits["test"])),
+        "split": C.split_description(args.val_split, bool(splits["test"]),
+                                     pinned=not getattr(args, "no_pin",
+                                                         False)),
         "val_scope": args.val_scope,
         "val_split": args.val_split,
-        "prefix_mode": args.prefix_mode, "swap_aug": args.swap_aug,
+        "prefix_mode": args.prefix_mode,
+        "prefix_k": (int(args.prefix_k) if args.prefix_mode == "k" else None),
+        "swap_aug": args.swap_aug,
         "seed": args.seed, "n_train": len(splits["train"]),
         "n_val": len(splits["val"]), "n_test": len(splits["test"]),
         "selection": "rel_top5 (val)", "params": C.param_count(model),

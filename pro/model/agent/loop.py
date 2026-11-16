@@ -12,13 +12,11 @@ and obeys the same ablation. That is the point of building the registry first:
 
 Three decisions worth naming:
 
-**Omission is filled; disagreement is flagged.** Every model tool takes the whole
-board, so the model has to re-type nine champion names on every call. If it omits
-`blue_picks` it is being lazy and the turn's board is unambiguous, so the loop
-fills it in. If it supplies a *different* board it has made a claim, and
-silently correcting that claim would hide the most likely failure of this whole
-architecture - so the mismatch is recorded in `out["transcription"]` and the
-tool answers the board it was actually asked about.
+**The board is never transcribed.** Every tool takes a state id, so there is
+nothing to retype and nothing to disagree about. An earlier version accepted a
+board as well as a state, filled an omitted field from the turn's board and
+flagged a mismatched one; that machinery existed only to detect a model
+mis-typing nine champion names, and it is gone with the argument.
 
 **The step budget is a routing decision, not an exception.** A graph that runs
 out of steps and raises `GraphRecursionError` loses the log. The router sends the
@@ -53,6 +51,7 @@ if str(ROOT) not in sys.path:
 from langgraph.graph import END, START, StateGraph          # noqa: E402
 
 from pro.model.agent import draft_state, llm_client, model_tools, schema  # noqa: E402
+from pro.model.agent.engine import Engine                    # noqa: E402
 from pro.model.agent.session import Session                  # noqa: E402
 
 MAX_STEPS = 8
@@ -74,16 +73,37 @@ Use a tool before you assert a number. A claim with no tool result behind it is 
 a bug, not an opinion.
 
 Which tool, in order of preference:
-1. `get_state` before anything about the board, and again after every change.
-2. `predict_next_move` for an open question ("what do we pick here?"). This is \
-the model's own ranking and it is the most reliable thing you have.
-3. `rank_candidates` for a choice between names - but only on names the model \
-already put in front of you. A shortlist you wrote yourself can omit the head's \
-top pick, and then a confident comparison is a confident answer to the wrong \
-question; that happened on two of three boards in the first hand-run.
-4. `sql` only when none of the above answers it: a rate over a patch window, a \
-pairing's lane record, a count of games. Always select the count next to a rate, \
+1. `get_state` before anything about the board, and again after every change. \
+It returns the board, whose move it is, which role every pick fills with the \
+corpus's confidence, and what each side still has to fill.
+2. `predict_roles` when the question is what a team needs or where a champion \
+plays. It is a table lookup over 46,915 pro drafts, so it cannot be wrong about \
+the patch and it cannot disagree with itself.
+3. `predict_next_move` for an open question ("what do we pick here?"). This is \
+the model's own ranking and the most reliable thing you have.
+4. `predict_next_move` with `role=` when the question names a role - "what is \
+red's jungle here?". Add `side=` when you mean the side that is not on the \
+clock. The numbers then count only champions that play that role, so they are \
+NOT comparable with a plain call, and the result says whether the head or a \
+masking model answered.
+5. `sql` only when none of the above answers it: a rate over a patch window, a \
+pairing's role record, a count of games. Always select the count next to a rate, \
 always filter `split = 'train'`, and treat n under 30 as an anecdote.
+6. `soloq_matchup` when the question is a specific two-champion matchup - "does \
+Ahri beat Zed in mid?", "does Alistar pair well with this ADC?" - that the head \
+cannot answer because it scores champions independently. Pass both names (or Riot \
+ids), `kind='vs'` (against) or `'with'` (alongside), and optionally a `patch` or a \
+`role` to scope it to a lane. The result gives the matchup's win rate, the \
+champion's own baseline over the same patch scope, and `delta_win` - the marginal \
+effect. It is SOLO QUEUE data, a different population from the pro drafts the head \
+learned on: a complementary signal, not a reason to override the head on its own.
+
+Comparing named champions is your job, not a tool's. There is no shortlist tool: \
+read the head's ranking and compare from it. If the champion you are weighing is \
+not in the list, ask again with a wider `k` - do not compare a name you thought \
+of against a list you did not choose. A shortlist you wrote yourself can omit \
+the head's top pick, and then a careful comparison is a confident answer to the \
+wrong question.
 
 Exploring a hypothetical ("what if blue takes Alistar here?"):
   clone_state(from_state="real")        -> a sandbox id
@@ -94,11 +114,16 @@ Say which state your answer is about. A recommendation about a sandbox is not a 
 recommendation about the live board.
 
 Reading the numbers:
-- `p_head` is a share of the legal pool (about 160 champions). `p_rerank` is a \
-share of the candidate set you named. They are different claims; never compare \
+- `p_head` is a share of the legal pool (about 160 champions). `p_lane` is that \
+champion's own share of its picks in that role. `p_in_lane` is a share of the \
+champions that play one role. They are three different claims; never compare \
 them, and always quote the rank when you quote a probability.
 - `patch_known: false` means the model did not recognise the patch and answered \
 as if patch did not matter. Say so if you rely on it.
+- `soloq_matchup` returns `delta_win` (the matchup win rate minus the champion's \
+own, over the same patch scope) and a `reliable` flag on n. Treat \
+`reliable=false` as noise - most pairwise deviations are the champion's own \
+strength, not a real edge - and never cite a soloQ rate as if it were pro data.
 - The model cannot see which side is blue. Do not ask it to tell you.
 
 Fearless series: `get_state` may list `fearless` champions. Those were picked in \
@@ -111,7 +136,7 @@ hope. If it says a champion is already on the board, you misread the board - \
 call `get_state`.
 
 The models rank better than you do. Overrule a distribution only when a tool \
-result says why - a matchup count, a lane record - not because the pick feels \
+result says why - a matchup count, a role record - not because the pick feels \
 wrong.
 
 Answer in at most four sentences: name the champion, then the reason, citing \
@@ -148,40 +173,6 @@ def board_from_args(blue=(), red=(), bans=(), first_pick=0, patch=None):
 render_board = draft_state.render_board
 
 
-def _keys(xs):
-    return [model_tools._norm(x) for x in (xs or [])]
-
-
-def fill_board(board, args):
-    """Fill omitted board fields from the turn's board; flag disagreements.
-
-    -> (args, filled, mismatched). Both lists are field names. See the module
-    docstring for why omission and disagreement are treated differently.
-    """
-    out = dict(args or {})
-    filled, bad = [], []
-    for field in ("blue_picks", "red_picks", "bans", "patch", "first_pick"):
-        want = board.get(field)
-        have = out.get(field)
-        if have in (None, [], "") and want not in (None, [], ""):
-            out[field] = want
-            filled.append(field)
-            continue
-        if have in (None, [], "") or want in (None, [], ""):
-            continue
-        if field in ("blue_picks", "red_picks"):
-            same = _keys(have) == _keys(want)          # slot order is semantic
-        elif field == "bans":
-            same = sorted(_keys(have)) == sorted(_keys(want))
-        elif field == "patch":
-            same = str(have).strip() == str(want).strip()
-        else:
-            same = int(have or 0) == int(want or 0)
-        if not same:
-            bad.append(field)
-    return out, filled, bad
-
-
 # --------------------------------------------------------------------- graph
 def _openai_tools(session):
     return [{"type": "function",
@@ -202,11 +193,9 @@ def _to_wire(reply):
     return msg
 
 
-def build(session, client, system=SYSTEM, max_steps=MAX_STEPS, board=None):
+def build(session, client, system=SYSTEM, max_steps=MAX_STEPS):
     """-> compiled graph. `client` is callable(messages, tools=None) -> message."""
     tools = _openai_tools(session)
-    board = board or {}
-    seen = {"filled": [], "mismatched": []}
 
     def agent(state):
         msgs = [{"role": "system", "content": system}] + state["messages"]
@@ -240,14 +229,7 @@ def build(session, client, system=SYSTEM, max_steps=MAX_STEPS, board=None):
     def tools_node(state):
         out = []
         for call in state.get("pending") or []:
-            args, filled, bad = fill_board(board, call.get("args"))
-            if filled:
-                seen["filled"] += ["%s.%s" % (call.get("name"), f)
-                                   for f in filled]
-            if bad:
-                seen["mismatched"] += ["%s.%s" % (call.get("name"), f)
-                                       for f in bad]
-            res = session.call(call.get("name"), **args)
+            res = session.call(call.get("name"), **(call.get("args") or {}))
             out.append({"role": "tool", "tool_call_id": call.get("id"),
                         "name": call.get("name"),
                         "content": json.dumps(res, ensure_ascii=False,
@@ -268,33 +250,39 @@ def build(session, client, system=SYSTEM, max_steps=MAX_STEPS, board=None):
     g.add_edge(START, "agent")
     g.add_conditional_edges("agent", route, {"tools": "tools", "done": END})
     g.add_edge("tools", "agent")
-    compiled = g.compile()
-    compiled.transcription = seen
-    return compiled
+    return g.compile()
 
 
 # ----------------------------------------------------------------------- run
-def run(session, question, client=None, board=None, system=SYSTEM,
-        max_steps=MAX_STEPS, env=None, raise_errors=False, state_id=None):
+def run(session, question, client=None, system=SYSTEM, max_steps=MAX_STEPS,
+        env=None, raise_errors=False, state_id=None, seed=None):
     """One turn. -> a transcript dict, whether or not anything answered.
 
     `client=None` falls back to the environment, and no key is a recorded
     outcome rather than an exception.
 
-    With `state_id`, the board is read from the session's store and the prompt
-    names the state. The board is still *rendered* - the model has to see it to
-    reason about comps - but no tool takes it as an argument, so there is nothing
-    to transcribe.
+    The board is read from the session's store and the prompt names the state.
+    The board is still *rendered* - the model has to see it to reason about
+    comps - but no tool takes it as an argument, so there is nothing to
+    transcribe and nothing to disagree about.
     """
-    board = board or {}
-    state_text = None
-    if state_id is not None and getattr(session, "store", None) is not None:
-        state = session.store.get(state_id)
-        board = state.board()
-        state_text = state.render(state_id)
+    state_id = state_id or draft_state.REAL_ID
     out = {"question": question, "answer": None, "stop": "no client",
-           "model": None, "tools_offered": session.names(),
-           "transcription": {"filled": [], "mismatched": []}}
+           "model": None, "state": state_id,
+           "tools_offered": session.names()}
+    if getattr(session, "store", None) is None:
+        out["stop"] = "no state"
+        out["error"] = ("this session has no draft state, so there is nothing "
+                        "to ask about - build it with a Store")
+        out.update(summary=session.summary(), calls=list(session.log))
+        return out
+    state = session.store.get(state_id)
+    # `store.display`, not the default: without it the board reads
+    # "missfortune, jarvan iv" - the canonical keys - while every tool result
+    # renders the corpus spelling. One board, two spellings, and the model is
+    # left to work out that they are the same champion.
+    state_text = state.render(state_id, getattr(session.store, "display", None))
+
     client = client if client is not None else llm_client.client_from_env(env)
     if client is None:
         cfg = llm_client.describe(env)
@@ -306,11 +294,22 @@ def run(session, question, client=None, board=None, system=SYSTEM,
         out.update(summary=session.summary(), calls=list(session.log))
         return out
 
-    graph = build(session, client, system=system, max_steps=max_steps,
-                  board=board)
-    init = {"messages": [{"role": "user",
-                          "content": (state_text or render_board(board))
-                                     + "\n\nQuestion: " + question}],
+    graph = build(session, client, system=system, max_steps=max_steps)
+    question_msg = {"role": "user",
+                    "content": state_text + "\n\nQuestion: " + question}
+    # `seed` carries prior conversation (user/assistant text turns) the rerank
+    # should honour - e.g. the chat the user has been having. It is prepended,
+    # not appended, so the model sees the context before the ranking question.
+    # Only well-formed {role, content} turns are kept; a provider rejects a
+    # leading assistant message, and a stray tool turn would confuse the rerank.
+    seed_msgs = []
+    if seed:
+        for m in seed:
+            if isinstance(m, dict) and m.get("role") in ("user", "assistant") \
+                    and m.get("content"):
+                seed_msgs.append({"role": m["role"],
+                                  "content": str(m["content"])})
+    init = {"messages": seed_msgs + [question_msg],
             "pending": [], "steps": 0, "answer": "", "stop": ""}
     try:
         final = graph.invoke(init, {"recursion_limit": 2 * max_steps + 6})
@@ -326,7 +325,6 @@ def run(session, question, client=None, board=None, system=SYSTEM,
         stop = "no answer (ended on a tool call)"
     out.update(answer=final.get("answer") or None, stop=stop,
                model=final.get("model"),
-               transcription=graph.transcription,
                summary=session.summary(), calls=list(session.log),
                messages=_trim_messages(final.get("messages") or []))
     return out
@@ -351,19 +349,23 @@ def _trim_messages(messages, limit=700):
     return out
 
 
-def scripted_client(calls=("rank_candidates",), answer=None,
-                    candidates=("Xayah", "Jinx", "Ashe")):
+def scripted_client(calls=("predict_roles",), answer=None,
+                    champion="Xayah"):
     """A fake client for wiring checks: call a tool, then answer.
 
     Not a stub of the model's judgement - it always asks for the same thing in
-    the same order. It exists so the graph, the board filling and the ablation
-    can be exercised without a key. `candidates` defaults to three champions
-    that are not on the demo board; naming a banned champion is refused by the
-    tool, which is correct but makes a poor smoke test.
+    the same order. It exists so the graph and the ablation can be exercised
+    without a key. `champion` is only used by the apply_move script, and
+    defaults to one that is not on the demo board: naming a banned champion is
+    refused by the tool, which is correct but makes a poor smoke test.
     """
-    queue = [{"id": "call_%d" % i, "name": n,
-              "args": {"candidates": list(candidates)}
-              if n == "rank_candidates" else {"query": "SELECT 1 AS one"}}
+    args_for = {"predict_roles": {"state": "real"},
+                "get_state": {"state": "real"},
+                "clone_state": {"from_state": "real", "name": "scripted"},
+                "apply_move": {"state": "real", "champion": champion},
+                "undo_move": {"state": "real"},
+                "sql": {"query": "SELECT 1 AS one"}}
+    queue = [{"id": "call_%d" % i, "name": n, "args": dict(args_for.get(n, {}))}
              for i, n in enumerate(calls)]
 
     def call(messages, tools=None):
@@ -432,25 +434,34 @@ def ping(client=None, env=None):
 
 
 # ----------------------------------------------------------------------- cli
-def _load(ckpt, db, ablate, max_calls):
+def _load(ckpt, db, ablate, max_calls, board=None, masker_ckpt=None):
     # The state store needs champion *names*, not weights, so it is built even
     # when no checkpoint is loaded - exploring a board should not require a model.
     names = model_tools.ChampIndex(schema.names())
-    predictor = champs = con = None
+    predictor = con = masker = None
     if Path(ckpt).exists():
         from solo_queue.model.policy.infer import PolicyPredictor
         predictor = PolicyPredictor(ckpt, device="cpu")
-        champs = names
     else:
-        print("no checkpoint at %s - model tools unavailable" % ckpt,
+        print("no checkpoint at %s - the next-move tool is unavailable" % ckpt,
               file=sys.stderr)
+    if masker_ckpt and Path(masker_ckpt).exists():
+        from solo_queue.model.policy.infer import PolicyPredictor
+        masker = PolicyPredictor(masker_ckpt, device="cpu")
     if Path(db).exists():
         con = schema.connect(db)
     else:
         print("no database at %s - run build_db.py first" % db, file=sys.stderr)
-    return Session(con=con, predictor=predictor, champs=champs,
-                   ablate=ablate, max_calls=max_calls,
-                   store=draft_state.Store(names))
+    store = draft_state.Store(names)
+    store.attach(Engine(names, predictor=predictor, masker=masker,
+                        patch=(board or {}).get("patch")))
+    if board:
+        store.set_real(draft_state.log_from_board(
+            board.get("blue_picks"), board.get("bans"),
+            red_first=bool(board.get("first_pick")), patch=board.get("patch"),
+            bans_blue=board.get("bans_blue"), bans_red=board.get("bans_red"),
+            unavailable=board.get("unavailable") or (), engine=store.engine))
+    return Session(con=con, store=store, ablate=ablate, max_calls=max_calls)
 
 
 def _print_ping(rep, from_env=()):
@@ -492,6 +503,9 @@ def main(argv=None):
                     help="run a fake client, so no API key is needed")
     ap.add_argument("--json", action="store_true", help="print the transcript")
     ap.add_argument("--ckpt", default=DEFAULT_CKPT)
+    ap.add_argument("--masker-ckpt", default="",
+                    help="a masking checkpoint, for role questions during the "
+                         "ban phase where the next-move head has no answer")
     ap.add_argument("--db", default=str(schema.DB_PATH))
     args = ap.parse_args(argv)
     warnings.filterwarnings("ignore")
@@ -510,7 +524,8 @@ def main(argv=None):
                             args.first_pick, args.patch)
     session = _load(args.ckpt, args.db,
                     {x.strip() for x in args.ablate.split(",") if x.strip()},
-                    args.max_calls)
+                    args.max_calls, board=board,
+                    masker_ckpt=args.masker_ckpt)
     print("tools offered:", ", ".join(session.names()) or "none")
     cfg = llm_client.describe()
     note = "" if cfg["has_key"] else "   (no key)"
@@ -519,8 +534,7 @@ def main(argv=None):
         note += "   [from .env: %s]" % ", ".join(llm_added)
     print("model: %s at %s%s" % (cfg["model"], cfg["base_url"], note))
     client = scripted_client() if args.scripted else None
-    out = run(session, args.question, client=client, board=board,
-              max_steps=args.max_steps)
+    out = run(session, args.question, client=client, max_steps=args.max_steps)
     if args.json:
         print(json.dumps(out, indent=2, default=str))
         return 0
@@ -534,9 +548,6 @@ def main(argv=None):
                  "ok" if c["ok"] else "ERROR", c.get("n_rows", "")))
         if not c["ok"]:
             print("      %s" % (c.get("error") or "")[:200])
-    if out["transcription"]["filled"] or out["transcription"]["mismatched"]:
-        print("  board filled:", out["transcription"]["filled"] or "-")
-        print("  board mismatched:", out["transcription"]["mismatched"] or "-")
     print("\nanswer:", out["answer"] or "(none)")
     print("\nsummary:", out["summary"])
     return 0

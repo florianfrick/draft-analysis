@@ -1,0 +1,270 @@
+{
+ "suite": {
+  "split": {
+   "corpus": "pro_drafts_full.pt",
+   "corpus_rows": 46939,
+   "max_date": "(none)",
+   "args": {
+    "val_frac": 0.1,
+    "test_frac": 0.05,
+    "min_patch_rows": 40,
+    "val_patches": null,
+    "val_random": false
+   },
+   "pinned_test": [],
+   "counts": {
+    "train": 39720,
+    "val": 4771,
+    "test": 2448
+   },
+   "shares": {
+    "train": 0.8462,
+    "val": 0.1016,
+    "test": 0.0522
+   },
+   "test_fingerprint": "99c72c8550489cbf6f218b517002c9f2276022e53e45270c8e3e545cca252204",
+   "test_gameids": null
+  },
+  "tasks": [
+   "next_move"
+  ],
+  "n_test_games": 40,
+  "limited": true,
+  "baseline": true,
+  "torch": "2.14.1+cu126",
+  "seconds": 5.4
+ },
+ "models": [
+  {
+   "name": "nextpick-proonly-nov13-k5-through-lcp-df-sw",
+   "task": "next_move",
+   "track": "pro",
+   "archived": false,
+   "comparable": true,
+   "kind": "torch",
+   "params": 3350879,
+   "split_note": "",
+   "path": "pro/model/checkpoints/nextpick-proonly-nov13-k5-through-lcp-df-sw/best.pt"
+  },
+  {
+   "name": "nextpick-policy",
+   "task": "next_move",
+   "track": "soloq",
+   "archived": false,
+   "comparable": false,
+   "kind": "torch",
+   "params": null,
+   "split_note": "different split: train=42100, val=4768, test=7",
+   "path": "solo_queue/model/checkpoints/nextpick-policy/best_policy.pt"
+  }
+ ],
+ "next_move": {
+  "00-frequency-table": {
+   "name": "00-frequency-table",
+   "path": null,
+   "track": "baseline",
+   "archived": false,
+   "comparable": true,
+   "split_note": "",
+   "kind": "frequency",
+   "params": 114180,
+   "baseline": true,
+   "n_patches": null,
+   "seconds": 0.0,
+   "split_counts": {
+    "train": 39720,
+    "val": 4771,
+    "test": 2448
+   },
+   "agg": {
+    "n": 800,
+    "top1": 0.10125,
+    "top1_ci": [
+     0.08221483326810196,
+     0.12409645990209477
+    ],
+    "top5": 0.3225,
+    "top5_ci": [
+     0.2910231774471024,
+     0.35567338565687234
+    ],
+    "top10": 0.475,
+    "top10_ci": [
+     0.44059716295462664,
+     0.509641789595229
+    ],
+    "mean_rank": 18.5525
+   },
+   "by_phase": {
+    "ban1": {
+     "n": 240,
+     "top1": 0.14583333333333334,
+     "top5": 0.42083333333333334,
+     "mean_rank": 14.95
+    },
+    "pick1": {
+     "n": 240,
+     "top1": 0.10833333333333334,
+     "top5": 0.32916666666666666,
+     "mean_rank": 17.483333333333334
+    },
+    "ban2": {
+     "n": 160,
+     "top1": 0.06875,
+     "top5": 0.2125,
+     "mean_rank": 20.65
+    },
+    "pick2": {
+     "n": 160,
+     "top1": 0.05625,
+     "top5": 0.275,
+     "mean_rank": 23.4625
+    }
+   },
+   "paired": {
+    "vs": "nextpick-proonly-nov13-k5-through-lcp-df-sw",
+    "n_paired": 800,
+    "this_only": 27,
+    "reference_only": 97,
+    "delta_top1": -0.0875,
+    "chi2": 38.395161290322584,
+    "p": 5.777546975689764e-10
+   }
+  },
+  "nextpick-proonly-nov13-k5-through-lcp-df-sw": {
+   "name": "nextpick-proonly-nov13-k5-through-lcp-df-sw",
+   "path": "pro/model/checkpoints/nextpick-proonly-nov13-k5-through-lcp-df-sw/best.pt",
+   "track": "pro",
+   "archived": false,
+   "comparable": true,
+   "split_note": "",
+   "split_counts": {
+    "n_train": 39720,
+    "n_val": 4771,
+    "n_test": 2448
+   },
+   "kind": "policy",
+   "params": 3350879,
+   "n_patches": 108,
+   "seconds": 0.9,
+   "agg": {
+    "n": 800,
+    "top1": 0.18875,
+    "top1_ci": [
+     0.16314509485712825,
+     0.21732986438857388
+    ],
+    "top5": 0.4975,
+    "top5_ci": [
+     0.4629470373432893,
+     0.5320768579116963
+    ],
+    "top10": 0.66125,
+    "top10_ci": [
+     0.6277518083902214,
+     0.6932069476632101
+    ],
+    "mean_rank": 9.83125,
+    "mean_prob": 0.09811667834716672
+   },
+   "by_phase": {
+    "ban1": {
+     "n": 240,
+     "top1": 0.16666666666666666,
+     "top5": 0.3958333333333333,
+     "mean_rank": 13.745833333333334
+    },
+    "pick1": {
+     "n": 240,
+     "top1": 0.2125,
+     "top5": 0.5375,
+     "mean_rank": 8.475
+    },
+    "ban2": {
+     "n": 160,
+     "top1": 0.1625,
+     "top5": 0.48125,
+     "mean_rank": 10.075
+    },
+    "pick2": {
+     "n": 160,
+     "top1": 0.2125,
+     "top5": 0.60625,
+     "mean_rank": 5.75
+    }
+   }
+  },
+  "nextpick-policy": {
+   "name": "nextpick-policy",
+   "path": "solo_queue/model/checkpoints/nextpick-policy/best_policy.pt",
+   "track": "soloq",
+   "archived": false,
+   "comparable": false,
+   "split_note": "different split: train=42100, val=4768, test=7",
+   "split_counts": {
+    "n_train": 42100,
+    "n_val": 4768,
+    "n_test": 7
+   },
+   "kind": "policy",
+   "params": 31897631,
+   "n_patches": 107,
+   "seconds": 3.1,
+   "agg": {
+    "n": 800,
+    "top1": 0.065,
+    "top1_ci": [
+     0.049910060890947544,
+     0.08424771347653978
+    ],
+    "top5": 0.23,
+    "top5_ci": [
+     0.2021693046629095,
+     0.2604113828755309
+    ],
+    "top10": 0.35375,
+    "top10_ci": [
+     0.3213879041519419,
+     0.38750996826471334
+    ],
+    "mean_rank": 29.13125,
+    "mean_prob": 0.040268559541155
+   },
+   "by_phase": {
+    "ban1": {
+     "n": 240,
+     "top1": 0.07083333333333333,
+     "top5": 0.20833333333333334,
+     "mean_rank": 37.4
+    },
+    "pick1": {
+     "n": 240,
+     "top1": 0.058333333333333334,
+     "top5": 0.225,
+     "mean_rank": 30.1125
+    },
+    "ban2": {
+     "n": 160,
+     "top1": 0.03125,
+     "top5": 0.19375,
+     "mean_rank": 25.9625
+    },
+    "pick2": {
+     "n": 160,
+     "top1": 0.1,
+     "top5": 0.30625,
+     "mean_rank": 18.425
+    }
+   },
+   "paired": {
+    "vs": "nextpick-proonly-nov13-k5-through-lcp-df-sw",
+    "n_paired": 800,
+    "this_only": 17,
+    "reference_only": 116,
+    "delta_top1": -0.12375,
+    "chi2": 72.21052631578948,
+    "p": 1.934212630650978e-17
+   }
+  }
+ }
+}

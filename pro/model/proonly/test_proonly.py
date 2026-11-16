@@ -207,11 +207,11 @@ def test_frontier_does_not_parse_the_series_id():
 
 
 def test_check_out_dir_name_rejects_a_stale_name():
-    C.check_out_dir_name("pro/model/checkpoints/masking-proonly-through-wlds-ig-tes",
+    C.check_out_dir_name("pro/model/archive/checkpoints/masking-proonly-through-wlds-ig-tes",
                          "through-wlds-ig-tes", "x")
     C.check_out_dir_name("", "through-wlds-ig-tes", "x")   # smoke runs
-    for bad in ("pro/model/checkpoints/masking-proonly",
-                "pro/model/checkpoints/masking-proonly-through-wlds-g2-hle"):
+    for bad in ("pro/model/archive/checkpoints/masking-proonly",
+                "pro/model/archive/checkpoints/masking-proonly-through-wlds-g2-hle"):
         try:
             C.check_out_dir_name(bad, "through-wlds-ig-tes", "suggested")
         except SystemExit as exc:

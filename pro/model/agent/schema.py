@@ -60,7 +60,7 @@ SIDES = ("blue", "red")
 # counting, so the *prompt* has to carry the rule.
 MIN_CELL = 30
 
-# The one shared split, exactly as `pro/model/llm/common.py: SPLIT` defines it.
+# The one shared split, exactly as `pro/model/archive/llm/common.py: SPLIT` defines it.
 # The defaults of `split_within_patch` are NOT these - they draw a fractional
 # test tail and take each patch's newest series, which gives 42,134 / 4,774 / 7
 # instead of 42,145 / 4,763 / 7. Eleven games is a rounding error and the wrong

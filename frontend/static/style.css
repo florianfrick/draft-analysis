@@ -30,6 +30,10 @@ button:disabled:hover { background: #2a3140; }
   padding: 8px 18px; background: #191f16;
   border-bottom: 1px solid var(--line);
 }
+/* An ID selector beats `.hidden`, so the collapsed state needs its own rule -
+   otherwise the walkthrough bar stays visible behind its own toggle. */
+#wt-bar.hidden { display: none; }
+#btn-wt.open { border-color: var(--acc); color: #c7ebc7; }
 #wt-bar .wt-title { color: var(--acc); font-weight: 600; }
 #wt-bar select, #wt-bar input {
   background: #12151b; color: var(--text); border: 1px solid var(--line);
@@ -107,6 +111,12 @@ button:disabled:hover { background: #2a3140; }
 main {
   display: grid; grid-template-columns: 1fr 1fr; gap: 18px;
   padding: 18px; max-width: 1400px; margin: 0 auto;
+}
+/* First pick and reset belong to the game on the board, not to the header:
+   both change the draft directly, so they sit above the two side panels. */
+.board-tools {
+  grid-column: 1 / -1; display: flex; align-items: center; gap: 10px;
+  flex-wrap: wrap;
 }
 .team {
   background: var(--panel); border: 1px solid var(--line);
@@ -188,7 +198,7 @@ main {
 .rb.alt { background: #3a3a26; border-color: #c9a94b; color: #ecd98f; }
 .rb.muted-r { color: var(--muted); }
 
-/* role board: five role-ordered slots per team (TOP..UTILITY).
+/* role board: five role-ordered slots per team (TOP..SUPPORT).
    Same box as a pick slot (.slot) on purpose - the two strips are a
    matched pair, so the role label rides on the icon as a tag instead of
    taking a line of its own. */
@@ -222,22 +232,6 @@ main {
 .role-slot .mini { display: flex; gap: 2px; }
 .ic.mini { width: 14px; height: 14px; border-radius: 3px; }
 
-/* suggestions per role */
-.sugs-head { margin: 12px 0 6px; font-weight: 600; font-size: 13px; }
-.sugs-head .muted { font-weight: 400; font-size: 11px; }
-.sug-row { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 5px; }
-.sug-row .rt {
-  min-width: 62px; color: var(--muted); font-size: 11px; font-weight: 700;
-  letter-spacing: .5px; padding-top: 8px;
-}
-.chips { display: flex; gap: 6px; flex-wrap: wrap; }
-.sug {
-  display: flex; align-items: center; gap: 6px; background: #232a36;
-  border: 1px solid var(--line); padding: 3px 8px 3px 4px;
-  border-radius: 8px; font-size: 12px;
-}
-.sug:hover { border-color: var(--acc); }
-.sug .ic { width: 32px; height: 32px; }
 .sug .p {
   color: var(--muted); font-variant-numeric: tabular-nums; font-size: 11px;
 }
@@ -246,8 +240,6 @@ main {
   background: #4a3d17; color: #ecd98f; border-radius: 8px;
   font-size: 10px; font-weight: 700; padding: 0 5px;
 }
-footer { padding: 8px 18px; border-top: 1px solid var(--line);
-  font-size: 12px; }
 #picker {
   position: fixed; inset: 0; background: rgba(0,0,0,.6);
   display: flex; align-items: center; justify-content: center; z-index: 10;
@@ -276,16 +268,6 @@ footer { padding: 8px 18px; border-top: 1px solid var(--line);
 .champ:hover { border-color: var(--blue); }
 .champ .ic { width: 34px; height: 34px; }
 
-.model-pick { display: flex; gap: 6px; align-items: center; }
-.model-pick .mp-label {
-  font-size: 11px; font-weight: 600; letter-spacing: .4px; color: var(--muted);
-  text-transform: uppercase; min-width: 62px;
-}
-.model-pick select {
-  background: #12151b; color: var(--text); border: 1px solid var(--line);
-  border-radius: 6px; padding: 5px 6px; font: inherit; max-width: 300px;
-}
-#model-info { font-size: 12px; }
 #board-error {
   margin: 0; padding: 7px 18px; font-size: 13px;
   background: #3a2320; color: #f0b8a8;
@@ -313,200 +295,54 @@ footer { padding: 8px 18px; border-top: 1px solid var(--line);
   background: #3a2a12; border: 1px solid #6b4a1d; color: #f0c785;
 }
 .nm-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+/* The agent opens directly below the head's suggestion, so the two ways of
+   answering "what next?" are adjacent rather than one in the header. */
+.agent-open {
+  max-width: 1400px; margin: 10px auto 0; display: flex;
+  align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.agent-open .muted { font-size: 12px; }
 .nm-chip {
   display: flex; align-items: center; gap: 7px; padding: 5px 9px;
   background: #232a36; border: 1px solid var(--line); border-radius: 8px;
-  font-size: 13px;
+  font-size: 13px; width: 140px; box-sizing: border-box;
 }
 .nm-chip:hover { border-color: var(--acc); }
-.nm-chip .ic { width: 30px; height: 30px; }
-.nm-chip .p { color: var(--muted); font-variant-numeric: tabular-nums; }
-/* The reranker's choice: the chip is the same button, marked so the head's
-   ranking is still readable underneath it. */
-.nm-chip.llm-pick { border-color: var(--acc); background: #2a3446; }
-.nm-llm {
-  font-size: 10px; letter-spacing: .04em; text-transform: uppercase;
-  padding: 1px 5px; border-radius: 4px; background: var(--acc); color: #11161f;
-}
-.nm-lane-sel {
-  background: #232a36; color: inherit; border: 1px solid var(--line);
-  border-radius: 6px; font-size: 12px; padding: 1px 4px;
-}
-.nm-assumed { color: var(--muted); font-size: 11px; }
+.nm-chip .ic { width: 30px; height: 30px; flex: 0 0 auto; }
+.nm-chip .nm { flex: 1 1 auto; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nm-chip .p { color: var(--muted); font-variant-numeric: tabular-nums; flex: 0 0 auto; }
 
-/* The chat's ranking of the same board, one row under the head's. Dashed and
-   blue rather than solid and green: it is a second opinion, not the model's
-   own answer, and the tag plus the quoted message say whose it is. */
-.nm-chat-row {
-  margin-top: 9px; padding: 8px 10px 9px; border-radius: 8px;
-  background: #1b2130; border: 1px dashed #3a4a66;
+/* Agent suggestions: the reranked top-k, a column beside the head's own list
+   (#nextmove). It is the same "what next?" question, answered by the agent
+   instead of the head, so the two sit one above the other. */
+#agentsuggest {
+  max-width: 1400px; margin: 10px auto 0; padding: 10px 14px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
 }
-.nm-chat-row.hidden { display: none; }
-.nm-cc-head {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  font-size: 12px;
-}
-.nm-cc-tag {
-  font-size: 10px; letter-spacing: .04em; text-transform: uppercase;
-  padding: 1px 5px; border-radius: 4px; background: #2f4260; color: #cfe0f5;
-}
-.nm-cc-lam { color: #9ec1ea; font-variant-numeric: tabular-nums; }
-.nm-cc-move { font-variant-numeric: tabular-nums; }
-.nm-cc-same { color: var(--muted); }
-.nm-cc-msg {
-  color: var(--muted); font-style: italic; max-width: 40ch;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.nm-cc-unit { color: var(--muted); font-size: 11px; }
-.nm-cc-close {
-  background: none; border: 0; color: var(--muted); cursor: pointer;
-  font: inherit; padding: 0 2px;
-}
-.nm-cc-close:hover { background: none; color: var(--text); }
-.nm-cc-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
-.nm-chip.nm-cc-chip { background: #202836; border-style: dashed; }
-.nm-chip.nm-cc-chip.named {
-  background: #24314a; border-style: solid; border-color: #4a6c9c;
-}
-.nm-cc-rank { color: #9ec1ea; font-size: 11px; font-variant-numeric: tabular-nums; }
-.nm-cc-gap { color: var(--muted); align-self: center; }
+#agentsuggest.hidden { display: none; }
+.nm-title { font-size: 15px; font-weight: 600; }
+.nm-title .muted { font-weight: 400; font-size: 12px; }
+.nm-subtitle { font-size: 13px; font-weight: 600; color: var(--text); margin-top: 6px; }
+.agent-feat { display: flex; align-items: center; gap: 5px; font-size: 13px; cursor: pointer; }
 
 /* a next-move policy is role-free: the role board does not apply */
 body.no-role-model .role-row { display: none; }
 
-/* --- explanation panel ------------------------------------------------ */
-#explain {
-  max-width: 1400px; margin: 14px auto 0; padding: 12px 14px;
-  background: var(--panel); border: 1px solid var(--line);
-  border-left: 3px solid var(--acc); border-radius: 10px;
-}
-#explain.hidden { display: none; }
-
-/* --- which-draft-is-better panel -------------------------------------- */
-#compare {
-  max-width: 1400px; margin: 14px auto 0; padding: 12px 14px;
-  background: var(--panel); border: 1px solid var(--line);
-  border-left: 3px solid var(--acc); border-radius: 10px;
-}
-#compare.hidden { display: none; }
-#cmp-title { font-size: 15px; font-weight: 600; color: var(--acc); }
-#cmp-meta { font-size: 12px; }
-.cs-side {
-  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-  padding: 7px 10px; margin-bottom: 5px; font-size: 12px;
-  background: #1f2530; border: 1px solid var(--line); border-radius: 8px;
-}
-.cs-side .cs-who { font-weight: 600; min-width: 40px; }
-.cs-side .cs-n, .cs-side .cs-rank, .cs-side .cs-top1, .cs-side .cs-worst {
-  color: var(--muted); font-variant-numeric: tabular-nums;
-}
-.cs-side .cs-share { color: var(--acc); font-variant-numeric: tabular-nums; }
-.cs-picks { display: flex; flex-direction: column; gap: 3px; }
-.cs-pick {
-  display: grid;
-  grid-template-columns: 26px 34px 1fr 62px 52px 70px 1fr;
-  gap: 8px; align-items: center; padding: 3px 9px; font-size: 12px;
-  background: #1f2530; border-radius: 6px;
-}
-.cs-pick.blue { border-left: 2px solid #4a7fb5; }
-.cs-pick.red { border-left: 2px solid #b5544a; }
-.cs-pick .cs-mv, .cs-pick .cs-sd { color: var(--muted); }
-.cs-pick .cs-sd { text-transform: capitalize; }
-.cs-pick .cs-ch { display: flex; align-items: center; gap: 6px; font-weight: 600; }
-.cs-pick .cs-ch .ic { width: 22px; height: 22px; }
-.cs-pick .cs-rk, .cs-pick .cs-pr { font-variant-numeric: tabular-nums; }
-.cs-pick .cs-pr { color: var(--muted); }
-.cs-pick .cs-bar {
-  height: 6px; background: #2c3441; border-radius: 3px; overflow: hidden;
-}
-.cs-pick .cs-bar i { display: block; height: 100%; background: var(--acc); }
-.cs-pick .cs-bs { color: var(--muted); }
+/* --- the agent panel's header (shared with the other prose panels) ------ */
 .ex-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-#ex-title { font-size: 15px; font-weight: 600; color: var(--acc); }
-#ex-meta { font-size: 12px; }
-.ex-busy { color: var(--muted); font-size: 13px; padding: 10px 0 2px; }
-.ex-busy::after { content: '…'; animation: exdots 1.2s steps(4) infinite; }
-@keyframes exdots { 0% { opacity: .2 } 50% { opacity: 1 } 100% { opacity: .2 } }
 
-/* the model's own account */
-.ex-steps { margin: 10px 0 4px; padding-left: 22px; }
-.ex-steps li { margin-bottom: 5px; font-size: 13px; }
-.ex-steps li::marker { color: var(--acc); font-variant-numeric: tabular-nums; }
-.ex-note {
-  font-size: 11px; color: var(--muted); margin: 2px 0 10px;
-  padding-left: 22px;
-}
-
-/* the structured answer */
-.ex-answer { display: grid; grid-template-columns: 92px 1fr; gap: 6px 12px;
-  margin: 10px 0; font-size: 13px; }
-.ex-answer .k {
-  color: var(--muted); font-size: 11px; letter-spacing: .4px;
-  text-transform: uppercase; padding-top: 2px;
-}
-.ex-answer .v { line-height: 1.45; }
-.ex-pick {
-  display: inline-flex; align-items: center; gap: 7px; padding: 2px 9px 2px 3px;
-  background: #232a36; border: 1px solid var(--acc); border-radius: 8px;
-  font-weight: 600; font-size: 13px;
-}
-.ex-pick .ic { width: 26px; height: 26px; }
-.ex-pick .p { color: var(--muted); font-weight: 400; font-size: 11px; }
-
-/* evidence: what was actually checked */
-.ex-sub {
-  margin: 14px 0 6px; font-size: 12px; color: var(--muted);
-  letter-spacing: .3px; border-top: 1px solid var(--line); padding-top: 10px;
-}
-.ex-ev { display: flex; flex-direction: column; gap: 6px; }
-.ex-game {
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  padding: 6px 9px; background: #232a36; border: 1px solid var(--line);
-  border-radius: 8px; font-size: 12px;
-}
-.ex-game .gid { font-family: ui-monospace, Consolas, monospace; font-size: 11px;
-  color: var(--muted); }
-.ex-game .who { font-weight: 600; }
-.ex-game .ov { color: var(--acc); font-variant-numeric: tabular-nums; }
-.ex-game .res { color: var(--muted); }
-.ex-line {
-  padding: 6px 9px; background: #232a36; border: 1px solid var(--line);
-  border-left: 3px solid #c9a94b; border-radius: 6px;
-  font-size: 12px; white-space: pre-wrap;
-}
-.ex-drop {
-  margin-top: 10px; padding: 7px 9px; font-size: 12px; border-radius: 6px;
-  background: #3a2a12; border: 1px solid #6b4a1d; color: #f0c785;
-}
-.ex-drop ul { margin: 4px 0 0; padding-left: 18px; }
-.ex-drop code { font-family: ui-monospace, Consolas, monospace; }
-.ex-empty {
-  padding: 8px 9px; font-size: 12px; border-radius: 6px; color: var(--muted);
-  background: #1a1f27; border: 1px dashed var(--line);
-}
-.ex-ret { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
-.ex-ret .r {
-  display: grid; grid-template-columns: 1fr 78px 54px; gap: 10px;
-  align-items: center; padding: 3px 9px; background: #1f2530;
-  border-radius: 6px;
-}
-.ex-ret .r .ov-bar { height: 5px; background: #2c3340; border-radius: 3px; }
-.ex-ret .r .ov-bar i { display: block; height: 100%; background: var(--acc);
-  border-radius: 3px; }
-.ex-ret .r .ov-n { text-align: right; color: var(--muted);
-  font-variant-numeric: tabular-nums; }
-#ex-reask.hidden, #ex-close.hidden { display: none; }
-
-/* --- chat panel ------------------------------------------------------- */
-#chat {
+/* --- agent panel ------------------------------------------------------- */
+#agent {
   max-width: 1400px; margin: 14px auto 0; padding: 12px 14px;
   background: var(--panel); border: 1px solid var(--line);
   border-left: 3px solid var(--acc); border-radius: 10px;
 }
-#chat.hidden { display: none; }
-#chat-title { font-size: 15px; font-weight: 600; color: var(--acc); }
-#chat-meta { font-size: 12px; }
-#chat-log {
+#agent.hidden { display: none; }
+#agent-title { font-size: 15px; font-weight: 600; color: var(--acc); }
+.agent-model { color: var(--text); font-weight: 500; margin-left: 8px; font-size: 13px; }
+#agent-meta { font-size: 12px; }
+#agent-log {
   display: flex; flex-direction: column; gap: 8px; margin: 10px 0;
   max-height: 380px; overflow-y: auto; padding-right: 6px;
 }
@@ -515,22 +351,29 @@ body.no-role-model .role-row { display: none; }
   background: #1f2530; border: 1px solid var(--line); max-width: 92%;
 }
 .chat-msg p { margin: 0; }
+.chat-msg code { background: #2a3140; padding: 1px 5px; border-radius: 4px;
+  font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .chat-user { align-self: flex-end; background: #223047; border-color: #2f4260; }
 .chat-system { color: var(--muted); font-size: 12px; border-style: dashed; }
+.board-change { background: #273040; }
 .chat-pending { color: var(--muted); font-style: italic; }
 .chat-error { background: #3a1d1d; border-color: #6b2a2a; color: #f0a5a5; }
-.chat-facts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
-.chat-chip {
-  font-size: 11px; padding: 2px 7px; border-radius: 999px;
-  background: #2a3140; border: 1px solid var(--line);
-  font-variant-numeric: tabular-nums;
+
+/* the one-click agent suggestion: one move, parsed out of the prose */
+.chat-suggest {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 7px; padding: 6px 9px; border-radius: 6px;
+  background: #223047; border: 1px solid #2f4260;
 }
-.chat-chip.win { background: #1e3a24; border-color: #2f6b3a; color: #9ee0a8; }
-.chat-pick {
-  display: flex; align-items: center; gap: 8px; margin-top: 8px;
-  font-size: 13px; font-weight: 600;
+.chat-suggest b { font-size: 15px; color: var(--acc); }
+.chat-suggest .cs-kind {
+  font-size: 10px; padding: 1px 6px; border-radius: 999px;
+  background: #2a3140; border: 1px solid var(--line); color: var(--muted);
 }
-.chat-pick .ic { width: 28px; height: 28px; border-radius: 5px; }
+.chat-suggest .cs-note { color: var(--muted); font-size: 11px; }
+.chat-suggest .cs-play { padding: 3px 9px; font-size: 11px; }
+.chat-suggest.bad { background: #3a1d1d; border-color: #6b2a2a; }
+.chat-suggest.bad b { color: #f0a5a5; }
 .chat-ev { margin-top: 8px; font-size: 12px; }
 .chat-ev summary { cursor: pointer; color: var(--muted); }
 .chat-ev-row { padding: 3px 0; border-top: 1px solid var(--line); }
@@ -539,9 +382,9 @@ body.no-role-model .role-row { display: none; }
   font-size: 10px; padding: 0 5px; border-radius: 999px;
   background: #3a2a12; border: 1px solid #6b4a1d; color: #f0c785;
 }
-#chat-form { display: flex; gap: 8px; }
-#chat-input {
+#agent-form { display: flex; gap: 8px; }
+#agent-input {
   flex: 1; background: #12151b; color: var(--text); border: 1px solid var(--line);
   border-radius: 6px; padding: 7px 9px; font: inherit;
 }
-#chat-input:focus { outline: 1px solid var(--acc); }
+#agent-input:focus { outline: 1px solid var(--acc); }

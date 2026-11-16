@@ -23,6 +23,12 @@ duckdb==1.4.1
 # --- training / tracking ----------------------------------------------------
 wandb==0.22.3
 
+# --- the frontend's agent loop (pro/model/agent/loop.py) --------------------
+# Only the graph is needed: the model itself is a remote API reached with
+# urllib, so there is no transformers/torch dependency here. Absent, the
+# server still starts and `/api/agent` answers 503 with the reason.
+langgraph==1.0.4
+
 # --- data collection (Riot API client) --------------------------------------
 aiohttp==3.13.2
 

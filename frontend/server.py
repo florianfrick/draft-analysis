@@ -3,26 +3,60 @@
 Run:    python frontend/server.py --port 8777
 Open:   http://127.0.0.1:8777   (binds 127.0.0.1 only - no external access)
 
-UI: 5 ban + 5 pick slots per team (horizontal, role-free; the next pro
-pick/ban to move is HIGHLIGHTED, never enforced - sequence follows
-solo_queue/model/README.md draft format, mirrored when red has first pick), a role
-board per team (TOP..UTILITY, picked champs placed in their assigned role,
-empty roles showing the champion that role is looking for), dDragon
-champion art (https://ddragon.leagueoflegends.com/cdn/16.20.1/img/champion/
-... via the manifest, cached, deterministic name fallback offline), and a
-walkthrough of real pro games (GET /api/drafts + GET /api/draft) showing
-what the model suggested vs what the pros actually moved.
+Five things, and the board is the only one that is not a question:
+
+  **the board** - 5 ban + 5 pick slots per team (horizontal, role-free; the next
+  pro pick/ban to move is HIGHLIGHTED, never enforced - sequence follows
+  solo_queue/model/README.md draft format, mirrored when red has first pick),
+  dDragon champion art (https://ddragon.leagueoflegends.com/cdn/16.20.1/img/
+  champion/ ... via the manifest, cached, deterministic name fallback offline),
+  a fearless series bar, and a walkthrough of real pro games (GET /api/drafts +
+  GET /api/draft) showing what the pros actually moved.
+
+  **the next move** (`POST /api/next-move`) - the head's ranked list for the
+  side on the clock, each champion with its share of the legal pool.
+
+  **the role board** (`POST /api/suggest`) - each team's five roles, the picked
+  champions placed in the role the corpus says they fill, and for every role
+  still open the champion the next-move head would take for it. One cell is one
+  `predict_in_lane` question; the answer says which model answered it
+  (`method`), because the head can only be asked on a pick move.
+
+  **the agent** (`POST /api/agent`) - one turn of an LLM that holds the board
+  as an object (`pro/model/agent/`), calls the models and the corpus through
+  tools, and answers in prose. This replaced the breakdown page, the draft-score
+  comparison and the rule-based chat: one surface that can be asked anything,
+  instead of four that each answered a fixed question.
+
+  **the agent's suggestion** (`POST /api/agent-suggest`) - the same LLM, one
+  click, asked the fixed reranking question (`pro/model/agent/suggest.py`) with
+  SQL ablated and the explained prompt: it reads the live state, calls the head
+  and the lane table through tools, and commits to one champion. The panel shows
+  the parsed move, the head's own #1 for comparison, and the tool log.
 
 Two model slots, loaded at the same time and chosen independently:
-  * role model (masking: `masking-*` checkpoints) - the role head and the
-    per-role MASK queries, i.e. /api/suggest.
-  * next-move model (`nextpick-*` checkpoints) - /api/next-move and
-    /api/explain. Optional (--no-policy runs the role board alone).
+  * role model (masking: `masking-*` checkpoints) - answers a role question
+    during the ban phase, when the head cannot. Drives the role board's empty
+    cells in phase 1.
+  * next-move model - the 4B reranker (`llm-*`, the default when it can be
+    built) or the head (`nextpick-*`, the fallback). Answers the board question,
+    the role question on a pick move, and the agent's `predict_next_move`.
+    Optional (`--no-policy` runs the role board alone, and the agent still
+    works - it just cannot rank a move).
+
+Both slots are bound into one `engine.Engine`, which is what a draft state asks
+its questions through. The server never hands a board to a model function: it
+publishes the board to the state store, and the state carries the answers.
+That publish is also where the rest of the game arrives - patch, first pick,
+the fearless pool and which game of the series this is - so an agent turn reads
+one object rather than a board retyped into a prompt.
+
 Every kept artefact lives in <track>/model/checkpoints/<name>/ - the track is
 `solo_queue/` or `pro/` - and the directory name *is* the contract: the prefix
 states which inference the checkpoint can do, the suffix which stage produced it.
-Both stores are globbed and offered in the same dropdown; the shipped defaults
-are pro-track because the pro-only recipe is the better model.
+Models are chosen with `--ckpt` / `--policy-ckpt` when the server starts. There
+is no browser picker: the header only reports which two checkpoints are live.
+Both defaults are pro-track, because the pro-only recipe is the better model.
 
   masking-soloqueue   soloQ-pretrained encoder (masking-finetune's init)
   masking-finetune    soloQ encoder fine-tuned on pro drafts
@@ -31,10 +65,14 @@ are pro-track because the pro-only recipe is the better model.
   nextpick-proonly    pro drafts only, encoder + policy head from scratch
                       (through 2026-10-31)
   nextpick-bans-*     the pro-only policy with the ban-awareness flags on
-                      (`ban_side`, `ban_fearless`, `counter_rank`); the
-                      `aware` arm is the shipped next-move default
+                      (`ban_side`, `ban_fearless`, `counter_rank`); selectable
+                      via --policy-ckpt, no longer the default
   nextpick-proto-ensemble   `ensemble.json`: the mean of three nextpick
                       members' policy logits (selectable, no longer default)
+  llm-lora-rerank5    the 4.2 B Qwen adapter over the head's top 20 (a
+                      directory: adapter/ + projector.pt; the trunk comes from
+                      the `llm` image). `--rerank` serves it; it is not the
+                      default (README, "What the reranker is worth")
 
 A `-through-<league>-<a>-<b>` suffix states which series the training data ends
 on, so two runs of the same stage are distinguishable and a stale artefact
@@ -44,45 +82,88 @@ cannot pass for a fresh one:
   nextpick-proonly-through-wlds-ig-tes   the same data, next-move head
   masking-proonly-randomvalsplit-through-wlds-ig-tes    same data, val drawn
   nextpick-proonly-randomvalsplit-through-wlds-ig-tes   at random per patch
+  masking-proonly-nov13-through-lcp-df-sw   46,939 drafts (2026-11-13 export)
+  nextpick-proonly-nov13-k5-through-lcp-df-sw   the same, 5 prefixes/game
 
-The `-randomvalsplit-` pair is the shipped default for the ROLE board: same
-corpus and frontier as the other `-through-` pair, but val is a seeded random
-10% of *every* patch instead of each patch's tail, so 90% of every patch -
-including its end - is trained on. Neither pair holds a held-out number (both
-train with `--no-test`), so `STATUS.md` §7 - the pinned-test scores - still
-belongs to the originals; the only honest comparison for these is
-`compare.py --split shared --other old` against an original, which is in §7 too.
+BOTH slots ship on the `-nov13-` pair - `MASKED_DEFAULT` and `POLICY_DEFAULT`.
+That pair is a different corpus, not a newer run of the old one: the corpus
+freeze is lifted (`--corpus 2022-full`, 46,939 drafts through 2026-11-13), the
+pinned test series are ordinary rows (`--no-pin`), and the split is the
+fractional 85/10/5 within-patch tail. The policy also trains on `--prefix-k 5`
+(5 distinct prefixes per game per epoch) instead of one.
 
-The next-move default is `nextpick-bans-aware-through-wlds-ig-tes`: the
-pro-only policy plus all three ban-awareness flags, so the ban block (side and
-fearless pool included) is a real input instead of something the model has to
-infer from which champions are already gone. It replaced the 3-member
-`nextpick-proto-ensemble`, which stays selectable.
+So **none of its numbers are comparable with the `-wlds-ig-tes` rows** in
+`STATUS.md` §7: different corpus, different split, different test set. On its
+own 2,448-game fractional test split it scores top-5 0.5083 (rel 3.36x), and a
+paired bootstrap puts it +2.55 pp over the same recipe with one prefix
+(CI [+2.22, +2.87], p 2.7e-51). Use that split, not §7, for any comparison.
 
-The two defaults are not justified the same way, and the difference matters.
-The ban-aware arm's number is a **val** score on the same split its control
-trained and selected under (aware 0.5056 vs control 0.4995 top-5, +0.60 pp,
-paired bootstrap p = 4.3e-8), and it is a **single seed** - the single-switch
-arms are flat, so the split between interaction and seed luck is unresolved
-(`pro/model/bans/README.md`). The ensemble's +1.33 pp was measured on the 439
-draft rows neither it nor its predecessor had trained on, which is a different
-and harder set; do not read the two as comparable, and do not add them.
+The `-randomvalsplit-` pair and the two former next-move defaults
+(`nextpick-bans-aware-through-wlds-ig-tes`, the pro-only policy plus all three
+ban-awareness flags, and the 3-member `nextpick-proto-ensemble/ensemble.json`)
+remain **CLI-selectable**. Their numbers must not be added to the nov13 pair's
+or to each other: the ban-aware arm's +0.60 pp (0.5056 vs 0.4995 top-5,
+paired bootstrap p = 4.3e-8) is a **val** score on the split its control
+trained and selected under and is a single seed (`pro/model/archive/bans/README.md`);
+the ensemble's +1.33 pp was measured on 439 draft rows neither it nor its
+predecessor had trained on, a different and harder set.
 
-`_ckpt_roles` reads that prefix, so the dropdown never offers a policy
-checkpoint to the role board. Select via --ckpt / --policy-ckpt (CLI), the
-two header dropdowns (GET /api/checkpoints + POST /api/load with a `role`),
-or "From file..." (POST /api/upload -> saved under frontend/uploaded/, offered
-in both slots and validated on load).
+**Where the weights live.** `pro/model/checkpoints/` holds exactly the shipped
+pair and nothing else; every other checkpoint named above is under
+`pro/model/archive/checkpoints/`. That is why `PRO_CKPT_DIR` (defaults) and
+`ARCHIVE_CKPT_DIR` (everything a flag can reach) are separate constants: a
+future edit cannot promote an archived arm to a default by dropping a directory
+in the wrong store. `pro/model/test_split/suite.py` is the harness that scores
+any of them on the canonical split, and it is the number to use for a
+comparison - not §7.
+
+Select with `--ckpt` / `--policy-ckpt` / `--rerank` / `--no-policy` at startup.
+The
+`GET /api/checkpoints`, `POST /api/load` and `POST /api/upload` routes still
+exist as a local scripting surface (and are tested), but no page offers them:
+swapping weights mid-draft would leave every answer in flight describing the
+previous model. `_ckpt_roles` reads the directory prefix so a policy
+checkpoint can never be filed into the role slot.
+
+The next-move slot ships the head. The 4B reranker is one flag away
+(`--rerank`), and it is not the default because the number that would have made
+it the default does not survive a served comparison:
+
+    reranker, task line names the lane ("for Top lane")   34.27 %
+    reranker, no lane (what this panel actually asks)     20.85 %
+    head that proposed those candidates (bans-aware)      18.25 %
+    shipped head, same rows, served                       24.90 %
+
+Four arms, one slice of 4,000 held-out states, and only the first is above the
+head - because `target_role` in the training rows is the *true* lane of the
+pro's pick, i.e. that arm is handed part of the answer. The 20.85 % row is the
+panel's question, and it is on candidates that were not legality-filtered, so it
+is not even a clean +2.6 against the 18.25 it is usually quoted against; the
+24.90 is the shipped head on the same rows but the `-nov13-` head trained on a
+different split, so it is not a held-out number either. `--rerank` therefore
+stays opt-in and a build failure is fatal. The role board is the surface where
+the lane *is* the question, and it is the reason to keep the wiring:
+`pro/model/archive/llm/eval_role_cells.py` measures it (result in STATUS.md §9).
+
+The mechanism behind the 13.4 pp gap: the training rows carry the pro's *true*
+role, so the lane clause is a hint about the answer, and the adapter learned to
+use it. A role-board cell names a lane as the *question* ("what is red's
+jungle"), which is a different and legitimate use of the same clause - that is
+why the flag is worth keeping even though the panel's arm is thin.
 
 Inference contract (solo_queue/model/README.md): every empty slot is a MASK query
 with its ROLE GIVEN (role-conditional, matches the 10% role-visible
 training condition); no PADs ever, so a team is never fully padded.
 Bans are NOT model inputs - applied as a post-filter (the model already
--inf's already-picked visible champs). suggest() runs 1 FLEX-role pass
-(role head over the picked champs -> the one-to-one role assignment, with
-the slot just filled pinned first) plus <=5 role-conditioned MASK passes
-(every role queried for both teams); pick-order slots are fine - the
-encoder is permutation-invariant within a team.
+-inf's already-picked visible champs). The masking path runs one
+role-conditioned MASK pass per cell asked about; pick-order slots are fine -
+the encoder is permutation-invariant within a team.
+
+The role *assignment* is no longer the role head's. It comes from
+`data/champ_roles.json` through `model_tools.assignment`, which maximises the
+summed log-likelihood over <=120 injective assignments per team: the head's own
+argmax agrees with the corpus 67 % of the time and collides two flex champions
+on one role, the table agrees 96 % and cannot collide.
 """
 import argparse
 import glob
@@ -108,16 +189,23 @@ PROC_DIR = ROOT / "data" / "solo queue" / "process matchdata"
 # solo-queue option and the next-move panel does not.
 SOLOQ_CKPT_DIR = ROOT / "solo_queue" / "model" / "checkpoints"
 PRO_CKPT_DIR = ROOT / "pro" / "model" / "checkpoints"
+# Everything that is not the shipped pair lives here. Reached into by
+# `--rerank` / `--policy-ckpt` / `--ckpt`, never by a default.
+ARCHIVE_CKPT_DIR = ROOT / "pro" / "model" / "archive" / "checkpoints"
 CKPT_DIRS = (SOLOQ_CKPT_DIR, PRO_CKPT_DIR)
 STATIC_DIR = FRONTEND_DIR / "static"
 # Only the masking family: `nextpick-*/best.pt` also matches a bare
 # `*/best.pt` glob, and picking a policy checkpoint as the fallback role model
 # would fail at load. The name says which inference, so the glob uses it.
 CKPT_GLOB = [str(d / "masking-*" / "best.pt") for d in CKPT_DIRS]
-CKPT_PATTERNS = tuple(            # what the dropdown offers (no torch.load)
+CKPT_PATTERNS = tuple(            # what /api/checkpoints lists (no torch.load)
     [("checkpoints", str(d / "*" / "*.pt")) for d in CKPT_DIRS]
     # an ensemble manifest is a selectable model, not a checkpoint payload
     + [("checkpoints", str(d / "*" / "ensemble.json")) for d in CKPT_DIRS]
+    # a reranker is a *directory* (adapter/ + projector.pt), and the directory
+    # is the thing you name; listing `projector.pt` instead would offer a file
+    # that is one piece of it
+    + [("checkpoints", str(d / "llm-*")) for d in CKPT_DIRS]
     + [("uploaded", str(FRONTEND_DIR / "uploaded" / "*.pt"))]
 )
 # Shipped defaults, one per job. The role board needs a *masking* checkpoint
@@ -125,51 +213,47 @@ CKPT_PATTERNS = tuple(            # what the dropdown offers (no torch.load)
 # are separate slots so both can be loaded at once - the model that answers
 # "which role / what is this team still missing" is not the model that ranks
 # the next pick.
+
+MASKED_DEFAULT = PRO_CKPT_DIR / "masking-proonly-nov13-through-lcp-df-sw" / "best.pt"
+
+POLICY_DEFAULT = PRO_CKPT_DIR / "nextpick-proonly-nov13-k5-through-lcp-df-sw" / "best.pt"
+
+# The reranker: a *directory* (adapter/ + projector.pt), not a best.pt, because
+# it is a 4.2 B trunk plus a LoRA plus the encoder's projector. It answers the
+# same `next_move` interface as POLICY_DEFAULT, so it fills the same slot.
 #
-# Both defaults are **pro-track**: the pro-only recipe has been the better
-# model since 2026-11-03, and the frontend ships the better model, not the
-# older one. See README.md ("Which model actually ships").
+# The number depends on which question is asked, and the two differ by 13 pp:
 #
-# The role default is the `-randomvalsplit-` refresh: same architecture and
-# corpus as the earlier `-through-` pair (42,121 train), but val is a seeded
-# random 10% of every patch rather than each patch's tail, so the end of every
-# patch is trained on and the selection signal is 4,758 games instead of 52.
-# Trained with `--no-test`, so it has no pinned-test score - §7 of STATUS.md is
-# the originals' number, not its. Override with --ckpt / --policy-ckpt.
-MASKED_DEFAULT = PRO_CKPT_DIR / "masking-proonly-randomvalsplit-through-wlds-ig-tes" / "best.pt"
-# The next-move default is the ban-aware arm: the same pro-only policy, plus
-# `ban_side` / `ban_fearless` / `counter_rank` (pro/model/bans/). The flags are
-# NOT passed here - they live in the checkpoint's own config and infer.py reads
-# them from there, so an old checkpoint still rebuilds unchanged.
+#   lane named in the task line ("for Top lane")   34.27 % exact  (4,000 states)
+#   no lane (this panel's unconstrained next move) 20.85 % exact  (same states)
+#   the head that proposed those candidates       18.25 % raw     (same states)
+#   the shipped head, served, same rows           24.90 %         (same states)
 #
-# Why this one: aware 0.5056 vs control 0.4995 top-5 on the same val set,
-# +0.60 pp, paired bootstrap p = 4.3e-8, CI [+0.39, +0.82] pp. A ban-aware
-# model that also predicts better needs no further argument.
+# `eval_rerank5_mask4k.json` and `eval_rerank5_nolane4k.json` are the first two;
+# `eval_served_banaware4k.json` and `eval_served_head4k.json` are the last two.
+# The 13.4 pp is the lane clause, not drafting skill, and `target_role` in the
+# training rows is the *true* lane of the pro's pick. The 18.32 % this used to
+# quote is `C.BASELINE_VAL` - the *bans-aware* head over 95,160 states, not the
+# shipped `-nov13-` head over these 4,000 - so it was never the row to compare
+# against either.
 #
-# Why to stay sceptical: it is ONE SEED. The single-switch arms (counter-only,
-# fearless-only) are flat, so how much of the gain is the interaction and how
-# much is seed luck is unresolved; pro/model/bans/README.md calls it "promising
-# and unconfirmed" until a second seed runs. Re-run sweep.py before trusting a
-# re-measurement.
+# And the lane-named row is not a capability the repo lacked: the masker already
+# answers a lane-conditioned query at 2.5 M parameters (35.7 % top-1 on 70
+# slot-mode queries, STATUS §7), on *more* information - `masked_ranks_slot`
+# keeps the nine other picks including later ones and the true role vector,
+# where this model sees the prefix only. Its own larger reports are 20.2 % /
+# 21.3 % on 4,193 / 8,069 slots, so that is a band rather than a rank. Either
+# way the 34.27 % is not evidence that a 4.2 B model was needed.
 #
-# It replaces `nextpick-proto-ensemble`, which is NOT deleted: its members are
-# fixed at three, so swapping one out would void the number that describes it.
-# The two claims are on different sets (val vs 439 held-out rows) and are not
-# comparable.
-POLICY_DEFAULT = PRO_CKPT_DIR / "nextpick-bans-aware-through-wlds-ig-tes" / "best.pt"
-# The next-move default is the LLM reranker whenever this machine can serve it:
-# the head's shortlist chosen by the fine-tuned Qwen3.5-4B, 35.31 % k-way against
-# the head's 19.14 % top-1 on the 478 games held out from both (ceiling 51.85 %,
-# the head's own recall@5). It is a different resource class - 4.2B in 4-bit,
-# ~4.5 GB VRAM and a second or so per request, against a 2.49 M-parameter head -
-# so the default is conditional, not absolute: `main()` uses this when
-# rerank.unavailable_reason() is None and falls back to the head with the reason
-# printed when it is not. Nothing here is a promise that it is loaded.
-RERANK_DEFAULT = PRO_CKPT_DIR / "llm-lora-rerank5"
+# It is **not** the default. `--rerank` opts in, and a failure to build it is
+# fatal: a server that refuses to start beats one that quietly answers with a
+# different model than the flag asked for. The numbers above are why - the
+# panel's question is the 20.85 % row, and it costs ~2 s per board.
+RERANK_DEFAULT = ARCHIVE_CKPT_DIR / "llm-lora-rerank5"
 # Still selectable in the dropdown and still pinned by the ensemble tests: a
 # `.json` manifest is a model, and `read_ensemble` + logit-averaging is the
 # contract the +1.33 pp was measured under. Do not "simplify" it to one .pt.
-ENSEMBLE_CKPT = PRO_CKPT_DIR / "nextpick-proto-ensemble" / "ensemble.json"
+ENSEMBLE_CKPT = ARCHIVE_CKPT_DIR / "nextpick-proto-ensemble" / "ensemble.json"
 UPLOAD_DIR = FRONTEND_DIR / "uploaded"
 MAX_UPLOAD_BYTES = 512 * 1024 * 1024      # generous; ckpts are 20-150 MB
 LOAD_LOCK = threading.Lock()              # serialize runtime model swaps
@@ -177,296 +261,34 @@ LOAD_LOCK = threading.Lock()              # serialize runtime model swaps
 DDRAGON_VERSION = "16.20.1"
 DDRAGON_CDN = "https://ddragon.leagueoflegends.com/cdn/"
 DDRAGON_CACHE = FRONTEND_DIR / ".cache" / ("champion_%s.json" % DDRAGON_VERSION)
-# real pro games for the walkthrough (cached pro_drafts.pt)
+# Real pro games for the walkthrough. Two caches exist and they answer different
+# questions:
+#   pro_drafts.pt       the FROZEN corpus (CORPUS_MAX_DATE=2026-11-08). Every
+#                       recorded metric is measured on it, so it must not move.
+#   pro_drafts_full.pt  the same scan with no freeze (the test split's corpus),
+#                       a strict superset: +21 games through 2026-11-13.
+# Browsing real games is not a measurement, so the walkthrough reads the
+# superset when it is on disk and falls back to the frozen cache otherwise -
+# that keeps the dropdown showing the newest series (the Worlds final, the LCP
+# games on 16.22) without touching the freeze or any recorded number.
 PRO_DRAFTS_PT = ROOT / "data" / "pro play" / "pro_drafts.pt"
+PRO_DRAFTS_FULL_PT = ROOT / "data" / "pro play" / "pro_drafts_full.pt"
 # The repo ROOT goes on the path so `import solo_queue` / `import pro` resolve;
 # the base encoder lives in `solo_queue/model/pretraining/base_model.py`
 # now, so the package path is the only stable way to import it.
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(FRONTEND_DIR))             # so `import llm` works
 
 from solo_queue.model.pretraining.base_model import (SiameseBase,  # noqa: E402
-                                           ROLE_FLEX_ID, NUM_ROLES,
                                            load_encoder_state,
                                            attr_matrix_for_config)
 from solo_queue.model.policy import infer  # noqa: E402  (next-move policy)
-import llm  # noqa: E402  (frontend/llm.py: retrieval + grounded explanation)
-import draftscore  # noqa: E402  (frontend/draftscore.py: which draft is ahead)
-from roles import assign_roles  # noqa: E402  (frontend/roles.py: lane solver)
-from roles import assign_lanes, legal_champions  # noqa: E402,F401
-import rerank as rerank_mod  # noqa: E402  (frontend/rerank.py: LLM reranker)
-import tools  # noqa: E402  (frontend/tools.py: the deterministic evidence layer)
-import chat  # noqa: E402  (frontend/chat.py: the inverted loop + replies)
 from pro.model.agent import draft_state, model_tools  # noqa: E402
+from pro.model.agent import schema as agent_schema  # noqa: E402
+from pro.model.agent import llm_client  # noqa: E402  (the agent's model)
+from pro.model.agent.engine import Engine  # noqa: E402
 
-ROLE_ROWS = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"]
+ROLE_ROWS = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "SUPPORT"]
 N_SLOTS = 10
-
-# --- breakdown scoring -------------------------------------------------------
-# Mirrors pro/model/test_split/eval_test_split.py so the breakdown page reproduces
-# the test-split report's per-move methodology (real patch id, exact role-keyed
-# slots, target rank/prob) instead of the UI's inferred-role / UNK-patch
-# next-move path. Kept self-contained: importing the pro pipeline here would
-# pull heavy data-processing modules into the (already import-light) server.
-_PHASE_OF = [0] * 6 + [1] * 6 + [2] * 4 + [3] * 4
-PHASE_NAMES = {0: "Ban Phase 1", 1: "Pick Phase 1",
-               2: "Ban Phase 2", 3: "Pick Phase 2"}
-_MOVE_BAN, _MOVE_PICK = 0, 1
-_ROLE_FLEX_ID = 5
-_IGNORE_INDEX = -100
-
-
-def _patch_key(patch):
-    """Mirror data/pro play/pipeline.py:patch_key ('16.3' -> '16.03')."""
-    s = str(patch or "").strip()
-    if not s:
-        return ""
-    maj, _, mnr = s.partition(".")
-    if not mnr:
-        mnr = "0"
-    try:
-        return "%d.%02d" % (int(maj), int(mnr))
-    except ValueError:
-        return s
-
-
-def _patch_index_of(pred):
-    """This model's {patch_key: id} vocab, or None (-> UNK id 0)."""
-    vocab = getattr(pred, "patch_vocab", None)
-    if not vocab:
-        cfg = getattr(pred, "config", None) or getattr(pred, "cfg", None) or {}
-        vocab = cfg.get("patch_vocab")
-    if not vocab:
-        return None
-    return {k: i + 1 for i, k in enumerate(vocab)}
-
-
-def _patch_id_for(pred, row):
-    pidx = _patch_index_of(pred)
-    if not pidx:
-        return 0
-    return pidx.get(_patch_key(row.get("patch")), 0)
-
-
-def _build_prefix(row, m, num_champs, patch_id):
-    """One policy prefix example in the pro-data convention: slots are
-    team*5 + role (role-keyed), unpicked = PAD, the real patch is fed."""
-    pad = num_champs + 1
-    champ_ids = torch.full((10,), pad, dtype=torch.long)
-    role_ids = torch.full((10,), _ROLE_FLEX_ID, dtype=torch.long)
-    pad_mask = torch.ones(10, dtype=torch.bool)
-    ban_ids = torch.full((10,), pad, dtype=torch.long)
-    n_bans = 0
-    for kind, team, champ, role in row["moves"][:m]:
-        if kind == _MOVE_BAN:
-            ban_ids[n_bans] = champ
-            n_bans += 1
-        else:
-            slot = team * 5 + int(role)
-            champ_ids[slot] = champ
-            role_ids[slot] = int(role)
-            pad_mask[slot] = False
-    kind, team, t_champ, t_role = row["moves"][m]
-    taken = set(ban_ids[:n_bans].tolist())
-    taken.update(champ_ids[~pad_mask].tolist())
-    taken_mask = torch.zeros(num_champs, dtype=torch.bool)
-    taken_mask[sorted(taken)] = True
-    unavailable_mask = torch.zeros(num_champs, dtype=torch.bool)
-    if row.get("unavailable"):
-        unavailable_mask[sorted(row["unavailable"])] = True
-    return {
-        "champ_ids": champ_ids, "role_ids": role_ids, "pad_mask": pad_mask,
-        "ban_ids": ban_ids, "n_bans": torch.tensor(n_bans, dtype=torch.long),
-        "taken_mask": taken_mask, "unavailable_mask": unavailable_mask,
-        "move_idx": torch.tensor(m, dtype=torch.long),
-        "phase": torch.tensor(_PHASE_OF[m], dtype=torch.long),
-        "to_move": torch.tensor(team, dtype=torch.long),
-        "first_pick": torch.tensor(int(row["first_pick"]), dtype=torch.long),
-        "is_ban": torch.tensor(1 if kind == _MOVE_BAN else 0, dtype=torch.long),
-        "target_champ": torch.tensor(int(t_champ), dtype=torch.long),
-        "target_role": torch.tensor(
-            int(t_role) if kind == _MOVE_PICK else _IGNORE_INDEX,
-            dtype=torch.long),
-        "win_label": torch.tensor(int(row["blue_win"]), dtype=torch.long),
-        "weight": torch.tensor(1.0, dtype=torch.float32),
-        "patch_id": torch.tensor(int(patch_id), dtype=torch.long),
-        "econ_target": torch.zeros(6, dtype=torch.float32),
-        "has_econ": torch.tensor(0.0, dtype=torch.float32),
-    }
-
-
-def _collate(samples):
-    return {k: torch.stack([s[k] for s in samples]) for k in samples[0]}
-
-
-def _row_ban_indices(row):
-    return [int(c) for kind, _t, c, _r in row["moves"] if kind == _MOVE_BAN]
-
-
-def score_policy_model(pred, row, idx_to_img, names):
-    """20 states/game -> top-1/top-5/rank/prob for the real next move."""
-    nc = pred.num_champs
-    pid = _patch_id_for(pred, row)
-    samples = [_build_prefix(row, m, nc, pid) for m in range(len(row["moves"]))]
-    batch = {k: v.to(pred.device) for k, v in _collate(samples).items()}
-    with torch.no_grad():
-        logits = pred.policy_logits(batch).float()
-    probs = torch.softmax(logits, dim=-1)
-    rows_out, ranks = {}, []
-    top1 = top5 = 0
-    for m in range(len(row["moves"])):
-        lg = logits[m]
-        target = int(batch["target_champ"][m])
-        top5_idx = torch.topk(lg, 5).indices.tolist()
-        top1_idx = int(lg.argmax())
-        rank = int((lg > lg[target]).sum())          # 0-based
-        prob = float(probs[m, target])
-        hit1 = (top1_idx == target)
-        hit5 = (target in top5_idx)
-        top1 += int(hit1)
-        top5 += int(hit5)
-        ranks.append(rank + 1)
-        rows_out[str(m)] = {
-            "kind": "ban" if int(batch["is_ban"][m]) else "pick",
-            "side": int(batch["to_move"][m]),
-            "real_idx": target, "real_name": names[target],
-            "real_img": idx_to_img.get(target),
-            "top1_idx": top1_idx, "top1_name": names[top1_idx],
-            "top1_img": idx_to_img.get(top1_idx),
-            "top5": [{"idx": int(i), "name": names[int(i)],
-                      "img": idx_to_img.get(int(i)),
-                      "prob": float(probs[m, int(i)])} for i in top5_idx],
-            "target_rank": rank + 1, "target_prob": prob,
-            "hit_top1": bool(hit1), "hit_top5": bool(hit5),
-        }
-    n = len(row["moves"])
-    return {"kind": "policy",
-            "score": {"top1": top1 / n, "top5": top5 / n,
-                      "mean_rank": sum(ranks) / n, "n": n},
-            "rows": rows_out}
-
-
-def score_masked_model(pred, row, idx_to_img, names):
-    """Hide each picked slot in turn; did the model return the real champ?
-
-    Mirrors eval_test_split.score_masked: the board carries the exact roles and
-    the real patch id, and the rank is taken over the FULL distribution so
-    the scoreboard matches the test-split report. The displayed top-5 is
-    filtered to legal champions (not already taken / banned) for UX.
-    """
-    nc = pred.num_champs
-    pad = nc + 1
-    champ = torch.full((10,), pad, dtype=torch.long)
-    role = torch.full((10,), _ROLE_FLEX_ID, dtype=torch.long)
-    slot_move = {}
-    for m, (kind, team, c, r) in enumerate(row["moves"]):
-        if kind == _MOVE_PICK:
-            slot = team * 5 + int(r)
-            champ[slot] = c
-            role[slot] = int(r)
-            slot_move[slot] = m
-    pid = _patch_id_for(pred, row)
-    bans = _row_ban_indices(row)
-    rows_out, ranks = {}, []
-    top1 = top5 = 0
-    for slot in range(10):
-        cids = champ.clone()
-        cids[slot] = nc                                  # MASK id
-        is_m = torch.zeros(1, 10, dtype=torch.bool)
-        is_m[0, slot] = True
-        batch = {
-            "champ_ids": cids.unsqueeze(0).to(pred.device),
-            "role_ids": role.unsqueeze(0).to(pred.device),
-            "pad_mask": torch.zeros(1, 10, dtype=torch.bool,
-                                   device=pred.device),
-            "is_masked": is_m.to(pred.device),
-            "patch_id": torch.tensor([pid], dtype=torch.long,
-                                    device=pred.device),
-        }
-        with torch.no_grad():
-            lg = pred.model(batch)["champ_logits"][0, slot].float()
-        target = int(champ[slot])
-        rank = int((lg > lg[target]).sum())              # 0-based
-        full_probs = torch.softmax(lg, dim=-1)
-        prob = float(full_probs[target])
-        illegal = torch.zeros(nc, dtype=torch.bool)
-        for j in range(10):
-            if j != slot and int(champ[j]) < nc:
-                illegal[int(champ[j])] = True
-        for c in bans:
-            illegal[c] = True
-        lg_d = lg.clone()
-        lg_d[illegal] = float("-inf")
-        top5_idx = torch.topk(lg_d, 5).indices.tolist()
-        top1_idx = int(lg_d.argmax())
-        hit1 = (top1_idx == target and not bool(illegal[target]))
-        hit5 = (target in top5_idx)
-        top1 += int(hit1)
-        top5 += int(hit5)
-        ranks.append(rank + 1)
-        m = slot_move.get(slot)
-        rows_out[str(m)] = {
-            "kind": "pick", "side": slot // 5,
-            "real_idx": target, "real_name": names[target],
-            "real_img": idx_to_img.get(target),
-            "top1_idx": top1_idx, "top1_name": names[top1_idx],
-            "top1_img": idx_to_img.get(top1_idx),
-            "top5": [{"idx": int(i), "name": names[int(i)],
-                      "img": idx_to_img.get(int(i)),
-                      "prob": float(full_probs[int(i)])}
-                     for i in top5_idx if int(i) < nc],
-            "target_rank": rank + 1, "target_prob": prob,
-            "hit_top1": bool(hit1), "hit_top5": bool(hit5),
-        }
-    n = 10
-    return {"kind": "masked",
-            "score": {"top1": top1 / n, "top5": top5 / n,
-                      "mean_rank": sum(ranks) / n, "n": n},
-            "rows": rows_out}
-
-
-def build_breakdown(game_i, model_paths, max_models=8):
-    """Score one pro game under each selected model (policy + masked)."""
-    rows = load_drafts()
-    if not 0 <= game_i < len(rows):
-        raise FileNotFoundError("no draft #%s" % game_i)
-    row = rows[game_i]
-    names = APP["names_by_idx"]
-    idx_to_img = {c["idx"]: c["img"] for c in APP["champions"]}
-    moves = []
-    for m, (kind, team, champ, role) in enumerate(row["moves"]):
-        idx = int(champ)
-        moves.append({"i": m, "kind": "ban" if kind == _MOVE_BAN else "pick",
-                      "side": int(team), "idx": idx, "name": names[idx],
-                      "img": idx_to_img.get(idx),
-                      "role": int(role) if int(role) >= 0 else None,
-                      "phase": PHASE_NAMES[_PHASE_OF[m]]})
-    models_out = []
-    for spec in model_paths[:max_models]:
-        path = resolve_ckpt_path(spec)                  # confines to project
-        try:
-            pred = make_predictor(path)
-        except Exception as exc:                        # broken/foreign ckpt
-            models_out.append({"path": _rel(path), "error": str(exc)})
-            continue
-        if pred.kind == "policy":
-            res = score_policy_model(pred, row, idx_to_img, names)
-        else:
-            res = score_masked_model(pred, row, idx_to_img, names)
-        res["path"] = _rel(path)
-        res["label"] = "[%s] %s/%s" % (
-            res["kind"], Path(path).parent.name, Path(path).name)
-        res["val_top5"] = getattr(pred, "val_top5", None)
-        models_out.append(res)
-    game = {
-        "i": game_i, "date": row["date"], "league": row["league"],
-        "blue": row["blue_team"], "red": row["red_team"],
-        "patch": row["patch"], "first_pick": int(row["first_pick"]),
-        "winner": "blue" if row["blue_win"] else "red",
-        "gameid": row["gameid"], "moves": moves,
-    }
-    return {"game": game, "models": models_out}
-
 
 # Names dDragon stores under a different file id (heuristic fallback only;
 # the manifest lookup is exact and needs none of these).
@@ -475,40 +297,6 @@ DDRAGON_NAME_FIX = {"Wukong": "MonkeyKing", "Nunu & Willump": "Nunu",
 
 _ICON_LOCK = threading.Lock()
 _ICON_CACHE = None
-
-_INDEX_LOCK = threading.Lock()
-_PRO_INDEX = None
-
-
-def pro_index():
-    """The 46,875-draft retrieval index, built once per process (~1 s)."""
-    global _PRO_INDEX
-    if _PRO_INDEX is None:
-        with _INDEX_LOCK:
-            if _PRO_INDEX is None:
-                _PRO_INDEX = llm.ProIndex.load(PRO_DRAFTS_PT)
-    return _PRO_INDEX
-
-
-_CHAT_LOCK = threading.Lock()
-_CHAT_CORPUS = None
-
-
-def chat_corpus():
-    """The evidence layer over the same rows, built once per process.
-
-    Separate from `pro_index()` because the expensive part is different: the
-    index is 46k bitmask builds (~1 s), the corpus adds the pair counters
-    (~2 s). The chat is the only caller, so it pays for them on the first
-    message rather than at startup.
-    """
-    global _CHAT_CORPUS
-    if _CHAT_CORPUS is None:
-        with _CHAT_LOCK:
-            if _CHAT_CORPUS is None:
-                _CHAT_CORPUS = tools.Corpus(pro_index())
-    return _CHAT_CORPUS
-
 
 def icon_url(name):
     """Deterministic dDragon icon URL from a display name (offline path)."""
@@ -528,9 +316,10 @@ MAX_SANDBOXES = 32
 def state_store():
     """The live draft state, and the sandboxes an assistant may explore in.
 
-    Separate from `chat_corpus()` because it needs neither the corpus nor any
-    weights - only the name table - so a board can be published before a model
-    is loaded, and `/api/state` keeps working in a `--no-policy` install.
+    Needs the name table and nothing else, so a board can be published before a
+    model is loaded and `/api/state` keeps working in a `--no-policy` install.
+    The models arrive later, through `_bind_models`, which swaps the engine under
+    every state the store already holds.
 
     This is the one object the frontend and the agent share. The frontend writes
     it (`_publish_state`, once per request that carries a board); the agent reads
@@ -545,31 +334,75 @@ def state_store():
                 names = APP.get("names_by_idx")
                 if not names:
                     raise ValueError("champion names are not loaded yet")
-                _STATE_STORE = draft_state.Store(model_tools.ChampIndex(names))
+                champs = model_tools.ChampIndex(names)
+                _STATE_STORE = draft_state.Store(champs, engine=_engine(champs))
     return _STATE_STORE
 
 
-def _agent_session():
-    """A `Session` over the loaded policy, the corpus and the live store.
+def _engine(champs=None):
+    """The models the state service can reach, built from the two live slots.
+
+    One engine per store, not one per request: the role assignment is a table
+    lookup that every state carries, so rebuilding the binding on every call
+    would recompute it for every sandbox as well.
+
+    The masker is the role slot and the predictor the next-move slot, the two
+    slots the CLI selects at startup. Either may be None - an
+    engine with no predictor still assigns roles, and one with no masker still
+    ranks the move on the clock.
+    """
+    champs = champs or model_tools.ChampIndex(APP["names_by_idx"])
+    return Engine(champs, predictor=APP.get("policy"),
+                  masker=APP.get("masked"), patch=APP.get("patch"))
+
+
+def _bind_models():
+    """Re-attach the engine after a checkpoint swap.
+
+    The board outlives the weights: a model loaded while a draft is open has to
+    answer about *that* draft, so the store is rebound rather than rebuilt. The
+    sandboxes are rebound too - an exploration made under the old model would
+    otherwise keep answering with it.
+    """
+    store = state_store()
+    return store.attach(_engine(store.champs))
+
+
+def _agent_session(ablate=(), max_calls=None):
+    """A `Session` over the live store, its engine, and the corpus.
 
     The corpus database is optional: without it the SQL tool is simply not
-    offered, and the model and state tools still answer. The policy is not
-    optional - a run without the head would be a chat about a board with
-    nothing to say about it.
+    offered, and the model and state tools still answer. The store carries the
+    engine, so this does not pass a predictor - doing that would build a second
+    engine and silently drop the masker.
+
+    `ablate` and `max_calls` are per turn: the free-form agent turn asks
+    anything, while the one-click suggestion runs the measured reranking arm
+    (no SQL, a smaller budget) through the same session and the same store.
     """
-    from pro.model.agent import schema as agent_schema
     from pro.model.agent.session import Session
 
-    pred = APP.get("policy")
-    if pred is None:
-        raise ValueError("no next-move policy loaded - /api/agent answers from "
-                         "the head, so load a best_policy.pt first")
     con = None
     if Path(agent_schema.DB_PATH).exists():
         con = agent_schema.connect(str(agent_schema.DB_PATH))
-    return Session(con=con, predictor=pred,
-                   champs=model_tools.ChampIndex(APP["names_by_idx"]),
-                   store=state_store(), max_calls=int(APP.get("agent_calls", 24)))
+    return Session(con=con, store=state_store(), ablate=ablate,
+                   max_calls=int(max_calls or APP.get("agent_calls", 24)))
+
+
+def _head_top_legal(st, k=20):
+    """The head's own top-k legal champions, as {"name", "p_head"}.
+
+    Used by `/api/agent-rank` as the parser's fallback fill - any slot the agent
+    left unnamed is filled from here, so the panel never shows fewer than k names
+    and never shows one the head did not produce. `predict_next_move` already
+    masks bans and fearless, so `top` is the legal pool.
+    """
+    try:
+        res = st.predict_next_move(k=k)
+    except (ValueError, AttributeError):
+        return []
+    return [{"name": c["name"], "p_head": c["p_head"]}
+            for c in (res.get("top") or [])]
 
 
 def ddragon_icons():
@@ -674,18 +507,16 @@ def peek_kind(payload):
     return "pretrain"
 
 
-def _assign_roles(role_dists, filled, newest=None):
-    """Alias for `roles.assign_roles` - moved so the reranker can share it.
-
-    `server` imports the reranker, so the reranker cannot import `server` back
-    to reach this; it lives in its own module now. The name is kept because the
-    README and the tests refer to it.
-    """
-    return assign_roles(role_dists, filled, newest=newest)
-
-
 class Predictor:
-    """Wraps the loaded checkpoint; one forward -> top-5 per empty slot."""
+    """Wraps the loaded masking checkpoint; one forward -> one slot completed.
+
+    The role assignment is not here any more. It comes from
+    `data/champ_roles.json` (`model_tools.assignment`), which agrees with the
+    corpus 96 % of the time against this model's role head at 67 %, and which
+    cannot give two champions on one team the same role. What is left is the one
+    question only this checkpoint can answer: a role-conditioned completion
+    during the ban phase, when the next-move head cannot be asked.
+    """
 
     def __init__(self, ckpt_path, device="cpu", payload=None):
         payload = payload if payload is not None else torch.load(
@@ -734,28 +565,17 @@ class Predictor:
                  "pad_mask": torch.zeros(1, N_SLOTS, dtype=torch.bool)}
         return self.model({k: v.to(self.device) for k, v in batch.items()})
 
-    def _top5(self, logits, illegal):
-        # Output classes are REAL champions only: champ_head is
-        # Linear(D, num_champs), so [MASK]/[PAD] exist solely in the
-        # 175-wide INPUT embedding and can never be suggested. The bounds
-        # filter locks that contract in (solo_queue/model/README.md Sec.2).
-        logits = logits.clone()
-        logits[illegal] = float("-inf")
-        probs = logits.softmax(-1)
-        n_legal = int((~illegal).sum())
-        top = probs.topk(max(1, min(5, n_legal)))
-        return [{"idx": int(i), "prob": float(p)}
-                for i, p in zip(top.indices, top.values)
-                if float(p) > 0 and int(i) < self.num_champs]
-
     @torch.no_grad()
     def complete_slot(self, champ_idx, role_idx, slot):
-        """Masked completion of one pick slot (the breakdown page).
+        """Masked completion of one pick slot, with its role given.
 
-        Hide `slot` (set to the [MASK] id) and return its full champion
-        logits + softmax. Like `_forward`, the patch input is omitted so the
-        model runs with its UNK patch - the same convention the rest of the
-        frontend uses for masked models.
+        Hide `slot` (set to the [MASK] id) and return its full champion logits
+        + softmax. `model_tools.predict_in_lane` calls this when the board is in
+        its ban phase - the one question the next-move head cannot be asked.
+
+        The patch input is omitted so the model runs with its UNK patch, the
+        same convention the rest of the frontend uses for masked models: this
+        checkpoint was trained without a patch table.
         """
         cids = torch.tensor(
             [[self.num_champs if c is None else int(c) for c in champ_idx]],
@@ -766,128 +586,6 @@ class Predictor:
         lg = out["champ_logits"][0, slot].float()
         p = torch.softmax(lg, dim=-1)
         return lg, p
-
-    @torch.no_grad()
-    def suggest(self, picks, bans_idx, mapping, last_slot=None,
-                unavailable_idx=None):
-        """picks: len-10 riot ids or None - blue 0-4 / red 5-9 in PICK
-        ORDER (slots carry no role meaning); bans_idx: banned champ idx;
-        last_slot: the slot just filled (wins a contested role);
-        unavailable_idx: fearless pool (champions picked in earlier games
-        of the series).
-        -> {"roles": [10 x [{role, prob}...]] (filled slots, desc),
-            "assignment": [10 x role id | None] (one per team, distinct),
-            "blue"/"red": {role_name: [{idx, prob, flex?}] <=5}}
-
-        Pass 1 queries picked champs with a FLEX role INPUT (= "role
-        unknown", the same way [MASK] means "champion unknown") -> the
-        5-way role head gives likely role assignments. Later passes hold
-        each pick at its predicted role and cycle ALL 5 roles through the
-        MASKed slots, so both teams get a role-conditioned top-5 per role
-        (the 10% role-visible training condition). Bans/picks are
-        post-filtered.
-
-        Fearless is a *post-filter* here, not an input: the masked task was
-        never trained with an unavailable mask, so the model cannot know a
-        champion is gone. Filtering keeps an illegal champion out of the
-        answer but does not make the remaining ranking fearless-aware -
-        the probability mass was computed as if the champion were
-        available. The UI says so when a pool is active.
-
-        Special tokens are input-only (solo_queue/model/README.md Sec.2): every
-        returned idx is a real champion (< num_champs, never [MASK]/
-        [PAD]) and every returned role is in 0..4 (never FLEX - the role
-        head is Linear(D, 5)).
-        """
-        if len(picks) != N_SLOTS:
-            raise ValueError("picks must have 10 entries")
-        champ0 = [None] * N_SLOTS
-        picked_idx = []
-        for s, riot in enumerate(picks):
-            if riot is None:
-                continue
-            if riot not in mapping:
-                raise ValueError("unknown champion id %s" % riot)
-            champ0[s] = mapping[riot]
-            picked_idx.append(champ0[s])
-        if len(set(picked_idx)) != len(picked_idx):
-            raise ValueError("duplicate champion picked")
-        illegal = torch.zeros(self.num_champs, dtype=torch.bool)
-        for i in list(bans_idx) + picked_idx + list(unavailable_idx or ()):
-            if 0 <= i < self.num_champs:
-                illegal[i] = True
-        filled = [c is not None for c in champ0]
-        champ_ids = torch.tensor(
-            [[self.num_champs if c is None else c for c in champ0]],
-            dtype=torch.long)
-
-        # pass 1: (real champ, FLEX role input = "role unknown") ->
-        # likely role assignments. FLEX is INPUT-only, exactly like the
-        # [MASK] champ input: role_head is Linear(D, NUM_ROLES), so FLEX
-        # cannot come back out - the filter defends it anyway.
-        out = self._forward(champ_ids, torch.full(
-            (1, N_SLOTS), ROLE_FLEX_ID, dtype=torch.long))
-        roles = []
-        for s in range(N_SLOTS):
-            if not filled[s]:
-                roles.append([])
-                continue
-            probs = out["role_logits"][0, s].softmax(-1)
-            order = torch.argsort(probs, descending=True)
-            real = [int(r) for r in order if 0 <= int(r) < NUM_ROLES]
-            roles.append([{"role": r, "prob": float(probs[r])}
-                          for r in real])
-        # One consistent, collision-free role per team. The role head is
-        # per-slot, so two picks can argmax the same role; the assignment
-        # below drives both the MASK queries and the UI's role board. The
-        # slot the user just filled is pinned to its own argmax, so a new
-        # pick is never displaced by an older one.
-        pred_role = _assign_roles(roles, filled, newest=last_slot)
-
-        # passes: role-conditioned MASK queries, every role x both teams.
-        # One pass covers (5 - picks) roles per team; <=5 passes total.
-        empties = {0: [s for s in range(0, 5) if not filled[s]],
-                   1: [s for s in range(5, 10) if not filled[s]]}
-        queue = {0: list(range(5)), 1: list(range(5))}   # roles left
-        passes = 0
-        for t in (0, 1):
-            if empties[t]:
-                passes = max(passes, -(-5 // len(empties[t])))
-        names = {0: "blue", 1: "red"}
-        sugs = {team: {ROLE_ROWS[r]: [] for r in range(5)}
-                for team in ("blue", "red")}
-        for _ in range(passes):
-            role_ids = [(pred_role[s] if filled[s] else ROLE_FLEX_ID)
-                        for s in range(N_SLOTS)]
-            assigned = []
-            for t in (0, 1):
-                for s in empties[t]:
-                    if queue[t]:
-                        r = queue[t].pop(0)
-                        role_ids[s] = r
-                        assigned.append((s, t, r))
-            out = self._forward(
-                champ_ids, torch.tensor([role_ids], dtype=torch.long))
-            for s, t, r in assigned:
-                # r always comes from the role queue (0..4): results are
-                # only read from REAL-role-conditioned MASK queries -
-                # FLEX-conditioned slots never contribute a shown result.
-                sugs[names[t]][ROLE_ROWS[r]] = self._top5(
-                    out["champ_logits"][0, s], illegal)
-
-        # flex flag: same champ suggested under 2+ roles of one team
-        for t in (0, 1):
-            team = names[t]
-            seen = {}
-            for rname in ROLE_ROWS:
-                for c in sugs[team][rname]:
-                    seen[c["idx"]] = seen.get(c["idx"], 0) + 1
-            for rname in ROLE_ROWS:
-                for c in sugs[team][rname]:
-                    if seen[c["idx"]] > 1:
-                        c["flex"] = True
-        return {"roles": roles, "assignment": pred_role,
-                "blue": sugs["blue"], "red": sugs["red"]}
 
 
 def _rel(p):
@@ -916,19 +614,18 @@ def model_info(pred):
     if ens:
         info["ensemble"] = {"members": ens.get("members", []),
                             "eval": ens.get("eval") or {}}
-    # A reranker's stored val number is a k-way accuracy over a 5-candidate
-    # list, so `val_top5` is None for it by construction (see rerank.py). It
-    # publishes its own block instead of borrowing a label that would read as
-    # 93 % top-5.
-    ev = getattr(pred, "rerank_eval", None)
-    if ev:
-        info["rerank_eval"] = ev
-        info["family"] = "llm-rerank"
     return info
 
 
 def resolve_ckpt_path(spec, confine=True):
-    """Checkpoint spec -> absolute .pt (or ensemble .json) Path.
+    """Checkpoint spec -> absolute .pt / ensemble .json / reranker directory.
+
+    A file is a single model; a directory is one only when its name says
+    `llm-`, because that is the one artefact that is a *folder*: the 4B
+    trunk lives in the image and what is on disk is `adapter/` plus
+    `projector.pt`. Anything else that is a directory is still a mistake, and
+    the refusal names the file inside it rather than "no such file".
+
     confine=True (HTTP): must resolve inside the project - no `..` escapes.
     """
     p = Path(str(spec)).expanduser()
@@ -941,13 +638,10 @@ def resolve_ckpt_path(spec, confine=True):
         except ValueError:
             raise ValueError("path outside project: %s" % spec)
     if p.is_dir():
-        # An llm-* checkpoint is a folder and projector.pt is its entry point,
-        # so `--policy-ckpt .../llm-lora-rerank5` is a valid way to name it.
-        proj = p / "projector.pt"
-        if proj.is_file():
-            return proj
-        raise ValueError("%s is a directory with no projector.pt in it"
-                         % p.name)
+        if p.name.startswith("llm-"):
+            return p
+        raise ValueError("%s is a directory - name the checkpoint inside it "
+                         "(best.pt or ensemble.json)" % p.name)
     if p.suffix.lower() not in (".pt", ".json"):
         raise ValueError("expected a .pt checkpoint or an ensemble .json, "
                          "got %s" % p.name)
@@ -985,7 +679,7 @@ def read_ensemble(path):
 def _ckpt_roles(path, kind):
     """Which model slots a checkpoint can fill, from its path alone.
 
-    The UI has two slots (role model / next-move model) and offering the
+    There are two slots (role model / next-move model) and offering the
     whole list in both would make most picks fail on load. torch.load'ing
     every checkpoint at startup just to classify them is not worth it, and
     it is not necessary: every kept artefact lives in
@@ -993,10 +687,17 @@ def _ckpt_roles(path, kind):
     serves. The track does not affect the classification - `masking-*` is the
     role board whether it was trained on solo queue or on pro drafts.
 
-      masking-*    masked champion + role completion -> the role board
-      nextpick-*   next-move ranking                -> the next-move panel
-      llm-*        head shortlist + LLM rerank       -> the next-move panel
+      masking-*    masked champion + role completion -> the masker
+      nextpick-*   next-move ranking                -> the head
       value-*      outcome head only                -> neither (not servable)
+      llm-*        the 4B reranker over the head's  -> the next-move slot
+                   shortlist (a directory)
+
+    An `llm-*` folder is the reranker: it answers `next_move` by re-ordering the
+    head's shortlist, and it needs `transformers`, `peft`, `bitsandbytes` and a
+    GPU, so it is only reachable from the `llm` image (`serve.sh --rerank`).
+    Offering it from the base image would list a model the server cannot build,
+    so `make_predictor` reports the missing package instead of raising on import.
 
     Paths outside that layout (uploads, checkpoints from before the rename)
     fall back to the old family rules, and anything still unrecognised is
@@ -1004,8 +705,13 @@ def _ckpt_roles(path, kind):
     """
     if kind == "value":
         return []                       # outcome head only, not servable
+    if Path(path).name == "projector.pt":
+        # One piece of the reranker, not a model: the directory is the model.
+        return []
     text = Path(path).as_posix()
-    m = re.search(r"/checkpoints/([^/]+)/", text)
+    # `(?:/|$)`: a reranker is the directory itself, so its path ends at the
+    # name and the old `/checkpoints/<name>/` pattern matched nothing.
+    m = re.search(r"/checkpoints/([^/]+)(?:/|$)", text)
     if m:
         name = m.group(1)
         if name.startswith("masking-"):
@@ -1013,10 +719,7 @@ def _ckpt_roles(path, kind):
         if name.startswith("nextpick-"):
             return ["policy"]
         if name.startswith("llm-"):
-            # A reranker *is* a next-move model: it answers the same question,
-            # it just answers it with a 4B model choosing from the head's
-            # shortlist instead of the head's argmax.
-            return ["policy"]
+            return ["policy"]          # the reranker fills the next-move slot
         if name.startswith("value-"):
             return []
     # legacy families: still reachable via an upload of an old checkpoint
@@ -1031,42 +734,38 @@ def _ckpt_roles(path, kind):
     return ["masked", "policy"]
 
 
-def _llm_servable(folder):
-    """Can this `llm-*` folder answer a next move? -> (bool, why not).
+def slot_of(pred):
+    """Which of the two slots a built predictor fills.
 
-    It needs an adapter (a projector alone is a warmup, not a model) and a v4
-    projector, because v4 is the only format that carries the candidate list the
-    reranker chooses from. Both facts are cheap: `adapter/` is a directory and
-    `report.json` is the small protocol dump the trainer already writes.
-    `torch.load`ing `projector.pt` for the same two answers would read ~11 MB
-    per folder at startup, which is the cost `list_checkpoints` exists to avoid.
+    The role board is the masker and nothing else; every other kind - the head,
+    an ensemble, the reranker - answers `next_move`, so it belongs in the
+    next-move slot.
 
-    This is what keeps the dropdown to real models: a checkout that has trained
-    a dozen warmup and probe runs should not offer all of them as next-move
-    models, and every one of them would fail on load.
+    Written once because three places ask the question (`load_predictor` and
+    both `/api/load` and `/api/upload` replies), and both one-liners that were
+    tried here were wrong for one of the three families:
+
+      `"policy" if kind == "policy" else "masked"`  - right for the masker and
+        the head, wrong for the reranker (kind "rerank" -> filed as a masker)
+      `"masked" if kind == "masked" else "policy"`  - right for the reranker,
+        wrong for the masker, because `Predictor.kind` is "pretrain"/"finetune"
+        (it names the *stage* the checkpoint came from, not the inference it
+        serves) and no checkpoint ever reports "masked". That version made
+        `load_predictor(role="masked")` raise on every real startup.
+
+    So the masker is "everything that is a `Predictor`", and the test is on the
+    kinds that class produces.
     """
-    if not (folder / "adapter").is_dir():
-        return False, "no adapter/ - a projector alone cannot answer"
-    rep = folder / "report.json"
-    if not rep.is_file():
-        return False, "no report.json - its prompt format is unknown"
-    try:
-        fmt = (json.loads(rep.read_text("utf-8")).get("protocol")
-               or {}).get("prompt_format")
-    except (OSError, ValueError):
-        return False, "report.json is unreadable"
-    if fmt != "v4":
-        return False, ("trained on prompt_format=%s; serving needs v4 (the "
-                       "candidate list)" % fmt)
-    return True, None
+    kind = getattr(pred, "kind", None)
+    return "masked" if kind in ("masked", "pretrain", "finetune") else "policy"
 
 
 def list_checkpoints():
     """Every .pt under the known ckpt dirs; cheap (payload not read).
 
     `latest.pt` is skipped: it is whatever the last epoch wrote, which is
-    only useful for resuming, not for serving. The dropdown should offer
-    the checkpoints that were selected on validation.
+    only useful for resuming, not for serving. The list should contain the
+    checkpoints that were selected on validation.
     """
     out = []
     for kind, pattern in CKPT_PATTERNS:
@@ -1076,20 +775,8 @@ def list_checkpoints():
                 continue
             rel = _rel(hit)
             if pp.name == "projector.pt":
-                # An llm-* checkpoint: the folder is the model, projector.pt is
-                # its entry point. Only folders that can actually answer are
-                # offered; see _llm_servable.
-                ok, why = _llm_servable(pp.parent)
-                if not ok:
-                    continue
-                reason = rerank_mod.unavailable_reason()
-                out.append({"path": rel, "kind": kind,
-                            "roles": _ckpt_roles(hit, kind),
-                            "label": "%s/%s (LLM rerank)"
-                                     % (pp.parent.name, pp.name),
-                            "family": "llm-rerank",
-                            "available": reason is None,
-                            "reason": reason})
+                # The retired reranker's entry point: a 4B adapter this server
+                # cannot answer from. Skipped rather than offered and refused.
                 continue
             label = ("%s/%s" % (pp.parent.name, pp.name)
                      if kind == "checkpoints"
@@ -1103,37 +790,68 @@ def list_checkpoints():
 _MODEL_CACHE = {}                      # (path, device) -> predictor
 
 
-def make_predictor(path, device=None):
+def make_reranker(path, device=None, head_path=None):
+    """Build the 4B reranker, or say why this image cannot.
+
+    The import is inside the function on purpose: `transformers`/`peft` live in
+    the `llm` image only, and `frontend/server.py` has to import cleanly in the
+    base one. A missing package is a one-line explanation, not a traceback at
+    startup.
+
+    `head_path` is the proposer the reranker re-orders. Callers that already
+    resolved the head pass it; otherwise it is whatever the next-move slot
+    currently holds (so a runtime `/api/load` of a reranker keeps the head the
+    panel is already using) and `POLICY_DEFAULT` is the last resort.
+    """
+    try:
+        from pro.model.archive.llm.rerank_predictor import RerankPredictor
+    except Exception as exc:                       # ImportError, mostly
+        raise ValueError(
+            "%s is the 4B reranker and this image has no LLM stack (%s). "
+            "Serve it with `bash frontend/serve.sh --rerank`, which uses the "
+            "llm image and --device cuda." % (Path(path).name, exc))
+    if head_path is None:
+        pol = APP.get("policy")
+        if getattr(pol, "kind", None) == "rerank":
+            head_path = pol.head_path
+        elif getattr(pol, "kind", None) == "policy":
+            # `ckpt_path`, not `label`: an ensemble's label is the manifest
+            # `.json`, which is not something `PolicyPredictor` can load twice.
+            cp = Path(str(getattr(pol, "ckpt_path", "") or ""))
+            if cp.suffix.lower() == ".pt":
+                head_path = cp
+    head_path = Path(head_path) if head_path else POLICY_DEFAULT
+    return RerankPredictor(path, head_path, device=device or "cuda")
+
+
+def make_predictor(path, device=None, head_path=None):
     """Build (or fetch a cached) predictor for a checkpoint path.
 
     One file can hold three different model families, so the payload is
     read once here and dispatched: a policy checkpoint becomes a
     `PolicyPredictor`, everything else stays a masked `Predictor`. An
     `ensemble.json` manifest becomes a `PolicyPredictor` over its members
-    (mean of the policy logits - the measured quantity).
+    (mean of the policy logits - the measured quantity). A *directory* is the
+    reranker (`adapter/` + `projector.pt`).
 
-    The result is cached per (path, device) so the breakdown endpoint can
-    score several models without reloading the same multi-hundred-MB
-    weights repeatedly.
+    The result is cached per (path, device) so a swap back to a previously
+    loaded checkpoint does not re-read its weights.
     """
     device = device or APP.get("device", "cpu")
     key = (str(path), str(device))
     cached = _MODEL_CACHE.get(key)
     if cached is not None:
         return cached
-    # An `llm-*` checkpoint is a folder whose projector.pt is the entry point.
-    # It is dispatched before the payload peek because a projector blob has no
-    # `model` key and would otherwise be misread as a pretraining checkpoint.
-    if Path(path).name == "projector.pt":
-        reason = rerank_mod.unavailable_reason()
-        if reason:
-            raise RuntimeError(
-                "%s is an LLM reranker and cannot be loaded here: %s"
-                % (Path(path).parent.name, reason))
-        pred = rerank_mod.RerankPredictor(Path(path).parent, device=device,
-                                          label=Path(path).parent.name)
+    if Path(path).is_dir():
+        # A reranker: adapter/ + projector.pt + a 4B trunk.
+        pred = make_reranker(path, device=device, head_path=head_path)
         _MODEL_CACHE[key] = pred
         return pred
+    if Path(path).name == "projector.pt":
+        raise ValueError("%s is the retired local reranker's projector - the "
+                         "agent asks the head and reads the corpus itself, so "
+                         "this checkpoint has nothing to answer"
+                         % Path(path).parent.name)
     if Path(path).suffix.lower() == ".json":
         members, ev, note = read_ensemble(path)
         pred = infer.PolicyPredictor(members, device=device, label=path)
@@ -1149,8 +867,8 @@ def make_predictor(path, device=None):
     else:
         pred = Predictor(path, device=device, payload=payload)
     # The patch vocabulary is stored at the checkpoint top level (both
-    # families); keep it on the predictor so breakdown scoring can map a
-    # game's patch string to the embedding row the model was trained with.
+    # families); keep it on the predictor so the state's patch label can be
+    # mapped to the embedding row the model was trained with.
     pred.patch_vocab = (payload.get("patch_vocab")
                         or (payload.get("config") or {}).get("patch_vocab"))
     _MODEL_CACHE[key] = pred
@@ -1161,18 +879,26 @@ def load_predictor(path, device=None, role="auto"):
     """Build a model first, then swap it into its slot (the old one stays on
     failure) - concurrent requests keep a valid model.
 
-    `role` files the model: a policy checkpoint answers the next move, every
-    other kind answers the role board. The two slots are independent, so a
-    masked role model and a policy next-move model are loaded at the same
-    time; "auto" picks the slot from the checkpoint kind.
+    `role` files the model: a policy checkpoint is the head, every other kind is
+    the masker. The two slots are independent, so a masking checkpoint and a
+    next-move head are loaded at the same time; "auto" picks the slot from the
+    checkpoint kind.
+
+    The store is rebound after the swap, not before: a board published under the
+    old model has to be answerable by the new one, and an engine that still held
+    the old weights would answer `/api/suggest` with a model the header does
+    not name. Only the local `/api/load` route can do this now - the browser
+    has no model picker, so a normal session never swaps weights mid-draft.
     """
     with LOAD_LOCK:
         pred = make_predictor(path, device=device)
-        slot = "policy" if pred.kind == "policy" else "masked"
+        slot = slot_of(pred)
         if role in ("masked", "policy") and role != slot:
             raise ValueError("%s is a %s checkpoint, not a %s one"
                              % (Path(path).name, pred.kind, role))
         APP[slot] = pred
+        if _STATE_STORE is not None:
+            _bind_models()
     return pred
 
 
@@ -1180,10 +906,18 @@ _DRAFT_ROWS = None
 
 
 def load_drafts():
-    """Lazy-load the cached pro drafts (46.6k rows) on first use."""
+    """Lazy-load the cached pro drafts (~46.9k rows) on first use.
+
+    Prefers the unfrozen superset (`pro_drafts_full.pt`) so the walkthrough can
+    show games played after `CORPUS_MAX_DATE`; the frozen cache is the fallback.
+    Both are `{"rows": [...]}` with the same row schema, so `i` stays an index
+    into whichever file was loaded - callers must not mix ids across a reload.
+    """
     global _DRAFT_ROWS
     if _DRAFT_ROWS is None:
-        payload = torch.load(str(PRO_DRAFTS_PT), map_location="cpu")
+        path = (PRO_DRAFTS_FULL_PT if PRO_DRAFTS_FULL_PT.exists()
+                else PRO_DRAFTS_PT)
+        payload = torch.load(str(path), map_location="cpu")
         _DRAFT_ROWS = payload["rows"]
     return _DRAFT_ROWS
 
@@ -1250,6 +984,26 @@ def get_draft(i):
 
 APP = {}  # main(): mapping, names_by_idx, champions, device,
           #        masked (role model), policy (next-move model)
+
+
+def _row_key(role):
+    """A model role name -> the UI's `TOP..SUPPORT` key.
+
+    The two vocabularies are not the same list in a different case: the model's
+    is `model_tools.ROLES` (top, jungle, mid, bot, support) and the UI's is
+    `ROLE_ROWS` (TOP, JUNGLE, MIDDLE, BOTTOM, SUPPORT). This is the one edge
+    that converts, so a role key can never be compared across the two.
+    """
+    up = str(role).upper()
+    return up if up in ROLE_ROWS else ROLE_ROWS[model_tools.ROLES.index(role)]
+
+
+def _suggest_model(engine):
+    """What answered the role board: the head, else the masker, else nothing."""
+    for pred in (engine.predictor, engine.masker):
+        if pred is not None:
+            return model_info(pred)
+    return None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1336,11 +1090,6 @@ class Handler(BaseHTTPRequestHandler):
                 "current": {slot: (model_info(APP[slot])["path"]
                                    if APP.get(slot) else None)
                             for slot in ("masked", "policy")},
-                # Why the llm-* entries may be unloadable here. Sent so the
-                # dropdown can say it once instead of the user discovering it by
-                # clicking Load and reading a traceback.
-                "rerank": {"available": rerank_mod.unavailable_reason() is None,
-                           "reason": rerank_mod.unavailable_reason()},
             })
             return
         if path == "/api/state":
@@ -1371,169 +1120,20 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_suggest()
         elif route == "/api/next-move":
             self._handle_next_move()
-        elif route == "/api/explain":
-            self._handle_explain()
         elif route == "/api/load":
             self._handle_load()
         elif route == "/api/upload":
             self._handle_upload()
-        elif route == "/api/breakdown":
-            self._handle_breakdown()
-        elif route == "/api/draft-score":
-            self._handle_draft_score()
-        elif route == "/api/chat":
-            self._handle_chat()
-        elif route == "/api/tool":
-            self._handle_tool()
         elif route == "/api/state":
             self._handle_state()
         elif route == "/api/agent":
             self._handle_agent()
+        elif route == "/api/agent-suggest":
+            self._handle_agent_suggest()
+        elif route == "/api/agent-rank":
+            self._handle_agent_rank()
         else:
             self._send(404, {"error": "unknown endpoint"})
-
-    def _handle_draft_score(self):
-        """POST {picks, bans, first_pick, patch_id, fearless} -> which side's
-        draft the loaded model prefers, with the per-pick evidence.
-
-        Not a win probability: the policy head has no value output worth
-        shipping, so this replays each pick through it and compares how close
-        each side came to the model's own ranking (see `frontend/draftscore.py`).
-        """
-        try:
-            payload = self._read_json()
-            self._publish_state(payload)
-            pred = APP.get("policy")
-            if pred is None:
-                raise ValueError("no next-move policy loaded - pick a "
-                                 "best_policy.pt as the next-move model")
-            head = getattr(pred, "head", pred)
-            mapping, names = APP["mapping"], APP["names_by_idx"]
-            picks = payload.get("picks") or [None] * 10
-            picks_idx = [None if p is None else mapping[p] for p in picks]
-            # The two ban lists separately: the replay needs the ban that was
-            # made *before* each pick, and a concatenated list cannot be
-            # un-grouped when the sides have made different numbers of bans.
-            blue_bans = [mapping[b] for b in (payload.get("bans_blue") or [])
-                         if b in mapping]
-            red_bans = [mapping[b] for b in (payload.get("bans_red") or [])
-                        if b in mapping]
-            if not blue_bans and not red_bans:
-                flat = [mapping[b] for b in (payload.get("bans") or [])
-                        if b in mapping]
-                blue_bans, red_bans = flat[:len(flat) // 2], flat[len(flat) // 2:]
-            unavail_idx = [mapping[f] for f in (payload.get("fearless") or [])
-                           if f in mapping]
-            res = draftscore.score(
-                head, picks_idx, blue_bans, red_bans,
-                first_pick=1 if int(payload.get("first_pick", 0)) else 0,
-                patch_id=payload.get("patch_id"), unavailable=unavail_idx,
-                names=names)
-        except (ValueError, KeyError, TypeError, IndexError,
-                json.JSONDecodeError) as exc:
-            self._send(400, {"error": str(exc)})
-            return
-        out = dict(res)
-        out["model"] = model_info(pred)
-        self._send(200, out)
-
-    # ------------------------------------------------------------------ chat
-    def _board_from_payload(self, payload):
-        """The board fields every POST shares, mapped to champion indices."""
-        mapping = APP["mapping"]
-        picks = payload.get("picks") or [None] * 10
-        picks_idx = [None if p is None else mapping[p] for p in picks]
-        bans_idx = [mapping[b] for b in (payload.get("bans") or [])]
-        unavail_idx = [mapping[f] for f in (payload.get("fearless") or [])]
-        first_pick = 1 if int(payload.get("first_pick", 0)) else 0
-        return picks_idx, bans_idx, unavail_idx, first_pick
-
-    def _chat_head_probs(self, pred, payload, picks_idx, bans_idx, first_pick,
-                         unavail_idx):
-        """The head's whole distribution for this move, as idx -> p.
-
-        The whole vector, not a top-k. The chat adds a user's insistence in log
-        space and renormalises, so a champion the head ranks 47th still has to
-        be liftable - a top-8 would make the tail unreachable and every pin
-        would look identical. `k=num_champs` is the only way to get the tail out
-        of `next_move` without reaching into the model for raw logits.
-
-        Deliberately the *head*, even when the reranker is the loaded model: a
-        reranker scores a shortlist and has no distribution to boost. The chat
-        therefore answers from the head, and the reranker keeps its own panel.
-        """
-        head = getattr(pred, "head", pred)
-        pid = payload.get("patch_id")
-        pid = head.default_patch_id() if pid is None else pid
-        res = head.next_move(picks_idx, bans_idx, first_pick=first_pick,
-                             k=int(getattr(head, "num_champs", 173)),
-                             unavailable=unavail_idx, patch_id=pid)
-        return res, {int(c["idx"]): float(c["prob"])
-                     for c in res["suggestions"]}
-
-    def _chat_board(self, payload, res, index, pred, picks_idx, bans_idx,
-                    unavail_idx, first_pick):
-        key_for = getattr(pred, "patch_key_for", None)
-        patch = (payload.get("patch")
-                 or (key_for(res["patch_id"]) if key_for else None)
-                 or index.latest_patch)
-        return tools.Board(picks_idx, bans_idx, first_pick=first_pick,
-                           unavailable=unavail_idx, patch=patch,
-                           num_champs=len(APP["names_by_idx"]))
-
-    def _handle_chat(self):
-        """POST {message, picks, bans, first_pick, fearless, patch_id}
-        -> a grounded reply, the ranking it is about, and the evidence used.
-
-        The turn is four steps and each one is somewhere else: `chat.parse`
-        reads the message, `tools` gathers the evidence, `chat.invert` adds the
-        user's insistence as a prior in log space and renormalises, and
-        `chat.compose_local` (or a remote model, if one is configured) phrases
-        the numbers. Nothing here is allowed to invent a fact: every clause of
-        the reply traces to a tool result or to the head's own probability.
-        """
-        try:
-            payload = self._read_json()
-            self._publish_state(payload)
-            pred = APP.get("policy")
-            if pred is None:
-                raise ValueError("/api/chat needs a next-move policy "
-                                 "checkpoint; none is loaded")
-            message = (payload.get("message") or "").strip()
-            if not message:
-                raise ValueError("empty message")
-            picks_idx, bans_idx, unavail_idx, first_pick = \
-                self._board_from_payload(payload)
-            res, probs = self._chat_head_probs(pred, payload, picks_idx,
-                                               bans_idx, first_pick,
-                                               unavail_idx)
-            index = pro_index()
-            corpus = chat_corpus()
-        except (ValueError, KeyError, TypeError, IndexError,
-                json.JSONDecodeError) as exc:
-            self._send(400, {"error": str(exc)})
-            return
-        except Exception as exc:  # noqa: BLE001 - corpus missing/unreadable
-            self._send(500, {"error": "cannot build the draft index: %s" % exc})
-            return
-
-        board = self._chat_board(payload, res, index, pred, picks_idx, bans_idx,
-                                 unavail_idx, first_pick)
-        try:
-            out = chat.respond(
-                corpus, board, probs, APP["names_by_idx"], message,
-                client=APP.get("chat_client"),
-                k_similar=int(payload.get("k_similar", tools.SIMILAR_DEFAULT)))
-        except Exception as exc:  # noqa: BLE001 - one panel, not the server
-            self._send(500, {"error": "chat failed: %s" % exc})
-            return
-        out["model"] = model_info(pred)
-        out["state"] = {k: res[k] for k in ("move_idx", "kind", "side", "phase",
-                                            "first_pick", "complete")}
-        out["board"] = {"move_idx": board.move_idx, "patch": board.patch,
-                        "n_legal": len(board.legal()),
-                        "n_taken": len(board.taken)}
-        self._send(200, out)
 
     # ------------------------------------------------------------- state
     def _publish_state(self, payload):
@@ -1544,9 +1144,10 @@ class Handler(BaseHTTPRequestHandler):
         champion indices; the mapping stops at this edge, as it does everywhere
         else in the frontend.
 
-        A board the store refuses is *recorded*, not raised: `/api/chat` falls
-        back to taking the board as an argument, which is what it did before
-        states existed, and the panel can show the reason instead of a 400.
+        A board the store refuses is *recorded*, not raised: there is no
+        board-as-argument fallback left to fall back to, so the honest answer is
+        to keep the last good state and let the panel show `state_error` instead
+        of turning one unplayable board into a 400 on every route.
         """
         mapping = APP.get("mapping") or {}
         try:
@@ -1580,12 +1181,63 @@ class Handler(BaseHTTPRequestHandler):
                 patch=self._state_patch(payload),
                 bans_blue=blue if split else None,
                 bans_red=red if split else None,
-                unavailable=pool)
+                unavailable=pool,
+                series=self._series_lines(payload))
         except (ValueError, KeyError, TypeError) as exc:
             APP["state_error"] = str(exc)
             return None
         APP["state_error"] = None
         return state
+
+    def _series_lines(self, payload):
+        """The series bar as lines the state renders and `get_state` reports.
+
+        The board itself cannot say which game of a series it is: ten picks and
+        ten bans look the same in G1 and G5, and the fearless pool is only the
+        *effect* of the earlier games on legality. The panel sends the game
+        number, the number of games and a compact per-game count; those are
+        rendered here from numbers only, so a client cannot put prose into the
+        model's prompt.
+
+        Absent is not empty. Every board route publishes the series, but a
+        partial caller that forwards a board without it is saying nothing about
+        the series, and clearing the lines would make the next agent turn
+        describe G1 of a G3 draft.
+        """
+        raw = payload.get("series")
+        if raw is None:
+            return list(state_store().get(draft_state.REAL_ID).series)
+        if not isinstance(raw, dict):
+            return []
+
+        def num(value, hi):
+            try:
+                return max(0, min(hi, int(value)))
+            except (TypeError, ValueError):
+                return 0
+
+        game, of = num(raw.get("game"), 99), num(raw.get("of"), 99)
+        if not game or not of or game > of:
+            return []
+        lines = ["series: game %d of %d" % (game, of)]
+        games = raw.get("games")
+        if isinstance(games, list):
+            rows = []
+            for i, g in enumerate(games[:12]):
+                if not isinstance(g, dict):
+                    continue
+                rows.append("G%d %d/10%s" % (i + 1, num(g.get("picks"), 10),
+                                             " (closed)" if g.get("closed")
+                                             else ""))
+            if rows:
+                lines.append("series games: " + ", ".join(rows))
+        if game > 1:
+            lines.append("series: champions picked in games 1-%d are "
+                         "unavailable here (the fearless pool above lists them)"
+                         % (game - 1))
+        else:
+            lines.append("series: game 1 - nothing is fearless-unavailable yet")
+        return lines
 
     def _state_patch(self, payload):
         """The patch *label* the head will actually condition on.
@@ -1684,9 +1336,13 @@ class Handler(BaseHTTPRequestHandler):
         The only route that calls a remote model, and the only one whose answer
         is prose. Three things have to be true, and each missing one is a
         sentence rather than a traceback: `langgraph` importable, a key in the
-        environment, a policy loaded. The board comes from the store, not from
+        environment, a model loaded. The board comes from the store, not from
         the payload - that is what `/api/state` is for, and it is why the model
         is never asked to retype nine champion names.
+
+        The board in the payload is published first, so a turn always answers
+        about the board on screen. Everything the agent does to it after that
+        happens in a sandbox: `real` is written here and nowhere else.
         """
         try:
             from pro.model.agent import loop
@@ -1704,9 +1360,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, {"error": str(exc)})
             return
         try:
-            # `agent_client` is the seam `/api/chat` already has as
-            # `chat_client`: a test (or a local model) can answer without a
-            # network, and with nothing set the environment decides.
+            # `agent_client` is a seam: a test (or a local model) can answer
+            # without a network, and with nothing set the environment decides.
             out = loop.run(sess, message, client=APP.get("agent_client"),
                            state_id=draft_state.REAL_ID,
                            max_steps=int(payload.get("max_steps") or 8))
@@ -1720,403 +1375,332 @@ class Handler(BaseHTTPRequestHandler):
         out["states"] = state["states"]
         self._send(200, out)
 
-    def _handle_tool(self):
-        """POST {tool, args:{...}, picks, bans, first_pick, fearless} -> one result.
+    def _handle_agent_suggest(self):
+        """POST {board...} -> one agent turn that commits to a single move.
 
-        Exposed so the panel can show the evidence a reply was built from, and
-        so a tool can be asked about a board the chat never saw. Same board
-        fields as /api/chat, so the two cannot disagree about what is legal.
+        The button in the agent panel. It is *not* `/api/next-move` with prose
+        on top: that route asks the head for a ranked list, while this one asks
+        the agent - the same configuration `eval_api_agent.py` measured - to
+        read the held state, call `get_state`, `predict_roles` and
+        `predict_next_move` with a k it chooses, and commit to one champion.
+        That is the reranking job the retired local adapter used to do, done
+        with tools and state management instead of a 4B checkpoint.
+
+        The whole answer is a claim about *this* board, so a board the store
+        refuses is a 400 rather than a stale answer: exactly the rule
+        `/api/next-move` follows, and the opposite of `/api/suggest`'s lenient
+        role board. Everything else degrades to a sentence - no langgraph
+        (503), no key (`stop="no client"`), no head (`head=None`).
+
+        The recommendation is parsed from the answer's final `PICK:`/`BAN:`
+        line so the panel can show it as a move; the head's own #1 is computed
+        here, on `real`, for the fidelity chip. Fidelity is this component's
+        metric, accuracy belongs to the head - nothing here claims either.
         """
         try:
-            payload = self._read_json()
-            self._publish_state(payload)
-            name = payload.get("tool")
-            if not name:
-                raise ValueError("missing 'tool'")
-            pred = APP.get("policy")
-            if pred is None:
-                raise ValueError("no next-move policy loaded")
-            picks_idx, bans_idx, unavail_idx, first_pick = \
-                self._board_from_payload(payload)
-            res, probs = self._chat_head_probs(pred, payload, picks_idx,
-                                               bans_idx, first_pick,
-                                               unavail_idx)
-            index = pro_index()
-            board = self._chat_board(payload, res, index, pred, picks_idx,
-                                     bans_idx, unavail_idx, first_pick)
-            out = tools.run(chat_corpus(), board, name, APP["names_by_idx"],
-                            probs=probs, **(payload.get("args") or {}))
-        except (ValueError, KeyError, TypeError, IndexError,
-                json.JSONDecodeError) as exc:
-            self._send(400, {"error": str(exc)})
+            from pro.model.agent import loop, suggest
+        except ImportError as exc:
+            self._send(503, {"error": "the agent loop needs langgraph: %s" % exc})
             return
-        except Exception as exc:  # noqa: BLE001 - one request, not the server
-            self._send(500, {"error": "tool failed: %s" % exc})
-            return
-        out["state"] = {k: res[k] for k in ("move_idx", "kind", "side",
-                                            "complete")}
-        self._send(200, out)
-
-    def _handle_suggest(self):
         try:
             payload = self._read_json()
-            self._publish_state(payload)
-            picks = payload["picks"]              # len 10, riot id or None
-            bans = payload.get("bans", [])        # riot ids
-            fearless = payload.get("fearless") or []   # riot ids
-            last_slot = payload.get("last_slot")
-            if last_slot is not None:
-                last_slot = int(last_slot)
-                if not 0 <= last_slot < N_SLOTS:
-                    raise ValueError("last_slot must be a slot index 0-9")
-            mapping, names = APP["mapping"], APP["names_by_idx"]
-            bans_idx = [mapping[b] for b in bans if b in mapping]
-            unavail_idx = [mapping[f] for f in fearless if f in mapping]
-            picks_idx = [None if p is None else mapping[p] for p in picks]
-            first_pick = 1 if int(payload.get("first_pick", 0)) else 0
-            res, method, pred = self._suggest_board(
-                picks_idx, bans_idx, unavail_idx, first_pick, last_slot,
-                picks, mapping)
+            if self._publish_state(payload) is None:
+                raise ValueError(APP.get("state_error")
+                                 or "the store refused this board")
+            store = state_store()
+            st = store.get(draft_state.REAL_ID)
+            sess = _agent_session(ablate=suggest.ABLATE,
+                                  max_calls=suggest.MAX_CALLS)
         except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             self._send(400, {"error": str(exc)})
             return
-        out = {"blue": {}, "red": {}, "roles": res["roles"],
-               "assignment": res["assignment"],
-               # the masked model cannot consume the pool, so this is a
-               # filter, not a condition - the UI warns when it is non-zero
-               "fearless_filtered": len(unavail_idx),
-               # which model answered: "head" is the next-move policy with the
-               # pool masked to the lane (fabricated turn), "masked" is the
-               # role board's own checkpoint. They are not the same question,
-               # and only one of them exists in a `--no-policy` install.
-               "method": method,
-               "model": model_info(pred)}
-        for team in ("blue", "red"):
-            for role, cands in res[team].items():
-                lst = []
-                for c in cands:
-                    cand = {"name": names[c["idx"]], "prob": c["prob"],
-                            "idx": c["idx"]}
-                    if c.get("flex"):
-                        cand["flex"] = True
-                    lst.append(cand)
-                out[team][role] = lst
+
+        state = self._state_payload()
+        if st.to_move() is None:
+            self._send(200, {
+                "question": suggest.QUESTION, "answer": None,
+                "stop": "draft complete", "model": None,
+                "state": state["real"], "states": state["states"],
+                "complete": True, "calls": [], "summary": sess.summary(),
+                "suggestion": suggest.parse_answer(None, store.champs, st),
+                "head": None, "config": suggest.config(),
+                "error": state["error"]})
+            return
+        try:
+            out = loop.run(sess, suggest.QUESTION,
+                           client=APP.get("agent_client"),
+                           system=suggest.system(),
+                           state_id=draft_state.REAL_ID,
+                           max_steps=suggest.MAX_STEPS)
+        except Exception as exc:  # noqa: BLE001 - one panel, not the server
+            self._send(500, {"error": "agent failed: %s" % exc})
+            return
+        # Re-read the state after the turn: the agent may have left sandboxes
+        # behind, and an exploration is only useful if the panel can see it.
+        state = self._state_payload()
+        out["state"] = state["real"]
+        out["states"] = state["states"]
+        out["complete"] = False
+        out["error"] = out.get("error") or state["error"]
+        out["config"] = suggest.config()
+        # `real` is read-only to the tools, but a checkpoint swap mid-turn
+        # rebinds the engine under every state; re-read it so the fidelity chip
+        # and the answer are about the weights that are live now.
+        live = store.get(draft_state.REAL_ID)
+        out["suggestion"] = suggest.parse_answer(out.get("answer"),
+                                                 store.champs, live)
+        out["head"] = suggest.head_fidelity(live, store.champs,
+                                            out["suggestion"])
         self._send(200, out)
 
-    def _suggest_board(self, picks_idx, bans_idx, unavail_idx, first_pick,
-                       last_slot, picks_riot, mapping):
-        """Fill the role board, preferring the next-move head.
+    def _handle_agent_rank(self):
+        """POST {board...} -> the agent's top-k rerank of the head's shortlist.
 
-        Two answers, one contract (`blue`/`red` -> role -> candidates, plus
-        `roles` and `assignment`):
+        The ranking arm of `suggest.py`, exposed for the panel's "agent
+        suggestions" column. It is the same ablated, explained-prompt agent and
+        the same budget as the single-move `/api/agent-suggest`, but asked to
+        *order* the head's top-k rather than commit to one. The list comes back
+        honest by construction: `parse_ranking` only accepts champions the head
+        listed, and fills any slot the agent left unnamed from the head's own
+        legal shortlist, so the panel always shows `RANK_K` names and never
+        invents one the head did not produce.
 
-        * **head** - the next-move policy asked "suppose this side were picking
-          next, for this lane", with the logits masked to the champions that
-          play it (`next_move(..., allowed=..., team=...)`). Measured at 10
-          bans + 6 picks: 14.3 % top-1 / 49.5 % top-5 against the masking
-          checkpoint's 10.5 / 44.2, paired p = 0.02; see frontend/README.md,
-          "The fabricated turn".
-        * **masked** - the role board's own checkpoint. It is still the
-          fallback because the head can only be asked about a *pick* move: on
-          a ban-phase board the question has no in-distribution form (6 bans
-          with a 10-ban move index), where the two tie (p = 0.81) and the
-          masked board keeps 4 pp more top-5.
+        `head_top` is fetched at k=20 and trimmed to the legal pool (the head
+        already masks bans and fearless), so the agent has room to promote a deep
+        pick without the parser falling back to the head's order everywhere.
 
-        The head is reached through `pred.head` when the policy slot holds the
-        LLM reranker, because the reranker's own `next_move` would spend 0.45 s
-        per cell on a question the head answers in 15 ms.
-
-        -> (result, "head" | "masked", the predictor that answered)
+        Like the other agent routes it publishes the board first and degrades to a
+        sentence - no langgraph (503), no key (`stop="no client"`, and the head's
+        own list with `source="head"`), no head (`suggestions` from the parser
+        alone). A complete draft returns an empty list with `complete: true`.
         """
-        policy = APP.get("policy")
-        head = getattr(policy, "head", policy)
-        masked = APP.get("masked")
-        if head is None and masked is None:
-            raise ValueError(
-                "no role board available: load a next-move policy (best_policy"
-                ".pt) or a masked checkpoint (best.pt)")
-        if head is not None and self._next_move_is_pick(picks_idx, bans_idx,
-                                                        first_pick):
-            return (self._suggest_from_head(head, picks_idx, bans_idx,
-                                            unavail_idx, first_pick,
-                                            last_slot), "head", head)
-        if masked is None:
-            n_picks = sum(1 for c in picks_idx if c is not None)
-            move_idx, _lb, _lp = infer.resolve_position(
-                len(bans_idx), n_picks, int(first_pick))
-            if move_idx >= infer.N_MOVES:
-                raise ValueError("the draft is complete - there is no role "
-                                 "board left to fill")
-            raise ValueError(
-                "this board is in its ban phase, where the role board falls "
-                "back to the masking checkpoint - load one (best.pt) or "
-                "finish the bans")
-        return (masked.suggest(picks_riot, bans_idx, mapping,
-                               last_slot=last_slot,
-                               unavailable_idx=unavail_idx), "masked", masked)
+        try:
+            from pro.model.agent import loop, suggest
+        except ImportError as exc:
+            self._send(503, {"error": "the agent loop needs langgraph: %s" % exc})
+            return
+        try:
+            payload = self._read_json()
+            if self._publish_state(payload) is None:
+                raise ValueError(APP.get("state_error")
+                                 or "the store refused this board")
+            store = state_store()
+            st = store.get(draft_state.REAL_ID)
+            sess = _agent_session(ablate=suggest.RANK_ABLATE,
+                                  max_calls=suggest.RANK_CALLS)
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            self._send(400, {"error": str(exc)})
+            return
 
-    @staticmethod
-    def _next_move_is_pick(picks_idx, bans_idx, first_pick):
-        """Whether the head can be asked about the coming move.
+        state = self._state_payload()
+        if st.to_move() is None:
+            self._send(200, {
+                "question": suggest.rank_question(suggest.RANK_K),
+                "suggestions": [], "complete": True,
+                "answer": None,
+                "state": state["real"], "states": state["states"],
+                "stop": "draft complete", "model": None,
+                "summary": sess.summary(), "config": suggest.rank_config(),
+                "head": None, "error": state["error"]})
+            return
 
-        Two conditions, both measured (`frontend/probe_roleboard_fab.py`,
-        2026-11-10), because the head only wins where the question is both
-        in-distribution *and* the board carries enough context:
+        # The head's own legal shortlist, for the parser's fallback fill.
+        k = suggest.RANK_K
+        head_top = _head_top_legal(st, k=20)
+        # The chat the user has been having, carried as rerank context so a
+        # conversation that changed the agent's mind changes this list too.
+        seed = payload.get("messages") or None
+        try:
+            out = loop.run(sess,
+                           suggest.rank_question(k, st.to_move()["kind"]),
+                           client=APP.get("agent_client"),
+                           system=suggest.system(),
+                           state_id=draft_state.REAL_ID,
+                           max_steps=suggest.RANK_STEPS, seed=seed)
+        except Exception as exc:  # noqa: BLE001 - one panel, not the server
+            self._send(500, {"error": "agent failed: %s" % exc})
+            return
 
-        * the ban block must be complete - on a ban-phase board a pick-phase
-          hypothetical has no honest form (6 bans with a 10-ban move index),
-          and the two tie there (10.8 % vs 10.1 % top-1, p = 0.81);
-        * the next move must be a pick - the head has no pick to rank at a
-          ban move.
+        # Re-read the state: the agent may have cloned it for a hypothetical.
+        state = self._state_payload()
+        out["state"] = state["real"]
+        out["states"] = state["states"]
+        out["complete"] = False
+        out["error"] = out.get("error") or state["error"]
+        out["config"] = suggest.rank_config()
+        live = store.get(draft_state.REAL_ID)
+        ranked = suggest.parse_ranking(out.get("answer"), store.champs, live,
+                                       k=k, head_top=head_top)
+        out["suggestions"] = ranked["suggestions"]
+        out["parse"] = ranked["parse"]
+        # Fidelity to the head's #1, recomputed on the live board, for the chip.
+        out["head"] = suggest.head_fidelity(live, store.champs, None)
+        self._send(200, out)
 
-        The first version of this routed every pick move to the head, which
-        was wrong for picks1: at 6 bans + 3 picks the head's top-5 is 39.9 %
-        against the masked board's 45.7 %, and its top-1 only 12.1 % vs 10.2 %
-        (p = 0.28). Three picks is not enough board for it to beat a model
-        built for exactly this question.
+    def _handle_suggest(self):
+        """POST {picks, bans, first_pick, fearless, k} -> the role board.
+
+        One `predict_in_lane` question per open cell: for each side, for each
+        role the assignment says is still unfilled, "which champion would the
+        model take for that role". The mask is applied to the logits *before*
+        the top-k, so the answer is a real ranking inside the role rather than
+        an unconstrained list filtered afterwards (which empties the cell 13 %
+        of the time, because the head's five favourites often do not play it).
+
+        The result says which model answered, per cell:
+
+          head     the next-move head, on a pick move with the bans complete
+          masker   a masking checkpoint, during the ban phase, where the head
+                   has no in-distribution form for the question
+
+        The *assignment* is not a model answer. It comes from
+        `data/champ_roles.json`, is one-to-one per side, and travels on the
+        state - so this route reads it instead of computing a second, possibly
+        different one.
+
+        A cell that cannot be answered is left out with its reason in `notes`
+        rather than failing the board: one refused lane should not blank the
+        other nine.
+
+        Role keys are the UI's `TOP..SUPPORT`; the model's own vocabulary is
+        lowercase (`model_tools.ROLES`). This handler is the one place that
+        converts between them, and the client normalises them through
+        `/api/champions`' `roles` list - never by assuming a numeric index.
         """
-        if len(bans_idx) < 10:
-            return False
-        n_picks = sum(1 for c in picks_idx if c is not None)
-        move_idx, _lb, _lp = infer.resolve_position(len(bans_idx), n_picks,
-                                                   int(first_pick))
-        if move_idx >= infer.N_MOVES:
-            return False
-        kind, _team = infer.move_plan(int(first_pick))[move_idx]
-        return kind == infer.MOVE_PICK
+        try:
+            payload = self._read_json()
+            self._publish_state(payload)
+            store = state_store()
+            st = store.get(draft_state.REAL_ID)
+            engine = store.engine
+            if engine.predictor is None and engine.masker is None:
+                raise ValueError(
+                    "no model loaded - the role board needs either the "
+                    "next-move head (best_policy.pt) or a masking checkpoint "
+                    "(best.pt)")
+            k = max(1, min(5, int(payload.get("k") or 3)))
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            self._send(400, {"error": str(exc)})
+            return
 
-    def _suggest_from_head(self, head, picks_idx, bans_idx, unavail_idx,
-                           first_pick, last_slot, k=5):
-        """One lane-masked head query per open cell, plus the display roles."""
-        lanes = assign_lanes(picks_idx)
-        filled = [c is not None for c in picks_idx]
-        pid = head.default_patch_id()
-        out = {"blue": {}, "red": {}}
-        roles = None
-        for team in (0, 1):
-            taken = {lanes[team * 5 + s] for s in range(5)}
-            for lane in range(5):
-                if lane in taken:
+        assignment = [None] * N_SLOTS
+        conf = [None] * N_SLOTS
+        for row in st.roles:
+            assignment[row.slot] = _row_key(row.role)
+            conf[row.slot] = row.p_lane
+        out = {"blue": {}, "red": {},
+               "roles": [r.as_dict() for r in st.roles],
+               "assignment": assignment, "conf": conf,
+               "open_roles": {side: [_row_key(r) for r in roles]
+                              for side, roles in st.open_roles().items()},
+               # The head masks the pool before its top-k, so this is a real
+               # condition on the pick path and a post-filter on the masking
+               # path. The count is published either way; `methods` says which.
+               "fearless_filtered": len(st.unavailable),
+               "complete": st.to_move() is None,
+               "methods": {}, "notes": {}, "method": "none"}
+        if st.to_move() is None:
+            self._send(200, dict(out, model=_suggest_model(engine)))
+            return
+
+        methods = set()
+        for side in ("blue", "red"):
+            for role in st.open_roles()[side]:
+                key = _row_key(role)
+                try:
+                    res = st.predict_next_move(k=k, role=role, side=side)
+                except ValueError as exc:
+                    out["notes"]["%s/%s" % (side, key)] = str(exc)
                     continue
-                res = head.next_move(picks_idx, bans_idx,
-                                     first_pick=first_pick, k=k,
-                                     unavailable=unavail_idx, patch_id=pid,
-                                     allowed=legal_champions(lane), team=team)
-                if roles is None:
-                    roles = res["roles"]
-                key = "blue" if team == 0 else "red"
-                out[key][ROLE_ROWS[lane]] = res["suggestions"]
-        if roles is None:                 # every lane filled: display only
-            res = head.next_move(picks_idx, bans_idx, first_pick=first_pick,
-                                 k=1, unavailable=unavail_idx, patch_id=pid)
-            roles = res["roles"]
-        out["roles"] = roles
-        # The table decides the model's `role_ids`; the panel's badges keep the
-        # role head's answer with the newest pick pinned, exactly as the masked
-        # path does - otherwise a click could move a badge that the model was
-        # not using anyway.
-        out["assignment"] = _assign_roles(roles, filled, newest=last_slot)
-        return out
-
-    def _ask_next_move(self, pred, payload, picks_idx, bans_idx, first_pick,
-                       k=8, unavail_idx=None):
-        """One call into the loaded next-move model, lane included when asked.
-
-        Only the reranker asks which lane the coming pick is for - its prompt
-        reads "the best Red Side pick for *Top* lane". The head answers a
-        lane-free "best next champion" and raises on the extra keyword, so the
-        field is gated on the capability rather than on the class name.
-
-        `patch_id` defaults to the model's own default rather than to UNK: the
-        patch is a string in the prompt, and "Patch: None" is text no training
-        example ever contained.
-        """
-        pid = payload.get("patch_id")
-        pid = pred.default_patch_id() if pid is None else pid
-        extra = {}
-        if getattr(pred, "accepts_lane", False):
-            lane = payload.get("lane")
-            extra["lane"] = None if lane is None else int(lane)
-        return pred.next_move(picks_idx, bans_idx, first_pick=first_pick, k=k,
-                              unavailable=unavail_idx, patch_id=pid, **extra)
+                methods.add(res["method"])
+                out["methods"]["%s/%s" % (side, key)] = res["method"]
+                out[side][key] = [{"name": c["name"],
+                                   "idx": store.champs.resolve(c["name"]),
+                                   "prob": c["p_in_lane"]}
+                                  for c in res["top"]]
+        # Same champion under two roles of one team: it plays both, so the cell
+        # is a real choice rather than a duplicate of the other one.
+        for side in ("blue", "red"):
+            seen = {}
+            for cands in out[side].values():
+                for c in cands:
+                    seen[c["name"]] = seen.get(c["name"], 0) + 1
+            for cands in out[side].values():
+                for c in cands:
+                    if seen[c["name"]] > 1:
+                        c["flex"] = True
+        out["method"] = ("mixed" if len(methods) > 1
+                         else (methods.pop() if methods else "none"))
+        self._send(200, dict(out, model=_suggest_model(engine)))
 
     def _handle_next_move(self):
-        """POST {picks, bans, first_pick, fearless, patch_id, lane} -> next move.
+        """POST {picks, bans, first_pick, fearless, patch_id, k} -> the head.
 
-        `picks` is the UI's 10-slot pick-order board (riot ids or null),
-        `bans` the flat ban list, `fearless` the champions picked in
-        earlier games of the same series, `patch_id` a row of the
-        loaded checkpoint's patch vocabulary (omitted -> the default
-        patch, usually 16.20) and `lane` the lane the coming pick is for
-        (read by the LLM reranker only). The board is mapped to indices here
-        and handed to infer.PolicyPredictor; every champion index it returns is
-        translated back to a name so the client never needs the mapping.
+        The same call the agent makes - `predict_next_move` on the live state -
+        rendered instead of narrated. It publishes the board first, so this
+        answer and `/api/suggest` describe one board rather than two.
 
-        One answer per board: the ranked list for the side on the clock.
-        There is no separate ban ranking - a pro-like ban is the denial
-        decision, and the rollout that used to approximate it was removed
-        (STATUS.md §5/§8).
+        One answer per board: the ranked list for the side on the clock. There
+        is no separate ban ranking - a pro-like ban is the denial decision, and
+        the rollout that used to approximate it was removed (STATUS.md §5/§8).
         """
         try:
             payload = self._read_json()
-            self._publish_state(payload)
-            pred = APP.get("policy")
-            if pred is None:
+            # `/api/suggest` may keep the last good board and let the panel show
+            # `state_error`; this route may not. Its whole answer is a
+            # distribution over *this* board, and one computed for a board the
+            # store refused is indistinguishable from a good one.
+            if self._publish_state(payload) is None:
+                raise ValueError(APP.get("state_error")
+                                 or "the store refused this board")
+            store = state_store()
+            st = store.get(draft_state.REAL_ID)
+            engine = store.engine
+            if engine.predictor is None:
                 raise ValueError(
-                    "no next-move policy loaded - pick a best_policy.pt as "
-                    "the next-move model to use this panel")
-            mapping, names = APP["mapping"], APP["names_by_idx"]
-            picks = payload.get("picks") or [None] * 10
-            bans = payload.get("bans") or []
-            fearless = payload.get("fearless") or []
-            first_pick = 1 if int(payload.get("first_pick", 0)) else 0
-            picks_idx = [None if p is None else mapping[p] for p in picks]
-            bans_idx = [mapping[b] for b in bans]
-            unavail_idx = [mapping[f] for f in fearless]
-            res = self._ask_next_move(pred, payload, picks_idx, bans_idx,
-                                      first_pick,
-                                      k=int(payload.get("k", 8)),
-                                      unavail_idx=unavail_idx)
-        except (ValueError, KeyError, TypeError, IndexError,
-                json.JSONDecodeError) as exc:
+                    "no next-move model loaded - load a best_policy.pt to rank "
+                    "the move on the clock")
+            k = max(1, min(20, int(payload.get("k") or 8)))
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             self._send(400, {"error": str(exc)})
             return
-
+        if st.to_move() is None:
+            self._send(200, {"model": model_info(engine.predictor),
+                             "state": {"move_idx": st.move_idx, "kind": None,
+                                       "side": None, "complete": True,
+                                       "n_legal": st.legal_count(),
+                                       "n_unavailable": len(st.unavailable),
+                                       "first_pick": 1 if st.red_first else 0},
+                             "patch": st.patch, "suggestions": [], "note": ""})
+            return
+        try:
+            res = st.predict_next_move(k=k)
+        except ValueError as exc:
+            self._send(400, {"error": str(exc)})
+            return
         self._send(200, {
-            "model": model_info(pred),
-            "state": {k: res[k] for k in ("move_idx", "kind", "side", "phase",
-                                          "first_pick", "warning", "complete",
-                                          "n_unavailable")},
-            # what the model actually conditioned on (an unknown or
-            # out-of-range request is reported as the UNK row it fell back to)
-            "patch_id": res["patch_id"],
-            "patch": pred.patch_key_for(res["patch_id"]),
-            "suggestions": [{"idx": c["idx"], "prob": c["prob"],
-                             "name": names[c["idx"]],
-                             # Present only when the reranker chose from this
-                             # list: the chip then shows the LLM's k-way
-                             # probability and which one it picked.
-                             **({"llm_prob": c["llm_prob"],
-                                 "llm_pick": c["llm_pick"]}
-                                if "llm_prob" in c else {})}
-                            for c in res["suggestions"]],
-            "roles": res["roles"],
-            # None for a head-only model, and `{"error": ...}` when the rerank
-            # failed while the head's answer still stands.
-            "rerank": res.get("rerank"),
+            "model": model_info(engine.predictor),
+            "state": {"move_idx": res["move_idx"], "kind": res["kind"],
+                      "side": 0 if res["side"] == "blue" else 1,
+                      "n_legal": res["n_legal"], "complete": False,
+                      "n_unavailable": len(st.unavailable),
+                      "first_pick": 1 if st.red_first else 0},
+            # The patch the model actually conditioned on: an unknown or
+            # out-of-range request is reported as the row it fell back to.
+            "patch": res["patch_resolved"],
+            "suggestions": [{"idx": store.champs.resolve(c["name"]),
+                             "name": c["name"], "prob": c["p_head"]}
+                            for c in res["top"]],
+            # The tool's own note: which pool the shares are of, and whether
+            # the patch it was asked for is one it knows.
+            "note": res["note"],
         })
-
-    @staticmethod
-    def _explain_model_label(pred):
-        """What the explanation panel should say answered the question.
-
-        Not `model_info(pred)`: the explanation is composed from the numbers,
-        so the honest label names the parts that produced them - and says so
-        when the reranker was the one that ordered the list.
-        """
-        if getattr(pred, "head", None) is not None:
-            return "head + LLM reranker (local)"
-        return "policy head (local)"
-
-    def _handle_explain(self):
-        """POST {picks, bans, first_pick, patch_id, k, k_games, patch, force}
-        -> top-k, retrieved evidence, and an explanation built locally.
-
-        `patch_id` conditions the model exactly as /api/next-move does;
-        `patch` overrides only which patch NOTES are quoted (default: the
-        selected patch, else the newest in the corpus). The explanation is
-        composed from the model's own numbers and the retrieved evidence
-        (`llm.compose_local`), so there is no API key and no prose that cannot
-        be traced to a probability, a count or a line of the patch notes.
-        """
-        try:
-            payload = self._read_json()
-            self._publish_state(payload)
-            pred = APP.get("policy")
-            if pred is None:
-                raise ValueError(
-                    "/api/explain needs a next-move policy checkpoint; none "
-                    "is loaded")
-            mapping, names = APP["mapping"], APP["names_by_idx"]
-            picks = payload.get("picks") or [None] * 10
-            bans = payload.get("bans") or []
-            first_pick = 1 if int(payload.get("first_pick", 0)) else 0
-            picks_idx = [None if p is None else mapping[p] for p in picks]
-            bans_idx = [mapping[b] for b in bans]
-            unavail_idx = [mapping[f] for f in (payload.get("fearless") or [])]
-            # Same call as /api/next-move, so the prose describes the list the
-            # panel is showing - including the reranker's lane, which the panel
-            # sends along.
-            res = self._ask_next_move(pred, payload, picks_idx, bans_idx,
-                                      first_pick, k=int(payload.get("k", 5)),
-                                      unavail_idx=unavail_idx)
-            index = pro_index()
-        except (ValueError, KeyError, TypeError, IndexError,
-                json.JSONDecodeError) as exc:
-            self._send(400, {"error": str(exc)})
-            return
-        except Exception as exc:  # noqa: BLE001 - corpus missing/unreadable
-            self._send(500, {"error": "cannot build the draft index: %s" % exc})
-            return
-
-        board = {
-            "move_idx": int(res["move_idx"]),
-            "side": "blue" if int(res["side"]) == 0 else "red",
-            "first_pick": first_pick,
-            "first_pick_side": "red" if first_pick else "blue",
-            # The patch selector is the default for the notes too, so the
-            # prose talks about the patch the model was actually
-            # conditioned on. An explicit `patch` in the body still wins.
-            "patch": (payload.get("patch")
-                      or pred.patch_key_for(res["patch_id"])
-                      or index.latest_patch),
-            "bans": [names[i] for i in bans_idx],
-            "blue": [names[i] for i in picks_idx[:5] if i is not None],
-            "red": [names[i] for i in picks_idx[5:] if i is not None],
-            "champ_ids": [i for i in picks_idx if i is not None] + bans_idx,
-        }
-        # The number the user is looking at on the chip: the answering model's
-        # own probability, which is the LLM's k-way one when it scored the list.
-        suggestions = [(names[c["idx"]], float(c.get("llm_prob", c["prob"])))
-                       for c in res["suggestions"]]
-        try:
-            explained = llm.explain(
-                board, suggestions, index,
-                # No client: the explanation is composed from the numbers the
-                # loaded model just produced, so the button needs no API key.
-                client=None,
-                k_games=int(payload.get("k_games", 5)),
-                force=bool(payload.get("force")), names=names,
-                res=res, model=self._explain_model_label(pred))
-        except Exception as exc:  # noqa: BLE001 - one panel, not the server
-            self._send(500, {"error": "explain failed: %s" % exc})
-            return
-        out = {
-            "model": model_info(pred),
-            "state": {k: res[k] for k in ("move_idx", "kind", "side", "phase",
-                                          "first_pick", "warning", "complete")},
-            "suggestions": [{"idx": c["idx"], "prob": c["prob"],
-                             "name": names[c["idx"]],
-                             # Present only when the reranker chose from this
-                             # list: the chip then shows the LLM's k-way
-                             # probability and which one it picked.
-                             **({"llm_prob": c["llm_prob"],
-                                 "llm_pick": c["llm_pick"]}
-                                if "llm_prob" in c else {})}
-                            for c in res["suggestions"]],
-            # None for a head-only model, and `{"error": ...}` when the rerank
-            # failed while the head's answer still stands.
-            "rerank": res.get("rerank"),
-            "board": board,
-        }
-        out.update(explained)
-        self._send(200, out)
 
     def _handle_load(self):
         """POST {"path": ".pt", "role": "masked"|"policy"|"auto"} -> swap
         that slot's model. `role` defaults to auto (decided by the kind);
-        a null path unloads the slot, which is how the UI turns the
-        next-move panel off without touching the role board."""
+        a null path unloads the slot, which is how the UI turns the role board
+        or the head off without touching the other one."""
         try:
             payload = self._read_json()
             role = payload.get("role") or "auto"
@@ -2128,6 +1712,8 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("unloading a model needs an explicit role")
                 with LOAD_LOCK:
                     APP.pop(role, None)
+                    if _STATE_STORE is not None:
+                        _bind_models()
                 print("%s model unloaded" % role)
                 self._send(200, {"model": None, "role": role})
                 return
@@ -2143,9 +1729,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(500, {"error": "cannot load checkpoint: %s" % exc})
             return
         print("checkpoint <- %s (%s)" % (pred.ckpt_path, pred.kind))
-        self._send(200, {"model": model_info(pred),
-                         "role": "policy" if pred.kind == "policy"
-                         else "masked"})
+        self._send(200, {"model": model_info(pred), "role": slot_of(pred)})
 
     def _handle_upload(self):
         """Raw .pt bytes with ?name=x.pt -> frontend/uploaded/x.pt, then load."""
@@ -2175,39 +1759,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, {"error": "not a usable checkpoint: %s" % exc})
             return
         print("checkpoint <- %s (uploaded)" % pred.ckpt_path)
-        self._send(200, {"model": model_info(pred),
-                         "role": "policy" if pred.kind == "policy"
-                         else "masked"})
-
-    def _handle_breakdown(self):
-        """POST {game_i, models:[repo-relative .pt]} -> per-move breakdown.
-
-        Scores one pro game under every selected checkpoint and returns the
-        real move next to each model's prediction. Does NOT touch the live
-        model: `make_predictor` caches by path, so the header model and the
-        breakdown selections stay independent.
-        """
-        try:
-            payload = self._read_json()
-            game_i = int(payload.get("game_i", -1))
-            model_paths = payload.get("models") or []
-            if not isinstance(model_paths, list):
-                raise ValueError("models must be a list of .pt paths")
-            if not model_paths:
-                raise ValueError("select at least one model")
-            result = build_breakdown(game_i, model_paths)
-        except (ValueError, KeyError, TypeError, IndexError,
-                FileNotFoundError, json.JSONDecodeError) as exc:
-            self._send(400, {"error": str(exc)})
-            return
-        except Exception as exc:  # noqa: BLE001 - one page, not the server
-            self._send(500, {"error": "breakdown failed: %s" % exc})
-            return
-        self._send(200, result)
-
+        self._send(200, {"model": model_info(pred), "role": slot_of(pred)})
 
 def main():
-    global APP
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=8777)
     # Default stays loopback-only: this server has no auth and exposes the
@@ -2218,35 +1772,50 @@ def main():
                     help="bind address; 127.0.0.1 (default) is local-only, "
                          "use 0.0.0.0 only inside a container")
     ap.add_argument("--device", default="cpu",
-                    help="cpu keeps GPU free; cuda also fine")
+                    help="cpu keeps GPU free and serves the head fine; the 4B "
+                         "reranker needs cuda (it is skipped, not fatal, when "
+                         "this is cpu)")
     ap.add_argument("--ckpt", default="",
                     help="role-model checkpoint (a masking-* checkpoint) - "
                          "drives the role board and the per-role targets "
                          "(default: pro/model/checkpoints/"
-                         "masking-proonly-randomvalsplit-through-wlds-ig-tes"
+                         "masking-proonly-nov13-through-lcp-df-sw"
                          "/best.pt, "
                          "else the best masking checkpoint by val champ_top5)")
     ap.add_argument("--policy-ckpt", default="",
-                    help="next-move checkpoint, or an ensemble.json manifest - "
-                         "loaded alongside the role model, not instead of it "
-                         "(default: pro/model/checkpoints/"
-                         "nextpick-bans-aware-through-wlds-ig-tes/best.pt, the "
-                         "ban-aware arm; nextpick-proto-ensemble/ensemble.json "
-                         "is still selectable, it is a 3-member logit mean)")
+                    help="next-move checkpoint, an ensemble.json manifest, or "
+                         "an llm-* reranker directory - loaded alongside the "
+                         "role model, not instead of it (default: "
+                         "pro/model/checkpoints/"
+                         "nextpick-proonly-nov13-k5-through-lcp-df-sw/best.pt; "
+                         "the -randomvalsplit- pair, "
+                         "nextpick-bans-aware-through-wlds-ig-tes/best.pt and "
+                         "nextpick-proto-ensemble/ensemble.json are still "
+                         "selectable here)")
+    ap.add_argument("--rerank", nargs="?", const=str(RERANK_DEFAULT),
+                    default=None, metavar="DIR",
+                    help="serve the 4B reranker as the next-move model "
+                         "(default DIR: %s) instead of the head. Same slot as "
+                         "--policy-ckpt; it re-orders that head's shortlist, so "
+                         "the head still proposes. Needs a GPU and the `llm` "
+                         "image, and a failure to build it is fatal. Read "
+                         "frontend/README.md 'What the reranker is worth' "
+                         "first: it is worth ~2 s/board and, on the panel's "
+                         "unconstrained question, a few pp"
+                         % RERANK_DEFAULT.name)
     ap.add_argument("--no-policy", action="store_true",
-                    help="run the role board only, without a next-move model")
-    ap.add_argument("--chat-llm", action="store_true",
-                    help="let a remote chat-completions model phrase the chat "
-                         "replies (needs LLM_API_KEY). Off by default: the "
-                         "local composer is the shipped path and needs no key, "
-                         "and a local-only server should not start calling out "
-                         "because an environment variable happens to be set")
+                    help="run without a next-move model: the role board falls "
+                         "back to the masking checkpoint, and the agent can "
+                         "read the board but not rank a move")
+    ap.add_argument("--agent-calls", type=int, default=24,
+                    help="tool-call budget per agent turn (default 24)")
     args = ap.parse_args()
 
     mapping, names_by_idx, champions = load_champ_data()
-    APP.update(device=args.device)
+    APP.update(device=args.device, agent_calls=args.agent_calls)
 
-    # Slot 1 - the role model (masked): role board + per-role targets.
+    # Slot 1 - the masker: answers a role question during the ban phase, and is
+    # the whole role board in a --no-policy install.
     if args.ckpt:
         masked_ckpt = resolve_ckpt_path(args.ckpt, confine=False)
     elif MASKED_DEFAULT.is_file():
@@ -2254,39 +1823,74 @@ def main():
     else:
         masked_ckpt, val = find_best_ckpt()
         print("best pretraining ckpt: %s (val top-5 %s)" % (masked_ckpt, val))
-    # Slot 2 - the next-move model (policy). Optional: the role board works
-    # without it, and --no-policy runs the frontend masked-only.
+    # Slot 2 - the next-move model: the head by default, the 4B reranker on
+    # request.
     #
-    # The default is the LLM reranker when this machine can serve it, and the
-    # head otherwise. That is a capability decision, not a preference: the
-    # reranker needs CUDA and the LLM image, and defaulting to it on a CPU-only
-    # host would make the next-move panel fail on the first click.
-    policy_ckpt = None
+    # The reranker was going to be the default. It is not, because the number
+    # that justified it does not survive a served comparison (frontend/README.md
+    # "What the reranker is worth", STATUS.md §9):
+    #
+    #   * its 34.27 % is measured with the *true lane* in the task line, and the
+    #     lane is the answer to a question the panel does not ask;
+    #   * without that clause - the panel's actual question - it is 20.85 %, on
+    #     candidates that were not legality-filtered;
+    #   * the head it was measured against is `nextpick-bans-aware-*`, not the
+    #     shipped `-nov13-k5-` head.
+    #
+    # So `--rerank` is an explicit opt-in, and an explicit request that cannot
+    # be served is fatal: a server that refuses to start beats one that quietly
+    # answers with a different model than the flag asked for. The role board is
+    # the surface where the lane *is* the question (`predict_in_lane`), and it is
+    # the reason to keep the flag wired at all.
+    policy_ckpt, want_rerank = None, False
     if not args.no_policy:
-        if args.policy_ckpt:
+        if args.rerank is not None:
+            policy_ckpt = resolve_ckpt_path(args.rerank, confine=False)
+            want_rerank = True
+        elif args.policy_ckpt:
             policy_ckpt = resolve_ckpt_path(args.policy_ckpt, confine=False)
-        else:
-            reason = rerank_mod.unavailable_reason()
-            if RERANK_DEFAULT.is_dir() and reason is None:
-                policy_ckpt = RERANK_DEFAULT / "projector.pt"
-            elif POLICY_DEFAULT.is_file():
-                policy_ckpt = POLICY_DEFAULT
-                if RERANK_DEFAULT.is_dir():
-                    print("next-move:    LLM reranker not used (%s)" % reason)
+            want_rerank = Path(policy_ckpt).is_dir()
+        elif POLICY_DEFAULT.is_file():
+            policy_ckpt = POLICY_DEFAULT
 
     masked = load_predictor(masked_ckpt, device=args.device, role="masked")
     print("role model:   %s (%s)" % (masked_ckpt, masked.kind))
+    policy = None
     if policy_ckpt is not None:
-        policy = load_predictor(policy_ckpt, device=args.device, role="policy")
-        print("next-move:    %s (%s)" % (policy_ckpt, policy.kind))
+        if not want_rerank:
+            policy = load_predictor(policy_ckpt, device=args.device,
+                                    role="policy")
+        else:
+            reason = None
+            if not (str(args.device).startswith("cuda")
+                    and torch.cuda.is_available()):
+                reason = ("--device is %s and the 4.2 B trunk is 4-bit "
+                          "quantized, which needs a GPU" % args.device)
+            if reason is None:
+                try:
+                    policy = load_predictor(policy_ckpt, device=args.device,
+                                            role="policy")
+                except Exception as exc:           # noqa: BLE001 - see above
+                    reason = "%s: %s" % (type(exc).__name__, exc)
+            if policy is None:
+                raise SystemExit("cannot serve the reranker %s: %s"
+                                 % (Path(policy_ckpt).name, reason))
+    if policy is not None:
+        print("next-move:    %s (%s)" % (policy.ckpt_path, policy.kind))
+        if getattr(policy, "kind", None) == "rerank":
+            print("              head %s proposes, the adapter re-orders the "
+                  "top %d" % (policy.head_path.name, policy.n_candidates))
     else:
-        print("next-move:    (none - role board only)")
+        print("next-move:    (none - the agent can read the board only)")
     APP.update(mapping=mapping, names_by_idx=names_by_idx, champions=champions)
-    chat_client = llm.client_from_env() if args.chat_llm else None
-    APP["chat_client"] = chat_client
-    print("chat:         %s" % ("phrased by %s" % chat_client.model
-                                if chat_client is not None
-                                else "local composer (no API key in use)"))
+    # The agent's model is whatever LLM_API_KEY names; `client=None` means the
+    # environment decides, so this line reports the decision rather than making
+    # it. A key is a capability, not a preference: without one the panel still
+    # opens and says so.
+    cfg = llm_client.describe()
+    print("agent:        %s" % ("%s at %s" % (cfg["model"], cfg["base_url"])
+                                if llm_client.client_from_env() is not None
+                                else "no LLM_API_KEY - the panel will say so"))
     print("champions: %d, device: %s" % (len(mapping), args.device))
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)

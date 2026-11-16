@@ -13,7 +13,7 @@ unavailable) for -inf suppression at the head. Targets: (is_ban,
 champ[, role for picks]). Batches add win_label (blue wins) for the
 value head - deliberately NOT part of the soloQ pretraining contract.
 
-Two prefix modes, because the 20 prefixes of one game are
+Three prefix modes, because the 20 prefixes of one game are
 near-duplicates of each other (same draft, same label):
   'all'    -> 20 examples/game, every prefix. Val/test only, so metrics
               stay comparable across runs.
@@ -21,6 +21,11 @@ near-duplicates of each other (same draft, same label):
               Training default: the effective sample size of this task
               is len(rows), not 20*len(rows), so unrolling all 20 per
               epoch mostly buys memorisation.
+  'k'      -> `prefix_k` DISTINCT examples/game/epoch, redrawn by
+              set_epoch(). The middle of that trade: more of the 20
+              depths per epoch than 'random', far less repetition than
+              'all'. Costs k x the steps of 'random' at the same epoch
+              count, so compare at equal epochs only against itself.
 
 `swap_aug` mirrors blue<->red with p=0.5 (see `swap_sides`): doubles the
 effective data and enforces the Siamese symmetry the encoder claims.
@@ -290,7 +295,7 @@ def build_prefix(row, move_idx, num_champs=NUM_REAL_CHAMPS, patch_index=None,
     # the very next move. Only defined on the first move of a same-team pick
     # pair, because that is the only place the pair is still open - after
     # move_idx the first champion is taken and masked, so a set metric can
-    # never see both. `pro/model/proto` uses it as an auxiliary target.
+    # never see both. `pro/model/archive/proto` uses it as an auxiliary target.
     partner_champ = IGNORE_INDEX
     has_partner = 0
     if kind == MOVE_PICK and move_idx + 1 < N_MOVES:
@@ -373,6 +378,9 @@ class ProNextMoveDataset(Dataset):
                   row level apply cleanly. Val/test.
       'random' -> len(rows). Each game yields ONE example per epoch at a
                   move index redrawn by set_epoch(). Training.
+      'k'      -> len(rows) * prefix_k. Each game yields `prefix_k`
+                  DISTINCT examples per epoch (a fresh draw without
+                  replacement every set_epoch()). Training.
 
     Why 'random' is the training default: the 20 prefixes of a game are
     the same draft with the same next-move label at different depths, so
@@ -383,23 +391,36 @@ class ProNextMoveDataset(Dataset):
     information over E epochs, makes each epoch 20x cheaper, and turns
     the redundancy into augmentation instead of repetition.
 
+    'k' is the measured middle: k distinct depths per game per epoch, so
+    a run sees k x more of each draft's phase structure per epoch at k x
+    the steps. prefix_k=1 is 'random' and prefix_k=N_MOVES is 'all'; the
+    two endpoints are rejected as modes rather than silently aliased, so
+    a checkpoint's recorded prefix_k always says what it actually did.
+
     swap_aug: mirror blue<->red with p=0.5 (see `swap_sides`).
     """
 
     def __init__(self, rows, indices=None, num_champs=NUM_REAL_CHAMPS,
-                 patch_index=None, prefix_mode="all", swap_aug=False,
-                 seed=0, fearless_roles=None):
-        if prefix_mode not in ("all", "random"):
-            raise ValueError("prefix_mode must be 'all' or 'random', got %r"
-                             % (prefix_mode,))
+                 patch_index=None, prefix_mode="all", prefix_k=5,
+                 swap_aug=False, seed=0, fearless_roles=None):
+        if prefix_mode not in ("all", "random", "k"):
+            raise ValueError("prefix_mode must be 'all', 'random' or 'k', "
+                             "got %r" % (prefix_mode,))
+        if prefix_mode == "k" and not 1 < int(prefix_k) < N_MOVES:
+            raise ValueError(
+                "prefix_mode='k' needs 1 < prefix_k < %d, got %r "
+                "(use 'random' for 1, 'all' for %d)"
+                % (N_MOVES, prefix_k, N_MOVES))
         self.rows = rows if indices is None else [rows[i] for i in indices]
         self.num_champs = num_champs
         self.patch_index = patch_index
         self.prefix_mode = prefix_mode
+        self.prefix_k = int(prefix_k)
         self.swap_aug = swap_aug
         self.seed = seed
         self.epoch = 0
         self._move_of = None
+        self._moves = None
         # Built over ALL rows, not `self.rows`: a val row's fearless pool comes
         # from earlier games of its series, which are train rows. Building it
         # over the split would empty every val row's pool and make the fearless
@@ -408,32 +429,45 @@ class ProNextMoveDataset(Dataset):
                                else build_fearless_roles(rows))
         # Own stream so augmentation draws don't depend on loader order.
         self._aug_rng = torch.Generator().manual_seed(seed + 4241)
-        if prefix_mode == "random":
+        if prefix_mode in ("random", "k"):
             self.set_epoch(0)
 
     def set_epoch(self, epoch):
-        """Redraw the per-game move index (random mode only).
+        """Redraw the per-game move index (random / k modes).
 
         Deterministic in (seed, epoch) so a resumed run reproduces the
         same augmentation schedule.
         """
         self.epoch = epoch
-        if self.prefix_mode != "random":
+        if self.prefix_mode == "all":
             return
         g = torch.Generator().manual_seed(
             (self.seed * 7919 + epoch * 104729) % (2 ** 63 - 1))
-        self._move_of = torch.randint(0, N_MOVES, (len(self.rows),),
-                                      generator=g)
+        if self.prefix_mode == "random":
+            self._move_of = torch.randint(0, N_MOVES, (len(self.rows),),
+                                          generator=g)
+            return
+        # 'k': k distinct depths per game. argsort of one random row per
+        # game is the vectorised "sample without replacement" - a per-game
+        # randperm loop would be 40k python-level ops every epoch.
+        draws = torch.rand((len(self.rows), N_MOVES), generator=g)
+        self._moves = torch.argsort(draws, dim=1)[:, :self.prefix_k]
 
     def __len__(self):
         if self.prefix_mode == "random":
             return len(self.rows)
+        if self.prefix_mode == "k":
+            return len(self.rows) * self.prefix_k
         return len(self.rows) * N_MOVES
 
     def __getitem__(self, idx):
         if self.prefix_mode == "random":
             row = self.rows[idx]
             move_idx = int(self._move_of[idx])
+        elif self.prefix_mode == "k":
+            row_i = idx // self.prefix_k
+            row = self.rows[row_i]
+            move_idx = int(self._moves[row_i, idx % self.prefix_k])
         else:
             row = self.rows[idx // N_MOVES]
             move_idx = idx % N_MOVES
@@ -448,6 +482,9 @@ class ProNextMoveDataset(Dataset):
         """Recency weight per example, aligned with __len__."""
         if self.prefix_mode == "random":
             return [float(r.get("weight", 1.0)) for r in self.rows]
+        if self.prefix_mode == "k":
+            return [float(r.get("weight", 1.0)) for r in self.rows
+                    for _ in range(self.prefix_k)]
         return [float(r.get("weight", 1.0)) for r in self.rows
                 for _ in range(N_MOVES)]
 

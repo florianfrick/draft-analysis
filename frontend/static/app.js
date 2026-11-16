@@ -1,14 +1,13 @@
-const ROLES = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"];
+// The UI's role vocabulary. `/api/champions` publishes the server's own list
+// (`ROLE_ROWS`), and init() adopts it, so the two can never drift again: the
+// role board used to be keyed by name while this file indexed it by number.
+let ROLES = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "SUPPORT"];
 let CHAMPIONS = [], BY_IDX = {}, BY_RIOT = {};
 let picks = Array(10).fill(null);          // slot -> riot id | null (pick order)
 let bans = { blue: [], red: [] };          // team -> [riot id]
-let lastSlot = null;                       // slot just filled: wins a role
-let resp = null;                           // last /api/suggest (role model)
+let resp = null;                           // last /api/suggest (the role board)
 let respSig = null;                        // board `resp` was computed for
-let presp = null;                          // last /api/next-move (policy)
-// The lane the coming pick is for, when the user overrides the model's guess.
-// Only the reranker uses it: the head answers a lane-free "best next champion".
-let NEXT_LANE = null;
+let presp = null;                          // last /api/next-move (the head)
 let prespSig = null;                       // board `presp` was computed for
 let pickerCtx = null;                      // {type, slot? , team?}
 let debounceT = null, wtFilterT = null;
@@ -24,10 +23,13 @@ async function init() {
   CHAMPIONS = d.champions;
   CHAMPIONS.forEach(c => { BY_IDX[c.idx] = c; BY_RIOT[c.riot] = c; });
   DRAFT_PLANS = d.move_plan || null;
+  // One role vocabulary, published by the server. A stale client with a
+  // different list would render `undefined` under a pick and leave its role
+  // cell empty even though `/api/suggest` answered it correctly.
+  if (Array.isArray(d.roles) && d.roles.length === 5) ROLES = d.roles.slice();
   applyPatchPayload(d);
   setModels(d.model, d.policy_model);
-  refreshCheckpoints();
-  refreshDraftList();
+  refreshDraftList(wtFilterValue());
   buildStrips('blue');
   buildStrips('red');
   initSeries();          // restores the last series, renders and asks
@@ -46,126 +48,14 @@ function setModels(masked, policy) {
   renderModelInfo();
 }
 
-function modelText(m, what) {
-  let txt = what + ' ' + m.ckpt;
-  if (m.kind === 'finetune')
-    txt += ` · finetuned${m.stage != null ? ' (stage ' + m.stage + ')' : ''}`;
-  else if (m.kind && m.kind !== 'pretrain' && m.kind !== 'policy')
-    txt += ' · ' + m.kind;
-  // An ensemble has no val run of its own; the server publishes the number it
-  // was measured at, on rows neither it nor the model it replaced had seen.
-  const ev = m.ensemble && m.ensemble.eval;
-  if (ev && ev.top5 != null) {
-    txt += ` · ${ev.label || 'held-out top-5'} ${(100 * ev.top5).toFixed(1)}%`
-         + ` (${ev.n_drafts} drafts · ${m.ensemble.members.length} models)`;
-  } else if (m.rerank_eval && m.rerank_eval.kway != null) {
-    // A reranker's number is a k-way accuracy over the head's shortlist, not a
-    // top-5 over 173 champions, so it is labelled as what it is.
-    txt += ` · k-way ${(100 * m.rerank_eval.kway).toFixed(1)}%`
-         + ` of the head's top-${m.rerank_eval.k}`
-         + (m.rerank_eval.n ? ` (${m.rerank_eval.n} states)` : '');
-  } else {
-    txt += m.val_top5 == null ? ' · val top-5 n/a'
-      : ` · val top-5 ${(100 * m.val_top5).toFixed(1)}%`;
-  }
-  if (m.epoch != null) txt += ` · ep ${m.epoch}`;
-  return txt;
-}
-
 function renderModelInfo() {
-  // Two independent slots: the masked model answers the role board and the
-  // per-role targets, the policy answers the next move. Either can be absent.
-  const bits = [];
-  bits.push(ROLE_MODEL ? modelText(ROLE_MODEL, 'role')
-    : 'role model — none');
-  if (POLICY_MODEL) bits.push(modelText(POLICY_MODEL, 'next-move'));
-  document.getElementById('model-info').textContent = bits.join('   ·   ');
+  // The header no longer names the loaded weights - the checkpoints are chosen
+  // on the command line (--ckpt / --policy-ckpt), so the header text was just a
+  // long suffix string. What still has to happen here is the layout state: the
+  // two slots are independent and either can be absent.
   document.body.classList.toggle('no-role-model', !ROLE_MODEL);
   document.body.classList.toggle('policy-mode', !!POLICY_MODEL);
   if (!POLICY_MODEL) document.getElementById('nextmove').classList.add('hidden');
-}
-
-async function refreshCheckpoints() {
-  let d;
-  try { d = await (await fetch('/api/checkpoints')).json(); }
-  catch (e) { return; }
-  // One list, two dropdowns: the server tags each checkpoint with the slots
-  // it can fill (masked / policy) so a policy file never shows up under
-  // "role" and vice versa.
-  const fill = (id, role, noneLabel) => {
-    const sel = document.getElementById(id);
-    sel.innerHTML = '';
-    if (noneLabel) {
-      const o = document.createElement('option');
-      o.value = ''; o.textContent = noneLabel;
-      sel.appendChild(o);
-    }
-    (d.checkpoints || []).forEach(c => {
-      if (c.roles && !c.roles.includes(role)) return;
-      const o = document.createElement('option');
-      o.value = c.path;
-      // An llm-* checkpoint needs CUDA and the LLM image. Offer it, but say so
-      // instead of letting the click fail - the server already knows why.
-      const off = c.available === false;
-      o.textContent = off ? c.label + ' — needs the LLM image'
-                          : c.label;
-      o.disabled = off;
-      if (c.reason) o.title = c.reason;
-      sel.appendChild(o);
-    });
-    const cur = d.current && d.current[role];
-    if (cur && ![...sel.options].some(o => o.value === cur)) {
-      const o = document.createElement('option');   // current ckpt outside globs
-      o.value = cur;
-      o.textContent = cur;
-      sel.appendChild(o);
-    }
-    if (cur) sel.value = cur;
-    else if (noneLabel) sel.value = '';
-  };
-  fill('ckpt-select', 'masked', null);
-  fill('policy-select', 'policy', '— none (role board only) —');
-  // One line under the picker rather than a failure per click: the reranker is
-  // the better model but it is a 4.2B one, and a CPU-only host cannot run it.
-  const note = document.getElementById('policy-note');
-  if (note) {
-    const r = d.rerank || {};
-    note.textContent = r.available === false ? 'LLM rerank unavailable: ' + (r.reason || '') : '';
-    note.classList.toggle('hidden', r.available !== false);
-  }
-}
-
-async function switchModel(url, opts, role) {
-  const ids = ['btn-load-ckpt', 'btn-load-policy', 'btn-upload', 'btn-reset'];
-  ids.forEach(id => { document.getElementById(id).disabled = true; });
-  document.getElementById('model-info').textContent = 'loading model…';
-  let ok = false, msg = '';
-  try {
-    const r = await fetch(url, opts);
-    const d = await r.json().catch(() => ({}));
-    if (r.ok && 'model' in d) {
-      ok = true;
-      if (d.model) {                       // null = unloaded
-        if (d.role === 'policy') POLICY_MODEL = d.model;
-        else ROLE_MODEL = d.model;
-      } else if (role === 'policy') {
-        POLICY_MODEL = null;
-      } else {
-        ROLE_MODEL = null;
-      }
-      renderModelInfo();
-    } else msg = d.error || ('HTTP ' + r.status);
-  } catch (e) { msg = String(e); }
-  ids.forEach(id => { document.getElementById(id).disabled = false; });
-  if (!ok) {
-    alert('model load failed: ' + msg);
-    renderModelInfo();
-    return;
-  }
-  resp = null; presp = null; respSig = null;
-  await refreshCheckpoints();
-  await refreshPatches();   // the new checkpoint has its own patch table
-  changed();                // re-run suggestions with the new weights
 }
 
 // ---- patch conditioning -------------------------------------------------
@@ -211,16 +101,19 @@ function applyPatchPayload(d) {
   sel.value = (keep || dflt || sel.options[0]).value;
 }
 
-async function refreshPatches() {
-  let d;
-  try { d = await (await fetch('/api/champions')).json(); }
-  catch (e) { return; }
-  applyPatchPayload(d);
-}
-
 function currentPatchId() {
   const sel = document.getElementById('patch-select');
   return sel && sel.value ? +sel.value : 0;
+}
+
+function currentPatchKey() {
+  // The label the state will carry, so the agent's board and the state store's
+  // agree about which patch the head was conditioned on. Resolved from the
+  // same option list the selector shows - never from the text of the option.
+  const sel = document.getElementById('patch-select');
+  if (!sel || !sel.value) return null;
+  const hit = [...sel.options].find(o => o.value === sel.value);
+  return (hit && hit.dataset.key) || null;
 }
 
 function patchKeyOf(s) {
@@ -282,7 +175,6 @@ function buildStrips(team) {
     el.addEventListener('click', ev => {
       if (ev.target.classList.contains('clear')) {
         picks[slot] = null;
-        lastSlot = slot;
         changed();
         return;
       }
@@ -332,6 +224,19 @@ function renderTurn() {
   if (empty) empty.classList.add('turn-target');
 }
 
+// `/api/suggest` keys every role by its display name (`TOP`..`SUPPORT`), while
+// a real pro move carries a numeric role id. Normalise both into one index.
+// Indexing ROLES with the raw assignment value printed `undefined` under every
+// picked champion and left that champion's role cell empty: `roleSlot["SUPPORT"]`
+// was populated while the renderer looked up `roleSlot[4]`.
+function roleIndex(value) {
+  if (typeof value === 'number' && Number.isInteger(value)
+      && value >= 0 && value < ROLES.length) return value;
+  if (value == null) return null;
+  const i = ROLES.indexOf(String(value).toUpperCase());
+  return i < 0 ? null : i;
+}
+
 function renderSlots() {
   for (let s = 0; s < 10; s++) {
     const el = document.getElementById('slot-' + s);
@@ -348,24 +253,27 @@ function renderSlots() {
     // Only an answer computed for THIS board may label a pick; otherwise
     // the badge would repeat the previous board's role for a champion that
     // has just been placed. "…" until the reply lands (a few ms).
+    //
+    // One role and one confidence per pick now, not a five-way distribution:
+    // the assignment comes from the champion-role table, which is one-to-one
+    // per team, and `p_lane` is that champion's own share of its picks in the
+    // role. A low number is a genuine flex, not a weak guess - the title says
+    // which, so the badge never has to.
     const fresh = !!(resp && respSig === boardSig());
-    const rp = fresh && resp.roles ? resp.roles[s] : null;
-    const ar = (fresh && resp.assignment && resp.assignment[s] != null)
-      ? resp.assignment[s]
-      : (rp && rp.length ? rp[0].role : null);
-    if (c && rp && rp.length && ar != null) {
-      const conf = rp.find(x => x.role === ar) || rp[0];
-      rb.textContent = ROLES[ar] + ' ' + Math.round(100 * conf.prob) + '%';
+    const ar = fresh && resp.assignment ? resp.assignment[s] : null;
+    const pl = fresh && resp.conf ? resp.conf[s] : null;
+    const ai = roleIndex(ar);
+    if (c && ai != null && pl != null) {
+      rb.textContent = ROLES[ai] + ' ' + Math.round(100 * pl) + '%';
       const proRole = WT && WT.actualRole ? WT.actualRole[riot] : undefined;
-      rb.title = rp.slice(0, 3).map(x =>
-        `${ROLES[x.role]} ${(100 * x.prob).toFixed(0)}%`).join(' · ')
+      rb.title = `${ROLES[ai]} — ${c.name} fills this role in `
+        + `${(100 * pl).toFixed(0)} % of its pro picks`
+        + (pl < 0.6 ? ' (a flex pick)' : '')
         + (proRole != null ? ` · pro played ${ROLES[proRole]}` : '');
-      if (proRole != null && proRole !== ar)
+      if (proRole != null && proRole !== ai)
         rb.classList.add('mismatch');           // model vs pro disagreement
-      else {
-        const second = rp.find(x => x.role !== ar);
-        if (second && second.prob >= 0.15) rb.classList.add('flex-rb');
-      }
+      else if (pl < 0.6)
+        rb.classList.add('flex-rb');
     } else {
       rb.textContent = '';
       rb.title = '';
@@ -388,10 +296,15 @@ function renderBans() {
 }
 
 function renderRoles() {
-  // Role board: five slots per team in TOP..UTILITY order. A picked champ
-  // sits in its assigned role; an empty role shows the masked model's
-  // target for it (the role-conditioned MASK query), with the next two
-  // candidates as small icons.
+  // Role board: five slots per team in TOP..SUPPORT order. A picked champ
+  // sits in its assigned role; an empty role shows the champion the model
+  // would take for it, with the next two candidates as small icons.
+  //
+  // The assignment is the champion-role table's, not a role head's: one-to-one
+  // per team, so a flex champion can never appear in two lanes at once. The
+  // targets are one `predict_in_lane` call per open cell, and the cell says
+  // which model answered it - the head on a pick move, a masking checkpoint
+  // during the ban phase. They are different models, so the title says which.
   //
   // `fresh` is the whole point: an answer only describes the board it was
   // computed for. Rendering the previous assignment against the current
@@ -401,39 +314,48 @@ function renderRoles() {
   // dimmed, with no targets and no confidences, i.e. it never claims
   // anything it does not know.
   const fresh = !!(resp && respSig === boardSig());
+  const methods = (fresh && resp.methods) || {};
+  const notes = (fresh && resp.notes) || {};
   ['blue', 'red'].forEach(team => {
     const box = document.getElementById('roles-' + team);
     box.innerHTML = '';
     const base = team === 'blue' ? 0 : 5;
     const assign = (resp && resp.assignment) || [];
+    const conf = (resp && resp.conf) || [];
     const roleSlot = {};
-    for (let s = base; s < base + 5; s++)
-      if (assign[s] != null) roleSlot[assign[s]] = s;
+    for (let s = base; s < base + 5; s++) {
+      const r = roleIndex(assign[s]);
+      if (r != null) roleSlot[r] = s;
+    }
     for (let r = 0; r < 5; r++) {
       const el = document.createElement('div');
       const slot = roleSlot[r];
       const c = (slot != null && picks[slot] != null)
         ? BY_RIOT[picks[slot]] : null;
       if (c) {
-        const rp = (resp && resp.roles && resp.roles[slot]) || [];
-        const conf = fresh ? rp.find(x => x.role === r) : null;
+        const pl = fresh ? conf[slot] : null;
         el.className = 'role-slot filled' + (fresh ? '' : ' busy');
         el.title = `${ROLES[r]} — ${c.name}`
-          + (conf ? ` · ${(100 * conf.prob).toFixed(1)}%` : ' · placing…');
+          + (pl != null ? ` · fills it in ${(100 * pl).toFixed(0)}% of its pro`
+            + ' picks' : ' · placing…');
         el.innerHTML = `<div class="rlabel">${ROLES[r]}</div>`
           + `<div class="pic">${imgTag(c, 'ic big')}</div>`
           + `<div class="nm">${c.name}</div>`
-          + `<div class="sub">${conf
-            ? (100 * conf.prob).toFixed(0) + '%' : '…'}</div>`;
+          + `<div class="sub">${pl != null
+            ? (100 * pl).toFixed(0) + '%' : '…'}</div>`;
       } else {
         const list = fresh && resp[team] && resp[team][ROLES[r]]
           ? resp[team][ROLES[r]] : [];
+        const how = methods[team + '/' + ROLES[r]];
+        const why = notes[team + '/' + ROLES[r]];
         if (list.length) {
           const top = list[0];
           const rest = list.slice(1, 3);
           el.className = 'role-slot empty target';
           el.title = `${ROLES[r]} — model target: ${top.name}`
-            + ` (${(100 * top.prob).toFixed(1)}%)`;
+            + ` (${(100 * top.prob).toFixed(1)} % of the champions that play it)`
+            + (how ? ` · by the ${how === 'head' ? 'next-move head' : 'masking model'}` : '')
+            + (top.flex ? ' · also listed under another role' : '');
           el.innerHTML = `<div class="rlabel">${ROLES[r]}</div>`
             + `<div class="pic">${imgTag(BY_IDX[top.idx], 'ic big')}</div>`
             + `<div class="nm">${top.name}</div>`
@@ -451,9 +373,12 @@ function renderRoles() {
             }));
         } else {
           el.className = 'role-slot empty' + (fresh ? '' : ' busy');
+          // A refused cell carries its reason: "load a masking checkpoint" is
+          // actionable, an empty cell is not.
+          if (why) el.title = why;
           el.innerHTML = `<div class="rlabel">${ROLES[r]}</div>`
             + '<div class="pic"></div>'
-            + `<div class="nm muted">${fresh ? '—' : '…'}</div>`;
+            + `<div class="nm muted">${fresh ? (why ? 'n/a' : '—') : '…'}</div>`;
         }
       }
       box.appendChild(el);
@@ -471,14 +396,33 @@ function addPick(team, idx) {
   if (isFearless(c.riot)) return;
   const base = team === 'blue' ? 0 : 5;
   for (let s = base; s < base + 5; s++) {
-    if (picks[s] == null) { picks[s] = c.riot; lastSlot = s; break; }
+    if (picks[s] == null) { picks[s] = c.riot; break; }
   }
   changed();
 }
 
+// Play a suggestion from a panel. Both the head's chips (/api/next-move) and
+// the agent's one-click answer call this: they carry the same dense champion
+// index, the same move kind and the same side. It used to be missing, so a
+// click on a next-move chip raised a ReferenceError instead of playing the
+// move. A ban of a fearless champion is legal (the pool only forbids picks),
+// but a champion already picked or banned is not.
+function applyMove(kind, side, idx) {
+  const c = BY_IDX[idx];
+  if (!c) return;
+  const team = side === 1 || side === 'red' ? 'red' : 'blue';
+  if (kind === 'ban') {
+    if (allBansFlat().includes(c.riot) || picks.includes(c.riot)) return;
+    bans[team].push(c.riot);
+    changed();
+    return;
+  }
+  if (kind === 'pick') addPick(team, idx);
+}
+
 function renderAll() {
   renderSlots(); renderBans(); renderRoles();
-  renderTurn(); renderNextMove(); renderChatRow();
+  renderTurn(); renderNextMove();
   renderSeries(); renderFearless();
 }
 
@@ -486,6 +430,10 @@ function changed() {
   renderAll();
   renderCompare();
   requestSuggest();
+  // The agent's reranked top-k is a view of this board, so it must follow every
+  // move. `AgentPanel` is defined in agent.js (loaded after this file); guard so
+  // a board change before it initializes is simply missed, not an error.
+  if (window.AgentPanel) AgentPanel.scheduleAutoRank();
 }
 
 function allBansFlat() { return bans.blue.concat(bans.red); }
@@ -516,6 +464,25 @@ function newGameSlot(firstPick, fearless) {
 
 function fearlessPool() {
   return SERIES.games[SERIES.cur].fearless;
+}
+
+// The series context the board cannot carry: which game this is, how many
+// games there are, and how far each one got. Every board publish sends it, so
+// the state store (and therefore the agent) describes the game on screen
+// rather than the last one it was told about. Numbers only - the server turns
+// them into lines, and no client text reaches a model prompt.
+function seriesBody() {
+  if (!SERIES || !Array.isArray(SERIES.games)) return null;
+  return {
+    game: SERIES.cur + 1,
+    of: SERIES.games.length,
+    games: SERIES.games.map((g, i) => ({
+      game: i + 1,
+      picks: (g.picks || []).filter(Boolean).length,
+      fearless: (g.fearless || []).length,
+      closed: !!g.done
+    }))
+  };
 }
 
 function initSeries() {
@@ -568,7 +535,6 @@ function loadGame(i) {
   const g = SERIES.games[i];
   picks = g.picks.slice();
   bans = { blue: g.bans.blue.slice(), red: g.bans.red.slice() };
-  lastSlot = null;
   document.getElementById('first-pick').value = g.firstPick ? '1' : '0';
   // `cur` is part of the persisted state, so switching games has to be
   // saved here - otherwise "next game in series" (which saves *before*
@@ -710,19 +676,26 @@ function renderFearless() {
   const note = document.getElementById('fearless-note');
   let txt = pool.length ? `${pool.length} unavailable`
     : 'this game — the pool is empty';
-  // The masked models have no unavailable input at all, so the server can
-  // only drop those champions from the answer - the ranking is not
-  // fearless-aware. Say so instead of implying it was handled.
+  // Both answering paths mask the pool now, but not the same way: the
+  // next-move head takes `unavailable` as an input and re-scores, while a
+  // masking checkpoint was trained without it and can only have its answer
+  // filtered and renormalised. Say which one is in play.
   const filtered = !!(resp && resp.fearless_filtered);
-  if (pool.length && filtered) txt += ' · role board filters them out only';
+  const byMasker = !!(resp && resp.method === 'masker');
+  if (pool.length && filtered && !byMasker) {
+    txt += ' · masked out of the head\u2019s answer';
+  }
   note.textContent = txt;
   note.title = pool.length && filtered
-    ? 'The role model was trained without a fearless mask: its top-5 was'
-      + ' computed as if these champions were available, then they were'
-      + ' removed. The next-move model takes the pool as an input and is'
-      + ' not affected by this caveat.'
+    ? (byMasker
+      ? 'A masking checkpoint was trained without a fearless mask: its top-5'
+        + ' was computed as if these champions were available, then they were'
+        + ' removed and the rest renormalised. The next-move head takes the'
+        + ' pool as an input and is not affected by this caveat.'
+      : 'The next-move head takes the fearless pool as an input, so these'
+        + ' champions were never in its pool.')
     : '';
-  note.classList.toggle('warn', pool.length > 0 && filtered);
+  note.classList.toggle('warn', pool.length > 0 && byMasker);
 }
 
 function excludedSet() {
@@ -756,7 +729,7 @@ function renderPickerGrid(q) {
       const ctx = pickerCtx;
       if (ctx.type === 'ban') bans[ctx.team].push(c.riot);
       else if (ctx.type === 'fearless') addFearless(c.riot);
-      else { picks[ctx.slot] = c.riot; lastSlot = ctx.slot; }
+      else picks[ctx.slot] = c.riot;
       closePicker();
       changed();
     });
@@ -786,10 +759,6 @@ function closePicker() {
 
 function requestSuggest() {
   clearTimeout(debounceT);
-  // The lane belongs to one board state: once the board moves, the pick being
-  // asked for is a different one and a lane carried over would be applied to
-  // the wrong slot.
-  NEXT_LANE = null;
   const sig = boardSig();
   debounceT = setTimeout(() => runSuggest(sig), 120);
 }
@@ -806,30 +775,27 @@ async function postJSON(url, body) {
 }
 
 async function runSuggest(sig) {
-  // Both models answer the same board, independently: the masked one the
-  // role board + per-role targets, the policy one the next move. A reply is
-  // only accepted if the board has not moved since the request went out -
-  // rendering an older assignment against newer picks is what made a fresh
-  // pick look like it was ignored.
-  const maskedP = ROLE_MODEL
+  // Two questions about the same board, asked independently: the role board
+  // ("what does the model take for each open role") and the head ("what does
+  // it take next"). A reply is only accepted if the board has not moved since
+  // the request went out - rendering an older assignment against newer picks
+  // is what made a fresh pick look like it was ignored.
+  const rolesP = ROLE_MODEL
     ? postJSON('/api/suggest',
-      { picks: picks, bans: allBansFlat(), last_slot: lastSlot,
-        fearless: fearlessPool() })
+      { picks: picks, bans: allBansFlat(), first_pick: currentFirstPick(),
+        fearless: fearlessPool(), series: seriesBody() })
     : null;
   const policyP = isPolicyModel()
     ? postJSON('/api/next-move', {
       picks: picks, bans: allBansFlat(), first_pick: currentFirstPick(),
-      fearless: fearlessPool(),
+      fearless: fearlessPool(), series: seriesBody(),
       patch_id: currentPatchId(),
-      // Ignored by a plain nextpick-* head; the reranker needs it because the
-      // prompt asks for a champion in a named lane.
-      lane: NEXT_LANE,
       k: 8
     })
     : null;
 
-  if (maskedP) {
-    const m = await maskedP;
+  if (rolesP) {
+    const m = await rolesP;
     if (sig !== boardSig()) return;            // a newer board is in flight
     if (m && m.error) {
       resp = null; respSig = null;
@@ -855,8 +821,6 @@ async function runSuggest(sig) {
       boardError(msg);
       renderNextMoveError(msg);   // do not overwrite with the busy state
     }
-    renderExplain();       // hides itself if the board moved
-    renderDraftScore();    // same rule: a stale verdict is worse than none
   }
   renderCompare();
 }
@@ -868,132 +832,61 @@ function boardError(msg) {
   el.classList.toggle('hidden', !msg);
 }
 
-// ---- next-move policy panel --------------------------------------------
+// ---- next-move panel ----------------------------------------------------
+// One call, one list: `predict_next_move` on the live state. This is the tool
+// the agent calls, rendered instead of narrated - the head's ranking for the
+// move on the clock, each champion with its share of the legal pool.
+//
+// There is no reranker any more. The local 4B model that used to re-order this
+// list is gone: the agent's own model reads the list and decides, in the chat,
+// where its reasoning is visible. A second ordering rendered beside the head's
+// would be a second opinion with no mechanism behind it - and it could not say
+// which of the two it was.
 
 function renderNextMove() {
   const box = document.getElementById('nextmove');
   if (!isPolicyModel()) { box.classList.add('hidden'); return; }
   box.classList.remove('hidden');
-  // Same freshness rule as the role board: an answer only describes the
-  // board it was computed for. Showing the previous board's "Blue to ban"
-  // beside a highlight that already moved on contradicts it, so blank the
-  // panel while the new answer is in flight.
+  // Same freshness rule as the role board: an answer only describes the board
+  // it was computed for. Showing the previous board's "Blue to pick" beside a
+  // highlight that already moved on contradicts it, so blank the panel while
+  // the new answer is in flight.
   const fresh = !!(presp && presp.state && prespSig === boardSig());
+  const turn = document.getElementById('nm-turn');
+  const meta = document.getElementById('nm-meta');
+  const chips = document.getElementById('nm-chips');
+  const warn = document.getElementById('nm-warning');
   if (!fresh) {
-    document.getElementById('nm-turn').innerHTML = '<b>updating…</b>';
-    document.getElementById('nm-meta').textContent = '';
-    document.getElementById('nm-lane').innerHTML = '';
-    document.getElementById('nm-chips').innerHTML = '';
-    document.getElementById('nm-warning').classList.add('hidden');
+    turn.innerHTML = '<b>updating\u2026</b>';
+    meta.textContent = '';
+    chips.innerHTML = '';
+    warn.classList.add('hidden');
     return;
   }
   const st = presp.state;
-  const rr = presp.rerank;
   const sideName = st.side === 0 ? 'Blue' : 'Red';
-  document.getElementById('nm-turn').innerHTML = st.complete
+  turn.innerHTML = st.complete
     ? '<b>Draft complete</b>'
     : `<b>${sideName} to ${st.kind}</b>`;
-  document.getElementById('nm-meta').textContent = st.complete
-    ? '' : `move ${st.move_idx + 1}/20 · ${st.phase}`
-      + (presp.patch ? ` · patch ${presp.patch}` : '')
-      + (st.n_unavailable ? ` · ${st.n_unavailable} fearless` : '');
-  const warn = document.getElementById('nm-warning');
-  // A failed rerank is not a failed answer: the head's list still stands, so
-  // it is reported next to the chips rather than replacing them.
-  const msgs = [];
-  if (st.warning) msgs.push('board warning: ' + st.warning);
-  if (rr && rr.error) msgs.push('rerank failed, showing the head: ' + rr.error);
-  if (msgs.length) {
-    warn.textContent = msgs.join(' · ');
-    warn.classList.remove('hidden');
-  } else {
-    warn.classList.add('hidden');
-  }
-  const chips = document.getElementById('nm-chips');
+  meta.textContent = st.complete ? ''
+    : `move ${st.move_idx + 1}/20 \u00b7 ${st.n_legal} legal`
+      + (presp.patch ? ` \u00b7 patch ${presp.patch}` : '');
+  // The tool's own note, not a label of ours: it says which pool the numbers
+  // are a share of, and whether the patch it asked for was the one it got.
+  warn.textContent = presp.note || '';
+  warn.classList.toggle('hidden', !presp.note);
   chips.innerHTML = '';
-  renderLanePick(rr, st);
-  if (!st.complete) {
-    (presp.suggestions || []).forEach(c => {
-      const b = document.createElement('button');
-      // `llm_pick` marks the reranker's choice. The number shown is the LLM's
-      // k-way probability when it scored the list - the head's own probability
-      // stays in the tooltip, because 31 % of 173 champions and 31 % of five
-      // candidates are not the same claim.
-      b.className = 'nm-chip' + (c.llm_pick ? ' llm-pick' : '');
-      const shown = c.llm_prob != null ? c.llm_prob : c.prob;
-      b.innerHTML = imgTag(BY_IDX[c.idx])
-        + `<span class="nm">${c.name}</span>`
-        + `<span class="p">${(100 * shown).toFixed(1)}%</span>`
-        + (c.llm_pick ? '<span class="nm-llm">LLM</span>' : '');
-      b.title = c.llm_prob != null
-        ? `${sideName} ${st.kind}: ${c.name} — head ${(100 * c.prob).toFixed(1)}%, LLM ${(100 * c.llm_prob).toFixed(1)}%`
-        : `${sideName} ${st.kind}: ${c.name}`;
-      b.addEventListener('click', () => applyMove(st.kind, st.side, c.idx));
-      chips.appendChild(b);
-    });
-  }
-}
-
-// The lane of the coming pick is a decision, not a fact, until four lanes are
-// filled. Choosing one now *constrains the answer*: the head's pool is masked
-// to champions that play that lane, so "Bot" returns ADCs instead of the head's
-// unconstrained favourites. Leaving it unset keeps the lane as a prompt hint and
-// says so, because filtering on a guess would make a wrong guess unrecoverable.
-function renderLanePick(rr, st) {
-  const box = document.getElementById('nm-lane');
-  box.innerHTML = '';
-  if (!rr || rr.error || st.complete || st.kind !== 'pick') return;
-  const open = rr.lanes_open || [];
-  if (!open.length) return;
-  const names = ['Top', 'Jungle', 'Mid', 'Bot', 'Support'];
-  const lf = rr.lane_filter || {};
-  const pool = lf.applied ? ` · ${lf.n_legal} champions` : '';
-  if (open.length === 1) {
-    // Forced: the board already decides the lane, so the pool is masked without
-    // asking and there is nothing to choose.
-    box.textContent = `· lane ${names[open[0]]}${pool}`;
-    return;
-  }
-  const lab = document.createElement('span');
-  lab.textContent = '· lane ';
-  const sel = document.createElement('select');
-  sel.className = 'nm-lane-sel';
-  sel.title = 'the lane this pick is for — choosing one keeps only champions '
-    + 'that play it; leaving it on "any" asks for a champion in the first open '
-    + 'lane without constraining the list';
-  // A placeholder, so picking the lane that happens to be first is still a
-  // change event. Without it the default lane is displayed but cannot be
-  // activated: selecting the option already shown fires nothing.
-  const any = document.createElement('option');
-  any.value = '';
-  any.textContent = 'any';
-  sel.appendChild(any);
-  open.forEach(r => {
-    const o = document.createElement('option');
-    o.value = String(r);
-    o.textContent = names[r];
-    sel.appendChild(o);
+  if (st.complete) return;
+  (presp.suggestions || []).forEach(c => {
+    const b = document.createElement('button');
+    b.className = 'nm-chip';
+    b.innerHTML = imgTag(BY_IDX[c.idx])
+      + `<span class="nm">${esc(c.name)}</span>`
+      + `<span class="p">${(100 * c.prob).toFixed(1)}%</span>`;
+    b.title = `${sideName} ${st.kind}: ${c.name}`;
+    b.addEventListener('click', () => applyMove(st.kind, st.side, c.idx));
+    chips.appendChild(b);
   });
-  sel.value = rr.lane_assumed ? '' : String(rr.lane);
-  sel.addEventListener('change', () => {
-    NEXT_LANE = sel.value === '' ? null : parseInt(sel.value, 10);
-    const sig = boardSig();
-    renderNextMove();               // blank the stale answer while it recomputes
-    runSuggest(sig);
-  });
-  box.appendChild(lab);
-  box.appendChild(sel);
-  const hint = document.createElement('span');
-  hint.className = 'nm-assumed';
-  if (lf.applied) {
-    hint.textContent = pool;
-    hint.title = `only champions that play ${names[rr.lane]} can be suggested`;
-  } else {
-    hint.textContent = ' assumed — list not filtered';
-    hint.title = 'the board does not force this lane yet: it is in the prompt, '
-      + 'but the list is the head\'s unconstrained top-k';
-  }
-  box.appendChild(hint);
 }
 
 function renderNextMoveError(msg) {
@@ -1002,191 +895,10 @@ function renderNextMoveError(msg) {
   box.classList.remove('hidden');
   document.getElementById('nm-turn').innerHTML = '<b>no suggestion</b>';
   document.getElementById('nm-meta').textContent = '';
-  document.getElementById('nm-lane').innerHTML = '';
   document.getElementById('nm-chips').innerHTML = '';
   const warn = document.getElementById('nm-warning');
   warn.textContent = msg;
   warn.classList.remove('hidden');
-}
-
-// ---- the chat's ranking, under the head's -------------------------------
-// The chat adds the user's insistence as a prior in log space and renormalises,
-// so a turn produces a *second* ranking of the same board. Kept inside the chat
-// log it made the reader hold two lists in their head and diff them; here, one
-// row under the head's own chips, the difference is a glance. Under rather than
-// over: the head's list is the answer, this is what the answer becomes once you
-// have said your piece, and the panel reads top-down as that sentence.
-//
-// Two rules, both inherited from the rest of the panel:
-//   * a ranking belongs to the board it was computed for. `chatSig` is the set
-//     of inputs the chat turn actually read, and the row hides the moment one
-//     of them changes. Deliberately not `boardSig`, which carries the lane: the
-//     chat ranks the whole legal pool (a pin on the head's 47th choice is the
-//     point), so changing the lane does not make its numbers wrong.
-//   * a row that says nothing is worse than no row. With no message, or one
-//     naming a champion that is already off the board, there is no second
-//     ranking to show and the row hides itself.
-let CHAT_ROW = null;   // {sig, res, message}: the one turn on screen
-
-function chatSig() {
-  return JSON.stringify([picks, bans.blue, bans.red, currentFirstPick(),
-                         SERIES ? fearlessPool() : [], currentPatchId()]);
-}
-
-function short(s, n) {
-  s = String(s == null ? '' : s);
-  return s.length > n ? s.slice(0, n - 1).trim() + '\u2026' : s;
-}
-
-function renderChatRow() {
-  const box = document.getElementById('nm-chat-row');
-  if (!box) return;
-  if (CHAT_ROW && CHAT_ROW.sig !== chatSig()) CHAT_ROW = null;
-  const res = CHAT_ROW ? CHAT_ROW.res : null;
-  const m = res && res.moved;
-  if (!m || m.after_rank == null) {
-    box.classList.add('hidden');
-    box.innerHTML = '';
-    return;
-  }
-  const t = nextTurn(currentFirstPick());
-  const top = res.ranking || [];
-  const named = (res.mentions || [])[0] || null;
-  const nLegal = res.board ? res.board.n_legal : null;
-  const namedInTop = !!(named && top.some(c => c.idx === named.idx));
-
-  box.innerHTML = '';
-  const head = document.createElement('div');
-  head.className = 'nm-cc-head';
-  head.innerHTML =
-    '<span class="nm-cc-tag">chat</span>'
-    + '<span class="nm-cc-lam">\u03bb ' + (res.lambda > 0 ? '+' : '')
-    + Number(res.lambda).toFixed(1) + ' nats</span>'
-    + '<span class="nm-cc-move">' + esc(m.name) + ' ' + m.before_rank
-    + ' \u2192 ' + m.after_rank
-    + (nLegal != null ? ' of ' + nLegal : '') + '</span>'
-    + (m.before_rank === m.after_rank
-      ? '<span class="nm-cc-same">pick unchanged</span>' : '')
-    + '<span class="nm-cc-msg" title="' + esc(CHAT_ROW.message) + '">'
-    + '\u201c' + esc(short(CHAT_ROW.message, 46)) + '\u201d</span>'
-    + '<span class="spacer"></span>'
-    + '<span class="nm-cc-unit" title="head probability over the whole legal '
-    + 'pool; the chips above are the reranker k-way numbers when one is '
-    + 'loaded, so the two rows are not the same units">head %</span>'
-    + '<button class="nm-cc-close" title="hide this row">\u2715</button>';
-  box.appendChild(head);
-  head.querySelector('.nm-cc-close').addEventListener('click', () => {
-    CHAT_ROW = null;
-    renderChatRow();
-  });
-
-  const chips = document.createElement('div');
-  chips.className = 'nm-cc-chips';
-  const mk = (c, isNamed) => {
-    const ch = BY_IDX[c.idx];
-    if (!ch) return null;
-    const b = document.createElement('button');
-    b.className = 'nm-chip nm-cc-chip' + (isNamed ? ' named' : '');
-    b.innerHTML = imgTag(ch)
-      + '<span class="nm">' + esc(c.name) + '</span>'
-      + '<span class="p">' + (100 * c.prob).toFixed(1) + '%</span>'
-      + (isNamed ? '<span class="nm-cc-rank">#' + m.after_rank + '</span>' : '');
-    b.title = 'after the message: ' + c.name + ' \u2014 head '
-      + (100 * c.prob).toFixed(2) + '%'
-      + (isNamed ? ', rank ' + m.after_rank + ' of ' + (nLegal || '?')
-        + ' (was ' + m.before_rank + ')' : '');
-    if (t) b.addEventListener('click', () => applyMove(t.kind, t.side, c.idx));
-    return b;
-  };
-  top.forEach(c => {
-    const b = mk(c, !!(named && c.idx === named.idx));
-    if (b) chips.appendChild(b);
-  });
-  // The champion the message named is the reason the row exists, so it is shown
-  // even when the boost did not lift it into the head's top eight.
-  if (named && !namedInTop && m.after_p != null) {
-    const gap = document.createElement('span');
-    gap.className = 'nm-cc-gap';
-    gap.textContent = '\u2026';
-    chips.appendChild(gap);
-    const b = mk({ idx: named.idx, name: named.name, prob: m.after_p }, true);
-    if (b) chips.appendChild(b);
-  }
-  box.appendChild(chips);
-  box.classList.remove('hidden');
-}
-
-// ---- explanation panel -------------------------------------------------
-// The model's reasoning is requested explicitly (a `reasoning` field in the
-// answer schema) and rendered here. It is the model's own account, not a
-// transcript of hidden deliberation, so the panel labels it as such and puts
-// the citations - the only part that is actually checked - underneath it.
-
-let EXPLAIN = null;        // last /api/explain payload
-let EXPLAIN_BUSY = false;
-let EXPLAIN_SIG = null;    // board the explanation was fetched for
-
-function boardSig() {
-  // The patch is part of the answer, not of the board: switching it must
-  // invalidate an in-flight reply exactly like a pick does. The lane is too -
-  // the reranker's answer is "the best champion *for this lane*".
-  return JSON.stringify([picks, bans.blue, bans.red, currentFirstPick(),
-                         SERIES ? fearlessPool() : [], currentPatchId(),
-                         NEXT_LANE]);
-}
-
-function hideExplain() {
-  EXPLAIN = null;
-  EXPLAIN_BUSY = false;
-  document.getElementById('explain').classList.add('hidden');
-}
-
-function explainBody(force) {
-  return {
-    picks: picks,
-    bans: allBansFlat(),
-    first_pick: currentFirstPick(),
-    patch_id: currentPatchId(),   // the same row the next-move model used
-    // The panel's list and the prose must be the same list: same fearless
-    // pool, same lane. Without the lane the reranker would assume one and
-    // explain a champion the panel did not offer.
-    fearless: fearlessPool(),
-    lane: NEXT_LANE,
-    k: 8,
-    k_games: 5,
-    force: !!force
-  };
-}
-
-async function requestExplain(force) {
-  if (!isPolicyModel() || EXPLAIN_BUSY) return;
-  const sig = boardSig();
-  EXPLAIN_BUSY = true;
-  const box = document.getElementById('explain');
-  box.classList.remove('hidden');
-  document.getElementById('ex-title').textContent = 'Why this move';
-  document.getElementById('ex-meta').textContent = '';
-  document.getElementById('ex-body').innerHTML =
-    '<div class="ex-busy">asking the model</div>';
-  let d;
-  try {
-    d = await (await fetch('/api/explain', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(explainBody(force))
-    })).json();
-  } catch (e) {
-    d = { error: 'request failed: ' + e.message };
-  }
-  EXPLAIN_BUSY = false;
-  if (d.error) {
-    document.getElementById('ex-body').innerHTML =
-      `<div class="ex-drop">${esc(d.error)}</div>`;
-    return;
-  }
-  EXPLAIN = d;
-  EXPLAIN_SIG = sig;
-  renderExplain();
 }
 
 function esc(s) {
@@ -1194,262 +906,11 @@ function esc(s) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function gameById(id) {
-  const g = ((EXPLAIN && EXPLAIN.retrieval) || {}).games || [];
-  return g.find(x => x.gameid === id) || null;
-}
-
-function renderExplain() {
-  const box = document.getElementById('explain');
-  // a stale explanation is worse than none: the board moved since
-  if (!EXPLAIN || !EXPLAIN_SIG || EXPLAIN_SIG !== boardSig()) {
-    if (!EXPLAIN_BUSY) box.classList.add('hidden');
-    return;
-  }
-  box.classList.remove('hidden');
-  const ex = EXPLAIN.explanation;
-  const llm = EXPLAIN.llm || {};
-  const patch = EXPLAIN.patch || {};
-  const games = (EXPLAIN.retrieval || {}).games || [];
-
-  document.getElementById('ex-meta').textContent = ex
-    ? (ex.model || 'model') + (ex.cached ? ' · cached' : '')
-      + (ex.ok ? '' : ' · unverified citations')
-    : (llm.configured ? '' : 'no LLM configured');
-  document.getElementById('ex-reask').classList.toggle('hidden',
-    !llm.configured);
-
-  const out = [];
-
-  if (!ex) {
-    out.push(`<div class="ex-empty">${esc(llm.reason ||
-      llm.error || 'no explanation returned')}</div>`);
-  } else {
-    if (ex.reasoning && ex.reasoning.length) {
-      out.push('<ol class="ex-steps">'
-        + ex.reasoning.map(s => `<li>${esc(s)}</li>`).join('') + '</ol>');
-      out.push('<div class="ex-note">'
-        + (ex.local
-          ? 'composed from the loaded model\'s own numbers — every line is a'
-            + ' probability, a count over the retrieved drafts, or a quoted'
-            + ' patch note'
-          : 'the model\'s account, in its own words — only the citations'
-            + ' below are checked')
-        + '</div>');
-    }
-    const cand = (presp && presp.suggestions || []).find(s => s.name === ex.recommend);
-    const pick = cand
-      ? `<button class="ex-pick" data-apply="${cand.idx}"
-           title="apply ${esc(ex.recommend)}">${imgTag(BY_IDX[cand.idx])}`
-        + `<span>${esc(ex.recommend)}</span>`
-        + `<span class="p">${(100 * cand.prob).toFixed(1)}%</span></button>`
-      : `<span class="ex-pick"><span>${esc(ex.recommend || '?')}</span></span>`;
-    out.push('<div class="ex-answer">'
-      + `<div class="k">pick</div><div class="v">${pick}</div>`
-      + `<div class="k">why</div><div class="v">${esc(ex.why)}</div>`
-      + `<div class="k">their answer</div><div class="v">${esc(ex.their_answer)}</div>`
-      + `<div class="k">risk</div><div class="v">${esc(ex.risk)}</div>`
-      + '</div>');
-
-    // evidence - resolved against the retrieval payload so the reader can see
-    // *why* it is evidence, not just an id
-    out.push('<div class="ex-sub">Cited evidence</div>');
-    const ev = ex.evidence || [];
-    if (!ev.length) {
-      out.push('<div class="ex-empty">the model cited nothing</div>');
-    } else {
-      out.push('<div class="ex-ev">');
-      ev.forEach(item => {
-        if (item.type === 'game') {
-          const g = gameById(item.id);
-          out.push('<div class="ex-game">'
-            + `<span class="gid">${esc(item.id)}</span>`
-            + (g ? `<span class="who">${esc(g.blue_team)} vs ${esc(g.red_team)}</span>`
-              + `<span class="res">${esc(g.league || '')} · ${esc(g.patch || '')}`
-              + ` · ${esc(g.date || '')}</span>`
-              + `<span class="res">next: ${esc(g.next_side)} ${esc(g.next_kind)}`
-              + ` ${esc(String(g.next_champ))}</span>`
-              + `<span class="ov">overlap ${(100 * g.overlap).toFixed(0)}%</span>`
-              : '<span class="res">not in the retrieved set</span>')
-            + '</div>');
-        } else {
-          out.push(`<div class="ex-line">${esc(item.line)}</div>`);
-        }
-      });
-      out.push('</div>');
-    }
-
-    const dropped = ex.unverified || [];
-    if (dropped.length || (ex.problems || []).length) {
-      out.push('<div class="ex-drop">'
-        + '<b>Not shown as evidence</b><ul>'
-        + dropped.map(u => `<li><code>${esc(u.id || u.line || JSON.stringify(u))}`
-          + '</code></li>').join('')
-        + (ex.problems || []).map(p => `<li>${esc(p)}</li>`).join('')
-        + '</ul></div>');
-    }
-  }
-
-  // what the model was actually shown - the audit trail for the answer above
-  out.push('<div class="ex-sub">Comparable pro drafts'
-    + (EXPLAIN.retrieval && EXPLAIN.retrieval.relaxed_side
-      ? ' <span class="muted">(first-pick side filter relaxed)</span>' : '')
-    + '</div>');
-  if (!games.length) {
-    out.push('<div class="ex-empty">no comparable board in the corpus</div>');
-  } else {
-    out.push('<div class="ex-ret">' + games.map(g =>
-      `<div class="r"><span>${esc(g.blue_team)} vs ${esc(g.red_team)}`
-      + ` <span class="muted">${esc(g.league || '')} ${esc(g.patch || '')}</span></span>`
-      + `<span class="ov-bar"><i style="width:${(100 * g.overlap).toFixed(0)}%"></i></span>`
-      + `<span class="ov-n">${(100 * g.overlap).toFixed(0)}%</span></div>`
-    ).join('') + '</div>');
-  }
-  if (patch.available === false) {
-    out.push('<div class="ex-empty" style="margin-top:10px">no patch notes on '
-      + 'this machine — the model was told not to claim anything about patch '
-      + 'changes</div>');
-  } else if (!Object.keys(patch.notes || {}).length) {
-    out.push(`<div class="ex-empty" style="margin-top:10px">patch ${esc(patch.patch || '?')}`
-      + ' was read; none of the candidates changed</div>');
-  }
-
-  document.getElementById('ex-body').innerHTML = out.join('');
-  const apply = document.querySelector('#ex-body [data-apply]');
-  if (apply && presp && presp.state && !presp.state.complete) {
-    apply.addEventListener('click', () =>
-      applyMove(presp.state.kind, presp.state.side, +apply.dataset.apply));
-  }
-}
-
-function applyMove(kind, side, idx) {
-  const c = BY_IDX[idx];
-  if (!c) return;
-  if (kind === 'ban') {
-    const team = side === 0 ? 'blue' : 'red';
-    if (bans[team].length >= 5) return;
-    if (bans[team].includes(c.riot)) return;
-    bans[team].push(c.riot);
-  } else {
-    // The suggestion may predate a pool edit, so re-check legality here
-    // rather than trusting the answer.
-    if (picks.includes(c.riot) || isFearless(c.riot)) return;
-    const base = side === 0 ? 0 : 5;
-    for (let s = base; s < base + 5; s++) {
-      if (picks[s] == null) { picks[s] = c.riot; lastSlot = s; break; }
-    }
-  }
-  changed();
-}
-
-// ---- which draft is better ---------------------------------------------
-// Replays every pick through the policy head and compares how close each side
-// came to the model's own ranking at the moment it picked. Not a win
-// probability - the policy has no value output worth shipping - and the panel
-// says so, because a coach will otherwise read it as one.
-
-let SCORE = null;
-let SCORE_BUSY = false;
-let SCORE_SIG = null;
-
-function hideDraftScore() {
-  SCORE = null;
-  SCORE_BUSY = false;
-  document.getElementById('compare').classList.add('hidden');
-}
-
-async function requestDraftScore() {
-  if (!isPolicyModel() || SCORE_BUSY) return;
-  const sig = boardSig();
-  SCORE_BUSY = true;
-  const box = document.getElementById('compare');
-  box.classList.remove('hidden');
-  document.getElementById('cmp-title').textContent = 'Which draft is better';
-  document.getElementById('cmp-meta').textContent = '';
-  document.getElementById('cmp-body').innerHTML =
-    '<div class="ex-busy">replaying the picks through the model</div>';
-  let d;
-  try {
-    d = await (await fetch('/api/draft-score', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        picks: picks,
-        // the two lists separately: a concatenated one cannot be un-grouped
-        // when the sides have banned different numbers of champions
-        bans_blue: bans.blue,
-        bans_red: bans.red,
-        first_pick: currentFirstPick(),
-        patch_id: currentPatchId(),
-        fearless: fearlessPool()
-      })
-    })).json();
-  } catch (e) {
-    d = { error: 'request failed: ' + e.message };
-  }
-  SCORE_BUSY = false;
-  if (d.error) {
-    document.getElementById('cmp-body').innerHTML =
-      `<div class="ex-drop">${esc(d.error)}</div>`;
-    return;
-  }
-  SCORE = d;
-  SCORE_SIG = sig;
-  renderDraftScore();
-}
-
-function renderDraftScore() {
-  const box = document.getElementById('compare');
-  if (!SCORE || !SCORE_SIG || SCORE_SIG !== boardSig()) {
-    if (!SCORE_BUSY) box.classList.add('hidden');
-    return;
-  }
-  box.classList.remove('hidden');
-  const s = SCORE;
-  const verdict = s.verdict === 'blue' ? 'Blue'
-    : s.verdict === 'red' ? 'Red'
-      : s.verdict === 'even' ? 'Even' : '—';
-  const margin = s.margin == null ? '' : ` (${(s.margin >= 0 ? '+' : '')
-    + (100 * s.margin).toFixed(1)} pp of the model's own first-choice share)`;
-  document.getElementById('cmp-meta').textContent = s.model
-    ? (s.model.ckpt || s.model.path || 'model') + ' · local' : 'local';
-
-  const out = [];
-  out.push(`<div class="ex-answer"><div class="k">verdict</div>`
-    + `<div class="v"><b>${esc(verdict)}</b>${esc(margin)}</div>`
-    + `<div class="k">meaning</div>`
-    + `<div class="v">${esc(s.note || '')}</div></div>`);
-
-  const sideRow = (label, d) => {
-    if (!d) return `<div class="ex-empty">${esc(label)} has not picked yet</div>`;
-    return '<div class="cs-side">'
-      + `<span class="cs-who">${esc(label)}</span>`
-      + `<span class="cs-n">${d.n} picks</span>`
-      + `<span class="cs-share">share ${(100 * d.mean_share).toFixed(0)}%</span>`
-      + `<span class="cs-rank">mean rank #${d.mean_rank.toFixed(1)}</span>`
-      + `<span class="cs-top1">${d.top1}/${d.n} first choice</span>`
-      + `<span class="cs-worst">worst #${d.worst_rank}</span>`
-      + '</div>';
-  };
-  out.push('<div class="ex-sub">How each side drafted, by the model</div>');
-  out.push(sideRow('Blue', s.blue));
-  out.push(sideRow('Red', s.red));
-
-  out.push('<div class="ex-sub">Every pick, in draft order</div>');
-  out.push('<div class="cs-picks">' + (s.picks || []).map(p => {
-    const share = (100 * p.share).toFixed(0);
-    const rank = p.rank == null ? 'unranked' : '#' + p.rank;
-    return `<div class="cs-pick ${esc(p.side)}">`
-      + `<span class="cs-mv">${p.move_idx + 1}</span>`
-      + `<span class="cs-sd">${esc(p.side)}</span>`
-      + `<span class="cs-ch">${imgTag(BY_IDX[p.champ])} ${esc(p.name)}</span>`
-      + `<span class="cs-rk">${esc(rank)}</span>`
-      + `<span class="cs-pr">${(100 * p.prob).toFixed(1)}%</span>`
-      + `<span class="cs-bar"><i style="width:${share}%"></i></span>`
-      + `<span class="cs-bs">model's #1: ${esc(p.best || '—')}</span>`
-      + '</div>';
-  }).join('') + '</div>');
-  document.getElementById('cmp-body').innerHTML = out.join('');
+function boardSig() {
+  // The patch is part of the answer, not of the board: switching it must
+  // invalidate an in-flight reply exactly like a pick does.
+  return JSON.stringify([picks, bans.blue, bans.red, currentFirstPick(),
+                         SERIES ? fearlessPool() : [], currentPatchId()]);
 }
 
 // ---- walkthrough of real pro drafts -------------------------------------
@@ -1461,7 +922,9 @@ function optLabel(d) {
 
 function renderCompare() {
   const box = document.getElementById('wt-compare');
-  if (!WT) { box.classList.add('hidden'); return; }
+  // Collapsed stays collapsed: loading a game must not reopen the section the
+  // user hid. Its bar is the only way in.
+  if (!WT || !walkthroughVisible()) { box.classList.add('hidden'); return; }
   box.classList.remove('hidden');
   const m = WT.draft.moves[WT.step];
   if (!m) {
@@ -1533,7 +996,6 @@ function renderCompare() {
 function wtApply() {
   picks = Array(10).fill(null);
   bans = { blue: [], red: [] };
-  lastSlot = null;
   if (WT) {
     WT.actualRole = {};
     const next = [0, 0];                 // next free pick slot per team
@@ -1542,8 +1004,7 @@ function wtApply() {
       if (m.kind === 'ban') {
         bans[m.side === 0 ? 'blue' : 'red'].push(m.riot);
       } else if (m.side < 2 && next[m.side] < 5) {
-        lastSlot = m.side * 5 + next[m.side];   // newest real pick
-        picks[lastSlot] = m.riot;
+        picks[m.side * 5 + next[m.side]] = m.riot;
         next[m.side] += 1;
         WT.actualRole[m.riot] = m.role;
       }
@@ -1603,7 +1064,6 @@ function wtExit() {
 function resetDraft() {
   picks = Array(10).fill(null);
   bans = { blue: [], red: [] };
-  lastSlot = null;
   syncGame();          // empties the slot on the board, keeps the pool
   changed();
   renderWalkthrough();
@@ -1637,9 +1097,19 @@ function renderWalkthrough() {
   exit.disabled = false;
 }
 
+function wtFilterValue() {
+  // The filter box is pre-filled with WLDs in index.html, so the dropdown opens
+  // on Worlds instead of the newest 100 games of every league. Reading it from
+  // the DOM (rather than a second constant) keeps the box and the list agreeing
+  // the moment the user types.
+  const el = document.getElementById('wt-filter');
+  return el ? el.value : '';
+}
+
 async function refreshDraftList(q) {
   const sel = document.getElementById('wt-select');
   const cur = sel.value;
+  if (q == null) q = wtFilterValue();
   let d;
   try {
     d = await (await fetch('/api/drafts?limit=100&q=' +
@@ -1675,28 +1145,17 @@ document.getElementById('first-pick').addEventListener('change', () => {
   if (!WT) changed();          // the whole order mirrors
 });
 document.getElementById('patch-select').addEventListener('change', () => {
-  // A patch change re-asks both panels: the next move conditions on it and
-  // the explanation's notes default to it.
-  hideExplain();
-  hideDraftScore();
+  // A patch change re-asks both panels: the next move conditions on it, and
+  // the role board's answers are computed against it.
   changed();
 });
-document.getElementById('nm-compare').addEventListener('click',
-  requestDraftScore);
-document.getElementById('cmp-close').addEventListener('click',
-  hideDraftScore);
-document.getElementById('nm-explain').addEventListener('click',
-  () => requestExplain(false));
-document.getElementById('ex-reask').addEventListener('click',
-  () => requestExplain(true));
-document.getElementById('ex-close').addEventListener('click', hideExplain);
 document.getElementById('picker-close').addEventListener('click', closePicker);
 document.getElementById('picker').addEventListener('click', ev => {
   if (ev.target.id === 'picker') closePicker();
 });
 document.addEventListener('keydown', ev => {
   if (ev.key === 'Escape') closePicker();
-  if (!WT || ev.target.tagName === 'INPUT' ||
+  if (!WT || !walkthroughVisible() || ev.target.tagName === 'INPUT' ||
       ev.target.tagName === 'SELECT') return;
   if (ev.key === 'ArrowRight') document.getElementById('wt-next').click();
   if (ev.key === 'ArrowLeft') document.getElementById('wt-prev').click();
@@ -1704,44 +1163,28 @@ document.addEventListener('keydown', ev => {
 document.getElementById('picker-search').addEventListener('input', ev =>
   renderPickerGrid(ev.target.value));
 
-// model selection: server-side list + upload a file from this machine.
-// Two independent slots - "role" (masked) and "next move" (policy) - so
-// loading one never unloads the other.
-const loadInto = (role) => {
-  const id = role === 'policy' ? 'policy-select' : 'ckpt-select';
-  const path = document.getElementById(id).value;
-  if (!path && role !== 'policy') return;
-  switchModel('/api/load', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: path || null, role: role })
-  }, role);
-};
-document.getElementById('ckpt-select').addEventListener('focus',
-  refreshCheckpoints);   // pick up newly trained runs without a restart
-document.getElementById('policy-select').addEventListener('focus',
-  refreshCheckpoints);
-document.getElementById('btn-load-ckpt').addEventListener('click',
-  () => loadInto('masked'));
-document.getElementById('btn-load-policy').addEventListener('click',
-  () => loadInto('policy'));
-document.getElementById('btn-upload').addEventListener('click', () =>
-  document.getElementById('file-input').click());
-document.getElementById('file-input').addEventListener('change', async ev => {
-  const f = ev.target.files && ev.target.files[0];
-  ev.target.value = '';              // allow re-picking the same file
-  if (!f) return;
-  if (!/\.pt$/i.test(f.name)) {
-    alert('expected a .pt checkpoint file');
-    return;
-  }
-  const buf = await f.arrayBuffer();
-  await switchModel('/api/upload?name=' + encodeURIComponent(f.name), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/octet-stream' },
-    body: buf
-  });
-});
+// Models are chosen at startup (--ckpt / --policy-ckpt / --no-policy). There
+// is deliberately no browser control for them: the header only reports which
+// two are loaded, and the patch selector is built from the live checkpoint's
+// own vocabulary, so a swap mid-draft would invalidate every answer in flight.
+
+// The "Real draft" walkthrough is collapsed behind one button. Hidden means
+// hidden for both halves: the bar and the per-move comparison below it.
+function walkthroughVisible() {
+  return !document.getElementById('wt-bar').classList.contains('hidden');
+}
+
+function setWalkthrough(open) {
+  const bar = document.getElementById('wt-bar');
+  const btn = document.getElementById('btn-wt');
+  bar.classList.toggle('hidden', !open);
+  btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  btn.textContent = open ? 'Real draft ▴' : 'Real draft ▾';
+  btn.classList.toggle('open', open);
+  renderCompare();       // the comparison follows the bar, never pops out alone
+}
+document.getElementById('btn-wt').addEventListener('click', () =>
+  setWalkthrough(!walkthroughVisible()));
 
 // walkthrough of real pro drafts
 document.getElementById('wt-select').addEventListener('change', ev => {
@@ -1752,9 +1195,12 @@ document.getElementById('wt-filter').addEventListener('input', ev => {
   wtFilterT = setTimeout(() => refreshDraftList(ev.target.value), 300);
 });
 document.getElementById('wt-random').addEventListener('click', async () => {
+  // Same filter as the list: a 🎲 that dropped you into an LCP game while the
+  // dropdown said WLDs would be a different corpus than the one on screen.
   let d;
   try {
-    d = await (await fetch('/api/drafts?random=1&limit=1')).json();
+    d = await (await fetch('/api/drafts?random=1&limit=1&q=' +
+      encodeURIComponent(wtFilterValue() || ''))).json();
   } catch (e) { return; }
   if (d.error) { alert(d.error); return; }
   if (d.drafts && d.drafts.length) wtLoad(d.drafts[0].i);

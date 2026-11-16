@@ -18,7 +18,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 sys.path.insert(0, str(ROOT))
 
-from pro.model.agent import model_tools, schema, sql_tool  # noqa: E402
+from pro.model.agent import draft_state, model_tools, schema, sql_tool  # noqa: E402
 from pro.model.agent.session import Session  # noqa: E402
 
 PAD = 160
@@ -234,18 +234,28 @@ class StubHead:
     patch_vocab = ["16.18", "16.20"]
 
     def next_move(self, picks, bans, first_pick=0, k=8, unavailable=(),
-                  patch_id=None):
+                  patch_id=None, allowed=None, team=None):
         probs = {0: 0.30, 1: 0.20, 2: 0.10, 3: 0.05, 4: 0.04, 5: 0.03,
                  6: 0.02, 7: 0.01}
         # The real head masks the fearless pool before its top-k; a stub that
         # accepts `unavailable` and ignores it hid exactly that bug once.
         for c in list(picks) + list(bans) + list(unavailable):
             probs.pop(c, None)
+        # `allowed` masks the LOGITS, before the top-k, so a role question is a
+        # real ranking inside the role rather than a filtered top-k.
+        if allowed is not None:
+            keep = set(allowed)
+            probs = {i: p for i, p in probs.items() if i in keep}
+            # The real head softmaxes AFTER the mask, so a role answer is a
+            # distribution over the role. Without this the stub's numbers would
+            # still sum to 0.3 and a unit assertion would be meaningless.
+            total = sum(probs.values()) or 1.0
+            probs = {i: p / total for i, p in probs.items()}
         sug = [{"idx": i, "prob": p}
                for i, p in sorted(probs.items(), key=lambda kv: -kv[1])][:k]
         return {"suggestions": sug, "patch_id": patch_id,
-                "kind": "ban", "side": "blue", "move_idx": len(bans),
-                "phase": "ban phase 1"}
+                "kind": "ban", "side": "blue" if team is None else team,
+                "move_idx": len(bans), "phase": "ban phase 1"}
 
     def patch_id_for(self, pid):
         try:
@@ -275,13 +285,34 @@ def champs():
     return model_tools.ChampIndex(NAMES)
 
 
+def test_the_model_field_is_a_label_not_the_module():
+    """`PolicyPredictor.model` is a property returning the torch module.
+
+    Stringifying it put the whole `PolicyValueModel(...)` repr - 2,000
+    characters of architecture - into every tool result. The model reads that
+    JSON, so it is not cosmetic: it is a third of the payload spent on a
+    repr, repeated on every call.
+    """
+    class Pred:
+        kind = "policy"
+        head = StubHead()
+
+        @property
+        def model(self):                    # mimics the shipped predictor
+            return object()
+
+    out = model_tools.predict_next_move(Pred(), model_tools.ChampIndex(NAMES))
+    assert out["model"] == "policy"
+    assert "\n" not in out["model"] and len(out["model"]) < 40
+
+
 def test_predict_next_move_attaches_rank_and_pool_share(champs):
     out = model_tools.predict_next_move(StubPredictor(), champs,
                                         blue_picks=["Kled"], red_picks=[],
                                         patch="16.20")
     assert out["top"][0]["rank"] == 1 and out["top"][0]["p_head"] > 0
     assert out["patch_known"] is True and out["patch_resolved"] == "16.20"
-    assert "legal champions" in out["note"]
+    assert "p_head" not in out["note"]
 
 
 def test_the_fearless_pool_is_masked_out_of_the_distribution(champs):
@@ -297,25 +328,6 @@ def test_the_fearless_pool_is_masked_out_of_the_distribution(champs):
                                         unavailable=[top])
     assert top not in [r["name"] for r in out["top"]]
     assert out["n_legal"] == first["n_legal"] - 1
-
-
-def test_rank_candidates_refuses_a_fearless_candidate(champs):
-    with pytest.raises(ValueError, match="fearless"):
-        model_tools.rank_candidates(StubPredictor(), champs,
-                                    candidates=["Kled", "Olaf"],
-                                    unavailable=["Olaf"])
-
-
-def test_rank_candidates_ranks_against_the_pool_that_can_be_drafted(champs):
-    """`rank_in_pool` has to exclude the pool, or the rank is against ghosts."""
-    without = model_tools.rank_candidates(StubPredictor(), champs,
-                                          candidates=["Olaf", "Nocturne"])
-    with_pool = model_tools.rank_candidates(StubPredictor(), champs,
-                                            candidates=["Olaf", "Nocturne"],
-                                            unavailable=["Kled"])
-    olaf = lambda out: next(r for r in out["candidates"] if r["name"] == "Olaf")
-    assert olaf(without)["rank_in_pool"] == 2      # Kled is the head's #1
-    assert olaf(with_pool)["rank_in_pool"] == 1
 
 
 def test_the_sides_are_placed_in_their_own_slots(champs):
@@ -383,26 +395,6 @@ def test_an_illegal_board_is_refused(champs):
                                                   "Poppy", "Nocturne", "Locke"])
 
 
-def test_rank_candidates_renormalises_over_the_candidates(champs):
-    out = model_tools.rank_candidates(StubPredictor(), champs,
-                                      candidates=["Kled", "Vi", "Poppy"])
-    shares = [c["share_of_candidates"] for c in out["candidates"]]
-    assert abs(sum(shares) - 1.0) < 1e-3
-    assert out["candidates"][0]["name"] == "Kled"
-    assert out["candidates"][0]["rank_in_candidates"] == 1
-    # the pool rank and the candidate share are different claims
-    assert out["candidates"][0]["rank_in_pool"] == 1
-    assert out["candidates"][-1]["rank_in_pool"] > 1
-
-
-def test_rank_candidates_refuses_a_champion_already_on_the_board(champs):
-    with pytest.raises(ValueError) as exc:
-        model_tools.rank_candidates(StubPredictor(), champs,
-                                    blue_picks=["Kled"],
-                                    candidates=["Kled", "Vi"])
-    assert "already on the board" in str(exc.value)
-
-
 # ------------------------------------------------------------------- session
 def test_an_ablated_tool_is_hidden_and_refused(db):
     s = Session(con=schema.connect(db[1]), ablate={"sql"})
@@ -450,5 +442,198 @@ def test_an_unknown_tool_is_an_error_not_a_crash(db):
 def test_a_model_tool_without_a_model_says_so(db):
     s = Session(con=schema.connect(db[1]))
     assert "predict_next_move" not in s.names()
-    out = s.call("predict_next_move", picks=[], bans=[])
+    out = s.call("predict_next_move", state="real")
     assert "unknown tool" in out["error"]
+
+
+# ----------------------------------------------------------------- role tool
+# These run against the committed `data/champ_roles.json` with the real
+# champion ids, not a stub: the tool *is* a table lookup, so a stub would only
+# test the arithmetic and none of the data. The import is inside the fixture so
+# the rest of this file keeps running without the name tables.
+@pytest.fixture(scope="module")
+def real():
+    from pro.model.archive.llm.common import champ_names
+    return model_tools.ChampIndex(champ_names())
+
+
+def test_predict_roles_places_a_real_board(real):
+    out = model_tools.predict_roles(
+        real, ["Jayce", "Trundle", "Karma"], ["Irelia", "Xin Zhao", "Viktor"])
+    blue = {r["champion"]: r["role"] for r in out["blue"]}
+    assert blue == {"Jayce": "top", "Trundle": "jungle", "Karma": "support"}
+    red = {r["champion"]: r["role"] for r in out["red"]}
+    assert red == {"Irelia": "top", "Xin Zhao": "jungle", "Viktor": "mid"}
+    # This is the question the v4 prompt left to the reader ("Karma (Bot)"):
+    # blue still needs a mid and a bot, red still needs a bot and a support.
+    assert out["open_roles"] == {"blue": ["mid", "bot"],
+                                 "red": ["bot", "support"]}
+
+
+def test_the_assignment_is_one_to_one_per_side(real):
+    """Two flex champions that both list jungle are split, not doubled.
+
+    A per-slot argmax would put both in the jungle and leave the role board
+    claiming a team has two junglers and no mid laner.
+    """
+    out = model_tools.predict_roles(real, ["Vi", "Pantheon"], [])
+    roles = [r["role"] for r in out["blue"]]
+    assert len(roles) == len(set(roles))
+    assert "jungle" in roles
+
+
+def test_p_lane_separates_a_dedicated_laner_from_a_flex(real):
+    out = model_tools.predict_roles(real, ["Jayce", "Trundle"], [])
+    by = {r["champion"]: r["p_lane"] for r in out["blue"]}
+    assert by["Trundle"] > 0.9          # 8002 of 8017 jungle
+    assert 0.1 < by["Jayce"] < 0.9      # genuinely top/mid
+
+
+def test_a_forced_assignment_reports_a_low_confidence(real):
+    """Vi owns jungle, so Pantheon has to go somewhere else.
+
+    The table's best joint fit for the pair is Pantheon support at 4 %, which is
+    not a claim that Pantheon is a support - it is the arithmetic being honest.
+    The number is the signal, and the note says so; hiding it would make a
+    forced placement look like a confident call.
+    """
+    out = model_tools.predict_roles(real, ["Vi", "Pantheon"], [])
+    by = {r["champion"]: r for r in out["blue"]}
+    assert by["Vi"]["role"] == "jungle" and by["Vi"]["p_lane"] > 0.9
+    assert by["Pantheon"]["role"] != "jungle"
+    assert by["Pantheon"]["p_lane"] < 0.1
+    assert "best joint fit" in out["note"]
+
+
+def test_legal_in_lane_counts_only_draftable_champions(real):
+    base = model_tools.predict_roles(real)
+    banned = model_tools.predict_roles(real, bans=["Jayce"])
+    assert banned["legal_in_lane"]["top"] == base["legal_in_lane"]["top"] - 1
+
+
+def test_the_role_tool_needs_no_checkpoint(real):
+    """A run with no head still knows which role a pick fills.
+
+    Gating it on the predictor would make the `--no-head` ablation look like the
+    role knowledge had disappeared with the model.
+    """
+    s = Session(champs=real)
+    assert "predict_roles" in s.names()
+    assert "predict_next_move" not in s.names()
+    out = s.call("predict_roles", state="real")
+    assert out["open_roles"]["blue"] == ["top", "jungle", "mid", "bot",
+                                         "support"]
+    s.store.set_real(draft_state.log_from_board(
+        ["Jayce"] + [None] * 9,
+        bans=["Rumble", "Ivern", "Renekton", "Tristana", "Ashe", "Zeri"]))
+    out = s.call("predict_roles", state="real")
+    assert out["blue"][0]["role"] == "top" and "error" not in out
+
+
+def test_predict_roles_accepts_a_state_id(real):
+    from pro.model.agent import draft_state as DS
+    # Both sides need three picks: the log stops at the first empty pick slot,
+    # so a blue-only board is a one-pick draft, not a three-pick one.
+    st = DS.log_from_board(["Jayce", "Trundle", "Karma", None, None]
+                           + ["Irelia", "Xin Zhao", "Viktor", None, None],
+                           bans=["Rumble", "Ivern", "Renekton", "Tristana",
+                                 "Ashe", "Zeri"])
+    assert st.move_idx == 12
+    s = Session(champs=real, store=DS.Store(real, real=st))
+    out = s.call("predict_roles", state="real")
+    assert out["blue"][2]["role"] == "support"
+    assert out["state"]["move_idx"] == 12
+
+
+# ------------------------------------------------------- one role's next pick
+class StubMasker:
+    """A masking checkpoint: it answers a role-conditioned completion."""
+    kind = "masker"
+
+    def complete_slot(self, picks, role_ids, slot):
+        assert role_ids[slot] == 2          # the lane it was asked about
+        probs = [0.0] * 8
+        probs[2], probs[3] = 0.6, 0.3
+        return [0.0] * 8, probs
+
+
+# The stub head has eight champions, so a 10-ban board cannot be built from
+# its own index: the extra names exist to be banned and never appear in a
+# suggestion.
+WIDE = NAMES + ["Filler%d" % i for i in range(12)]
+
+
+@pytest.fixture()
+def wide():
+    return model_tools.ChampIndex(WIDE)
+
+
+TEN_BANS = WIDE[9:19]
+
+
+def _lane_pool(monkeypatch, pool=(1, 2)):
+    monkeypatch.setattr(model_tools._lanes, "legal_champions",
+                        lambda lane: list(pool))
+
+
+def test_a_role_question_masks_the_logits_before_the_top_k(wide, monkeypatch):
+    """Filtering a top-k instead empties the list 13 % of the time."""
+    _lane_pool(monkeypatch, pool=(1, 2))
+    out = model_tools.predict_in_lane(
+        StubPredictor(), wide, "jungle",
+        due={"kind": "pick", "side": "blue"}, bans=TEN_BANS)
+    assert [c["name"] for c in out["top"]] == ["Olaf", "Nocturne"]
+    assert out["method"] == "head" and out["role"] == "jungle"
+    # a share of the role, not of the pool
+    assert abs(sum(c["p_in_lane"] for c in out["top"]) - 1.0) < 1e-6
+    assert "not of the whole pool" in out["note"]
+
+
+def test_a_role_question_can_name_the_side_that_is_not_on_the_clock(
+        wide, monkeypatch):
+    _lane_pool(monkeypatch)
+    out = model_tools.predict_in_lane(
+        StubPredictor(), wide, "jungle", side="red",
+        due={"kind": "pick", "side": "blue"}, bans=TEN_BANS)
+    assert out["side"] == "red" and out["hypothetical"] is True
+    assert "NOT on the clock" in out["note"]
+    same = model_tools.predict_in_lane(
+        StubPredictor(), wide, "jungle", side="blue",
+        due={"kind": "pick", "side": "blue"}, bans=TEN_BANS)
+    assert same["hypothetical"] is False
+
+
+def test_the_ban_phase_has_no_head_answer_so_it_refuses(champs, monkeypatch):
+    """A pick-phase hypothetical on a 2-ban board is not a question."""
+    _lane_pool(monkeypatch)
+    with pytest.raises(ValueError, match="ban phase"):
+        model_tools.predict_in_lane(StubPredictor(), champs, "jungle",
+                                    due={"kind": "ban", "side": "blue"},
+                                    bans=[0, 1])
+
+
+def test_a_masking_checkpoint_answers_the_ban_phase(champs, monkeypatch):
+    out = model_tools.predict_in_lane(StubPredictor(), champs, "mid",
+                                      due={"kind": "ban", "side": "blue"},
+                                      bans=[0, 1], masker=StubMasker())
+    assert out["method"] == "masker"
+    assert [c["name"] for c in out["top"]][:2] == ["Nocturne", "Vi"]
+    assert "masking checkpoint" in out["note"]
+    # and it masks what is already gone
+    gone = model_tools.predict_in_lane(StubPredictor(), champs, "mid",
+                                       due={"kind": "ban", "side": "blue"},
+                                       bans=[0, 1], unavailable=["Nocturne"],
+                                       masker=StubMasker())
+    assert "Nocturne" not in [c["name"] for c in gone["top"]]
+
+
+def test_an_unknown_role_is_refused_not_read_as_top(wide):
+    """A role masks logits; an unrecognised one silently read as 0 would
+    answer a question about the top lane that nobody asked."""
+    with pytest.raises(ValueError, match="unknown role"):
+        model_tools.predict_in_lane(StubPredictor(), wide, "jungel",
+                                    due={"kind": "pick", "side": "blue"},
+                                    bans=TEN_BANS)
+    assert model_tools.role_index("JNG") == 1
+    assert model_tools.role_index("MIDDLE") == 2
+    assert model_tools.role_index(4) == 4

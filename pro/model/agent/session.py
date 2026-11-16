@@ -17,43 +17,86 @@ errors, because "it tried and could not" is a result, not a failure.
 
 Every tool call returns a dict and never raises. An agent loop that dies on a
 bad argument measures the harness, not the model.
+
+**The store is the only door to a model.** There is no board-as-argument path
+left: `predict_next_move` and `predict_roles` are methods on a state, and a
+session without a store has no state, so it offers neither. That is deliberate -
+a second way to name a board is a second thing that can disagree with the first,
+and the disagreement is invisible from the answer.
 """
 from __future__ import annotations
 
 import time
 
-from . import draft_state, model_tools, sql_tool, state_tools
+from . import draft_state, model_tools, soloq_tool, sql_tool, state_tools
+from .engine import Engine
 
 _STATE_NAMES = {"get_state", "clone_state", "apply_move", "undo_move",
                 "list_states"}
+_MODEL_NAMES = {"predict_next_move", "predict_roles"}
+_DATA_NAMES = {"soloq_matchup"}
 
 
 class Session:
-    def __init__(self, con=None, predictor=None, champs=None, ablate=(),
-                 max_calls=24, rerank=None, max_rows=sql_tool.MAX_ROWS,
-                 store=None):
+    def __init__(self, con=None, store=None, ablate=(), max_calls=24,
+                 max_rows=sql_tool.MAX_ROWS, predictor=None, champs=None,
+                 masker=None):
         self.con = con
-        self.predictor = predictor
-        self.champs = champs
         self.ablate = set(ablate or ())
         self.max_calls = int(max_calls)
-        self.rerank = rerank
         self.max_rows = max_rows
-        # A store is opt-in: without one, the board is still an argument and the
-        # old tool signatures behave exactly as before.
+        # A store is opt-in, but `champs` is enough to build one, because the
+        # store needs names rather than weights. Passing a predictor without a
+        # store is the common case for a script, so it builds one too - and a
+        # session given neither has no state and therefore no model tools.
+        if store is None and champs is not None:
+            store = draft_state.Store(champs, engine=Engine(
+                champs=champs, predictor=predictor, masker=masker))
+        elif store is not None and (predictor is not None or masker is not None):
+            # A checkpoint loaded into a session whose board is already open.
+            engine = store.engine
+            store.attach(Engine(champs=store.champs, predictor=predictor,
+                                masker=masker or getattr(engine, "masker", None),
+                                patch=getattr(engine, "patch", None)))
         self.store = store
         self.log = []
         self._started = time.monotonic()
+
+    # The models are the store's, not the session's. Kept as properties because
+    # every caller and test asks the session what it has.
+    @property
+    def predictor(self):
+        return getattr(self.store.engine, "predictor", None) if self.store else None
+
+    @property
+    def champs(self):
+        return getattr(self.store.engine, "champs", None) if self.store else None
+
+    @property
+    def masker(self):
+        return getattr(self.store.engine, "masker", None) if self.store else None
 
     # ------------------------------------------------------------- specs
     def available(self):
         out = []
         if self.store is not None:
             out += state_tools.SPECS
-        if self.predictor is not None and self.champs is not None:
-            out += [model_tools.PREDICT_SPEC, model_tools.RANK_SPEC]
+            engine = self.store.engine
+            # Offered when either model is loaded: the role question can be
+            # answered by a masking checkpoint alone, and hiding the tool would
+            # make the ablation look like a capability gap.
+            if engine.predictor is not None or engine.masker is not None:
+                out.append(model_tools.PREDICT_SPEC)
+            # Roles need the champion index and the corpus table, not weights.
+            if engine.champs is not None:
+                out.append(model_tools.ROLES_SPEC)
         if self.con is not None:
             out.append(sql_tool.TOOL_SPEC)
+        # Offered whenever the soloQ analytical store is present on disk. The
+        # connection is opened lazily by the tool, so advertising it costs
+        # nothing here, and an agent with no store simply does not see it.
+        if soloq_tool.available():
+            out.append(soloq_tool.TOOL_SPEC)
         return [s for s in out if s["name"] not in self.ablate]
 
     def names(self):
@@ -101,16 +144,20 @@ class Session:
             raise ValueError("unknown tool %r; available: %s"
                              % (name, ", ".join(self.names()) or "none"))
         if name in _STATE_NAMES:
-            if self.store is None:
-                raise ValueError("no draft state is loaded in this session")
             return self._state_call(name, args)
         if name == "sql":
             if self.con is None:
                 raise ValueError("no corpus database is open")
             return sql_tool.run(self.con, args.get("query"),
                                 max_rows=self.max_rows)
-        if name in ("predict_next_move", "rank_candidates"):
+        if name in _MODEL_NAMES:
             return self._model_call(name, args)
+        if name in _DATA_NAMES:
+            return soloq_tool.run(
+                args.get("champion"), args.get("partner"),
+                kind=args.get("kind") or "vs", patch=args.get("patch"),
+                role=args.get("role"), min_n=args.get("min_n"),
+                champs=self.champs)
         raise ValueError("unknown tool %r; available: %s"
                          % (name, ", ".join(self.names()) or "none"))
 
@@ -136,48 +183,22 @@ class Session:
             return state_tools.undo(store, args["state"])
         return state_tools.listing(store)
 
-    def _with_state(self, args):
-        """Swap a `state` id for the board it holds. -> (args, id, state)."""
-        sid = args.get("state")
-        if sid is None:
-            return dict(args), None, None
-        args = {k: v for k, v in args.items() if k != "state"}
-        st = self.store.get(sid)
-        board = st.board()
-        args.update(blue_picks=board["blue_picks"], red_picks=board["red_picks"],
-                    bans=board["bans"], first_pick=board["first_pick"],
-                    patch=board["patch"] or args.get("patch"),
-                    unavailable=board["unavailable"])
-        return args, sid, st
-
     def _model_call(self, name, args):
-        """One implementation for both forms: a state id is resolved to the same
-        board the caller would have typed, then the model function is unchanged.
+        """Both model tools are methods on a state; the id is the only board.
+
+        A state id that does not resolve is an `UnknownState` from the store,
+        which reads as "unknown state 'x'; live states: real, s1" - the same
+        refusal a state tool gives, so a model has one thing to learn.
         """
-        args, sid, st = self._with_state(args)
-        common = (self.predictor, self.champs, args.get("blue_picks") or [],
-                  args.get("red_picks") or [], args.get("bans") or [])
-        if name == "predict_next_move":
-            out = model_tools.predict_next_move(
-                *common, first_pick=args.get("first_pick") or 0,
-                patch=args.get("patch"), k=args.get("k") or 8,
-                unavailable=args.get("unavailable") or (), rerank=self.rerank)
+        sid = args.get("state") or draft_state.REAL_ID
+        st = self.store.get(sid)
+        if name == "predict_roles":
+            out = st.predict_roles()
         else:
-            out = model_tools.rank_candidates(
-                *common, args.get("candidates") or [],
-                first_pick=args.get("first_pick") or 0, patch=args.get("patch"),
-                unavailable=args.get("unavailable") or (), rerank=self.rerank)
-        if st is not None:
-            out["state"] = st.summary(sid)
-            due = st.to_move() or {}
-            if "move_idx" in out:
-                # A disagreement means the board is not a legal 20-move prefix,
-                # which cannot happen through the store and does through the
-                # board form. Worth surfacing rather than hiding.
-                out["move_matches_state"] = (
-                    out["move_idx"] == due.get("move_idx")
-                    and out.get("kind") == due.get("kind")
-                    and out.get("side") == due.get("side"))
+            out = st.predict_next_move(k=args.get("k") or 8,
+                                       role=args.get("role"),
+                                       side=args.get("side"))
+        out["state"] = st.summary(sid)
         return out
 
     # ---------------------------------------------------------- reporting
@@ -191,13 +212,14 @@ class Session:
                 "sql_share": round(counts.get("sql", 0) / n, 3) if n else 0.0,
                 "errors": sum(1 for e in self.log if not e["ok"]),
                 "ablated": sum(1 for e in self.log if e.get("ablated")),
-                "budget_refusals": sum(1 for e in self.log
-                                       if e.get("budget"))}
+                "budget_refusals": sum(1 for e in self.log if e.get("budget"))}
 
     def summary(self):
         out = self.mix()
         out["ablate"] = sorted(self.ablate)
         out["seconds"] = round(time.monotonic() - self._started, 1)
+        if self.store is not None:
+            out["models"] = self.store.engine.describe()
         return out
 
 

@@ -31,6 +31,9 @@ secrets*.json
 # The track (`solo_queue/` or `pro/`) says which data trained it.
 solo_queue/model/checkpoints/
 pro/model/checkpoints/
+# Everything that is not the shipped pair, plus the retired experiment code that
+# produced it. Same rule: weights are local, the layout is not.
+pro/model/archive/checkpoints/
 **/ckpt/
 # Per-run console logs and the "last run" scratch file. The evidence that is
 # kept lives in pro/model/proonly/reports/ (test reports + paired comparisons).

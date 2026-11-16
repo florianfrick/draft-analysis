@@ -25,6 +25,7 @@ ROOT = HERE.parents[2]
 sys.path.insert(0, str(ROOT))
 
 from pro.model.agent import draft_state, model_tools, schema  # noqa: E402
+from pro.model.agent.engine import Engine                     # noqa: E402
 from pro.model.agent.session import Session                   # noqa: E402
 from pro.model.agent.test_agent import NAMES, StubHead        # noqa: E402
 
@@ -354,6 +355,38 @@ def test_the_store_takes_the_pool_in_the_board_index_space():
     assert state.unavailable == ("kled",)
 
 
+# ---- series context -----------------------------------------------------
+# The pool says which champions are gone; the series says which game this is.
+# Both ride on the state, so `get_state` and a clone describe the same game the
+# first message did. They are prose for the reader, never a model input.
+def test_the_series_is_rendered_and_reported_by_the_state():
+    lines = ("series: game 3 of 5", "series games: G1 10/10, G2 10/10")
+    st = D.DraftState(series=lines)
+    assert "game 3 of 5" in st.render()
+    assert "G2 10/10" in st.render()
+    assert st.summary()["series"] == list(lines)
+    assert "series" not in D.DraftState().render()
+    assert D.DraftState().summary()["series"] == []
+
+
+def test_the_board_constructor_carries_the_series_and_every_clone_keeps_it():
+    s = store()
+    st, _old = s.set_board([None] * 10, [], series=["series: game 2 of 3"])
+    assert st.series == ("series: game 2 of 3",)
+    assert s.get(s.clone()).series == st.series
+    sandbox = s.clone()
+    assert s.apply(sandbox, "kled").series == st.series
+    assert s.undo(sandbox).series == st.series
+
+
+def test_the_series_does_not_change_the_board_or_the_legal_pool():
+    plain = D.DraftState()
+    with_series = D.DraftState(series=("series: game 3 of 5",))
+    assert with_series.board() == plain.board()
+    assert with_series.legal_count() == plain.legal_count()
+    assert with_series.to_move() == plain.to_move()
+
+
 def test_predicting_on_a_state_never_offers_a_fearless_champion():
     """The reported bug, at the level it happened: a state-based prediction."""
     s = session(store())
@@ -363,52 +396,87 @@ def test_predicting_on_a_state_never_offers_a_fearless_champion():
     assert out["n_legal"] == 7                   # the stub head has 8 champions
 
 
-def test_ranking_on_a_state_refuses_a_fearless_candidate():
+def test_the_state_carries_the_role_assignment_it_implies():
+    """`apply` recomputes it, so `get_state` never needs a second call."""
     s = session(store())
-    s.store.set_real(D.DraftState(unavailable=("kled",)))
-    out = s.call("rank_candidates", state=D.REAL_ID, candidates=["Kled", "Olaf"])
-    assert out.get("ok") is False or "error" in out
-    assert "fearless" in (out.get("error") or "")
+    sandbox = s.store.clone()
+    st = s.store.apply(sandbox, "kled")
+    # A ban fills no role: the assignment is about picks, not moves.
+    assert st.roles == ()
+    # moves 1-5 are the rest of the ban block; move 6 is blue's first pick
+    for champ in ("olaf", "nocturne", "vi", "poppy", "lee sin", "locke"):
+        st = s.store.apply(sandbox, champ)
+    assert len(st.roles) == 1
+    out = s.call("get_state", state=sandbox)
+    assert out["roles"] == [{"side": "blue", "pick": 1,
+                             "champion": "locke", "role": st.roles[0].role,
+                             "p_lane": st.roles[0].p_lane}]
+    assert len(out["open_roles"]["blue"]) == 4
 
 
-# ------------------------------------------------------------------- session
+BANS6 = ["olaf", "nocturne", "vi", "poppy", "lee sin", "locke"]
+
+
+def test_a_clone_inherits_the_assignment():
+    s = store()
+    s.set_real(D.log_from_board(["kled"] + [None] * 9, bans=BANS6))
+    clone = s.clone()
+    assert s.get(clone).roles == s.get(D.REAL_ID).roles
+
+
+def test_a_store_binds_an_engine_that_arrives_later():
+    """The frontend loads a checkpoint while the board is open."""
+    s = store()
+    s.set_real(D.log_from_board(["kled"] + [None] * 9, bans=BANS6))
+    assert s.get(D.REAL_ID).roles          # roles exist with no weights
+    before = s.get(D.REAL_ID).roles
+    s.attach(Engine(s.champs, predictor=Predictor()))
+    assert s.get(D.REAL_ID).roles == before
+    assert s.get(D.REAL_ID).engine.predictor is not None
+
+
+def test_a_state_without_an_engine_says_so_rather_than_guessing():
+    st = D.DraftState()
+    with pytest.raises(ValueError, match="no models attached"):
+        st.predict_next_move()
+    assert st.open_roles() == {"blue": [], "red": []}
+
+
 def test_state_tools_are_offered_only_with_a_store():
-    without = Session(predictor=Predictor(),
-                      champs=model_tools.ChampIndex(NAMES))
-    assert "get_state" not in without.names()
+    # A session with no store has no state, so it offers no state or model
+    # tools. The soloQ matchup data tool is independent of the draft store and
+    # is offered whenever its database is on disk, so it is not part of this
+    # assertion.
+    without = Session()
+    board_tools = {"get_state", "clone_state", "apply_move", "undo_move",
+                   "list_states", "predict_next_move", "predict_roles"}
+    assert not (set(without.names()) & board_tools)
     with_store = session(store())
     assert with_store.names()[:5] == ["get_state", "clone_state", "apply_move",
                                       "undo_move", "list_states"]
 
 
-def test_the_state_form_and_the_board_form_give_the_same_answer():
-    """A state id resolves to the board a caller would have typed; one path."""
+def test_the_model_tools_are_methods_on_the_state():
+    """One board, one object: there is no second way to name it."""
     s = session(store())
     sandbox = s.store.clone()
     s.store.apply(sandbox, "kled")
-    board = s.store.get(sandbox).board()
-    by_state = s.call("predict_next_move", state=sandbox, k=3)
-    by_board = s.call("predict_next_move", blue_picks=board["blue_picks"],
-                      red_picks=board["red_picks"], bans=board["bans"],
-                      first_pick=board["first_pick"], patch=board["patch"], k=3)
-    assert by_state["top"] == by_board["top"]
-    assert by_state["state"]["move_idx"] == 1
-    assert "state" not in by_board
+    st = s.store.get(sandbox)
+    assert st.predict_next_move(k=3)["top"] == \
+        s.call("predict_next_move", state=sandbox, k=3)["top"]
+    # and the tool answer carries the state it answered about
+    assert s.call("predict_next_move", state=sandbox, k=3)["state"]["move_idx"] == 1
 
 
-def test_the_result_says_whether_the_head_agrees_with_the_schedule():
-    """A board form call can be a state that cannot occur; this is the tell."""
-    # Blue-first: move 0 is blue's ban, so move 1 is red's.
-    s = session(store(), head=FixedHead(kind="ban", side="red", move_idx=1))
-    sandbox = s.store.clone()
-    s.store.apply(sandbox, "kled")                  # move 0 done -> move 1
-    agree = s.call("predict_next_move", state=sandbox, k=3)
-    assert agree["move_matches_state"] is True
-    s2 = session(store(), head=FixedHead(kind="pick", side="red", move_idx=6))
-    sandbox2 = s2.store.clone()
-    s2.store.apply(sandbox2, "kled")
-    assert s2.call("predict_next_move", state=sandbox2, k=3)[
-        "move_matches_state"] is False
+def test_a_role_question_goes_through_the_state(monkeypatch):
+    """`predict_next_move(role=..., side=...)` is the state's own question."""
+    monkeypatch.setattr(model_tools._lanes, "legal_champions", lambda lane: [1, 2])
+    s = session(store())
+    st = s.store.get(D.REAL_ID)
+    # move 0 is a ban, so the head cannot answer a pick-phase hypothetical and
+    # there is no masker to fall back on: the state refuses instead of guessing.
+    with pytest.raises(ValueError, match="ban phase"):
+        st.predict_next_move(role="jungle", side="red", k=2)
 
 
 def test_a_hypothetical_line_can_be_explored_and_undone():
@@ -441,7 +509,5 @@ def test_a_refused_move_comes_back_as_a_readable_error():
 
 
 def test_a_state_tool_without_a_store_is_refused():
-    without = Session(predictor=Predictor(),
-                      champs=model_tools.ChampIndex(NAMES))
-    out = without.call("get_state")
+    out = Session().call("get_state")
     assert "unknown tool" in out["error"]

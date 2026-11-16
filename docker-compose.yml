@@ -50,16 +50,17 @@ services:
 
   # The same checkout, served with the LLM reranker in the loop. Identical
   # mounts to `dev` - the difference is the derived image, which has a compiler
-  # and puts pro/model/llm/.venv on PATH, so `python` there has transformers,
+  # and puts pro/model/archive/llm/.venv on PATH, so `python` there has
+  # transformers,
   # peft and bitsandbytes. `docker compose run llm ...` is the only way to get
   # a browser at the reranker: the base image has none of those packages, and
-  # `pro/model/llm/run.sh` (the training wrapper) publishes no port.
+  # `pro/model/archive/llm/run.sh` (the training wrapper) publishes no port.
   #
   # `frontend/serve.sh` is the one-line version of this.
   llm:
     build:
       context: .
-      dockerfile: pro/model/llm/Dockerfile
+      dockerfile: pro/model/archive/llm/Dockerfile
     image: lol-draft:llm
     working_dir: /workspace
     volumes:
@@ -72,7 +73,8 @@ services:
       PYTHONUNBUFFERED: "1"
       TOKENIZERS_PARALLELISM: "false"
       # 4.2B in 4-bit against an 8 GB card: without this the allocator
-      # fragments and reserves past the card (measured in pro/model/llm/run.sh).
+      # fragments and reserves past the card (measured in
+      # pro/model/archive/llm/run.sh).
       PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
       WANDB_START_METHOD: thread
       LOL_DB_CACHE: /tmp

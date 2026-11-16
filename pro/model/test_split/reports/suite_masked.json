@@ -1,0 +1,316 @@
+{
+ "suite": {
+  "split": {
+   "corpus": "pro_drafts_full.pt",
+   "corpus_rows": 46939,
+   "max_date": "(none)",
+   "args": {
+    "val_frac": 0.1,
+    "test_frac": 0.05,
+    "min_patch_rows": 40,
+    "val_patches": null,
+    "val_random": false
+   },
+   "pinned_test": [],
+   "counts": {
+    "train": 39720,
+    "val": 4771,
+    "test": 2448
+   },
+   "shares": {
+    "train": 0.8462,
+    "val": 0.1016,
+    "test": 0.0522
+   },
+   "test_fingerprint": "99c72c8550489cbf6f218b517002c9f2276022e53e45270c8e3e545cca252204",
+   "test_gameids": null
+  },
+  "tasks": [
+   "masked"
+  ],
+  "n_test_games": 2448,
+  "limited": false,
+  "baseline": true,
+  "torch": "2.14.1+cu126",
+  "seconds": 796.2
+ },
+ "models": [
+  {
+   "name": "masking-proonly-nov13-through-lcp-df-sw",
+   "task": "masked",
+   "track": "pro",
+   "archived": false,
+   "comparable": true,
+   "kind": "torch",
+   "params": 2489522,
+   "split_note": "",
+   "path": "pro/model/checkpoints/masking-proonly-nov13-through-lcp-df-sw/best.pt"
+  },
+  {
+   "name": "masking-finetune",
+   "task": "masked",
+   "track": "soloq",
+   "archived": false,
+   "comparable": false,
+   "kind": "torch",
+   "params": null,
+   "split_note": "different split: train=42100, val=4768, test=7",
+   "path": "solo_queue/model/checkpoints/masking-finetune/best_mask.pt"
+  },
+  {
+   "name": "masking-forest-flat-v1",
+   "task": "masked",
+   "track": "pro",
+   "archived": false,
+   "comparable": true,
+   "kind": "forest",
+   "params": 2124412,
+   "split_note": "",
+   "path": "pro/model/checkpoints/masking-forest-flat-v1/model.joblib"
+  },
+  {
+   "name": "masking-mlp-flat-v1",
+   "task": "masked",
+   "track": "pro",
+   "archived": false,
+   "comparable": true,
+   "kind": "mlp",
+   "params": 449645,
+   "split_note": "",
+   "path": "pro/model/checkpoints/masking-mlp-flat-v1/model.pt"
+  },
+  {
+   "name": "masking-soloqueue",
+   "task": "masked",
+   "track": "soloq",
+   "archived": false,
+   "comparable": false,
+   "kind": "torch",
+   "params": null,
+   "split_note": "no test_report.json",
+   "path": "solo_queue/model/checkpoints/masking-soloqueue/best.pt"
+  }
+ ],
+ "masked": {
+  "masking-proonly-nov13-through-lcp-df-sw": {
+   "name": "masking-proonly-nov13-through-lcp-df-sw",
+   "path": "pro/model/checkpoints/masking-proonly-nov13-through-lcp-df-sw/best.pt",
+   "track": "pro",
+   "archived": false,
+   "comparable": true,
+   "split_note": "",
+   "split_counts": {
+    "n_train": 39720,
+    "n_val": 4771,
+    "n_test": 2448
+   },
+   "kind": "masked",
+   "params": 2489522,
+   "n_patches": 108,
+   "seconds": 47.8,
+   "agg": {
+    "n": 24480,
+    "top1": 0.24689542483660132,
+    "top1_ci": [
+     0.24153366502890797,
+     0.2523366106226058
+    ],
+    "top5": 0.6540849673202614,
+    "top5_ci": [
+     0.6481025004316197,
+     0.6600190812731075
+    ],
+    "top10": 0.8337826797385621,
+    "top10_ci": [
+     0.8290668481230989,
+     0.8383937680246547
+    ],
+    "mean_rank": 5.571609477124183,
+    "mean_prob": 0.16802774096195003
+   },
+   "by_phase": null
+  },
+  "masking-finetune": {
+   "name": "masking-finetune",
+   "path": "solo_queue/model/checkpoints/masking-finetune/best_mask.pt",
+   "track": "soloq",
+   "archived": false,
+   "comparable": false,
+   "split_note": "different split: train=42100, val=4768, test=7",
+   "split_counts": {
+    "n_train": 42100,
+    "n_val": 4768,
+    "n_test": 7
+   },
+   "kind": "masked",
+   "params": 28611250,
+   "n_patches": 107,
+   "seconds": 318.6,
+   "agg": {
+    "n": 24480,
+    "top1": 0.15763888888888888,
+    "top1_ci": [
+     0.15312774930190176,
+     0.1622574637767517
+    ],
+    "top5": 0.4707516339869281,
+    "top5_ci": [
+     0.4645038903267545,
+     0.47700855598804265
+    ],
+    "top10": 0.6662990196078431,
+    "top10_ci": [
+     0.6603663770898804,
+     0.6721794763353435
+    ],
+    "mean_rank": 10.640236928104574,
+    "mean_prob": 0.0992617264514696
+   },
+   "by_phase": null,
+   "paired": {
+    "vs": "masking-proonly-nov13-through-lcp-df-sw",
+    "n_paired": 24480,
+    "this_only": 1790,
+    "reference_only": 3975,
+    "delta_top1": -0.08925653594771243,
+    "chi2": 827.3817866435386,
+    "p": 6.0102366781936116e-182
+   }
+  },
+  "masking-forest-flat-v1": {
+   "name": "masking-forest-flat-v1",
+   "path": "pro/model/checkpoints/masking-forest-flat-v1/model.joblib",
+   "track": "pro",
+   "archived": false,
+   "comparable": true,
+   "split_note": "",
+   "split_counts": {
+    "n_train": 39720,
+    "n_val": 4771,
+    "n_test": 2448
+   },
+   "kind": "forest",
+   "params": 2124412,
+   "n_patches": null,
+   "seconds": 21.9,
+   "agg": {
+    "n": 24480,
+    "top1": 0.20563725490196078,
+    "top1_ci": [
+     0.20062059569126944,
+     0.21074628719201138
+    ],
+    "top5": 0.5848856209150327,
+    "top5_ci": [
+     0.5787001493547856,
+     0.5910444547762916
+    ],
+    "top10": 0.7618055555555555,
+    "top10_ci": [
+     0.7564284623512539,
+     0.767100492353305
+    ],
+    "mean_rank": 7.5390522875817
+   },
+   "by_phase": null,
+   "paired": {
+    "vs": "masking-proonly-nov13-through-lcp-df-sw",
+    "n_paired": 24480,
+    "this_only": 2460,
+    "reference_only": 3470,
+    "delta_top1": -0.04125816993464054,
+    "chi2": 171.6831365935919,
+    "p": 3.1736790408307366e-39
+   }
+  },
+  "masking-mlp-flat-v1": {
+   "name": "masking-mlp-flat-v1",
+   "path": "pro/model/checkpoints/masking-mlp-flat-v1/model.pt",
+   "track": "pro",
+   "archived": false,
+   "comparable": true,
+   "split_note": "",
+   "split_counts": {
+    "n_train": 39720,
+    "n_val": 4771,
+    "n_test": 2448
+   },
+   "kind": "mlp",
+   "params": 449645,
+   "n_patches": null,
+   "seconds": 1.0,
+   "agg": {
+    "n": 24480,
+    "top1": 0.24995915032679739,
+    "top1_ci": [
+     0.24457457056551596,
+     0.25542219464799526
+    ],
+    "top5": 0.636437908496732,
+    "top5_ci": [
+     0.6303910944588773,
+     0.6424419073687442
+    ],
+    "top10": 0.8191993464052287,
+    "top10_ci": [
+     0.8143282918591965,
+     0.8239702339734489
+    ],
+    "mean_rank": 5.60265522875817
+   },
+   "by_phase": null,
+   "paired": {
+    "vs": "masking-proonly-nov13-through-lcp-df-sw",
+    "n_paired": 24480,
+    "this_only": 2526,
+    "reference_only": 2451,
+    "delta_top1": 0.0030637254901960675,
+    "chi2": 1.1002612015270243,
+    "p": 0.2942087886404591
+   }
+  },
+  "masking-soloqueue": {
+   "name": "masking-soloqueue",
+   "path": "solo_queue/model/checkpoints/masking-soloqueue/best.pt",
+   "track": "soloq",
+   "archived": false,
+   "comparable": false,
+   "split_note": "no test_report.json",
+   "split_counts": {},
+   "kind": "masked",
+   "params": 31714995,
+   "n_patches": 0,
+   "seconds": 405.6,
+   "agg": {
+    "n": 24480,
+    "top1": 0.11887254901960784,
+    "top1_ci": [
+     0.1148779763487851,
+     0.12298672213872672
+    ],
+    "top5": 0.3452614379084967,
+    "top5_ci": [
+     0.33933008434549505,
+     0.35124134950988484
+    ],
+    "top10": 0.5139297385620915,
+    "top10_ci": [
+     0.5076669275613707,
+     0.5201881783138446
+    ],
+    "mean_rank": 15.350326797385621,
+    "mean_prob": 0.05088356455409846
+   },
+   "by_phase": null,
+   "paired": {
+    "vs": "masking-proonly-nov13-through-lcp-df-sw",
+    "n_paired": 24480,
+    "this_only": 1412,
+    "reference_only": 4546,
+    "delta_top1": -0.12802287581699348,
+    "chi2": 1647.4805303793219,
+    "p": 0.0
+   }
+  }
+ }
+}

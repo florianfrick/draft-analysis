@@ -32,7 +32,11 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "champ_roles.json"
-ROLES = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"]
+# Display names for the five role ids. The corpus stores ids, never names, so
+# this rename is display-only: the counts below are positional and do not move.
+# (The soloQ analysis store keeps Riot's own `pos` string, "UTILITY", which is
+# a raw data value in a built DuckDB - not a name this table chooses.)
+ROLES = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "SUPPORT"]
 
 # A champion is legal in a lane when it was picked there at least SHARE of its
 # own picks and at least FLOOR times. 0.10/5 is the knee: 0.25 makes Tristana

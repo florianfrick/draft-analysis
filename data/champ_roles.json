@@ -1,7 +1,7 @@
 {
  "source": {"built": "2026-11-09", "champions": 173, "corpus": "pro_drafts.pt", "drafts": 46915, "pick_role_pairs": 469150},
  "policy": {"floor": 5, "note": "counts are raw pick counts per lane; the rule is applied at read time by frontend/roles.py, so changing a threshold does not need a rebuild", "rule": "a champion is legal in a lane when it was picked there at least `share` of its own picks and at least `floor` times", "share": 0.1},
- "roles": ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"],
+ "roles": ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "SUPPORT"],
  "counts": {
   "0": [14, 0, 2537, 3, 295],
   "1": [1677, 342, 6, 4, 3],

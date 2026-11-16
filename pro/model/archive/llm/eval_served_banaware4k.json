@@ -1,0 +1,19 @@
+{
+ "head": {
+  "n": 4000,
+  "top1": 0.1845,
+  "top5": 0.51725,
+  "ci_top1": [
+   0.1727837914590716,
+   0.1968216394850496
+  ],
+  "k": 20,
+  "seconds": 62.6133713722229,
+  "model": "policy",
+  "top1_raw": 0.1825
+ },
+ "rerank": null,
+ "val_games": 200,
+ "k": 20,
+ "note": "served head vs served reranker through model_tools.predict_next_move - same rows, same legality filter, same candidate construction"
+}

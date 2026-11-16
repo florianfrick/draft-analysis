@@ -90,7 +90,7 @@ What the code actually does, and the defaults that matter:
   soloQ 0.0 — 37k drafts against 2.5M parameters is the overfitting regime).
 - **The ban switches exist but default off** (`--ban-side`, `--ban-fearless`,
   `--counter-rank 0`), so every checkpoint recorded before the flags existed is
-  ban-blind; see `pro/model/bans/README.md`.
+  ban-blind; see `pro/model/archive/bans/README.md`.
 - Selection in stage 1 is `rel_champ_top5` on val, not raw top-5, because the
   raw number tracks how easy the window is and this window is much easier than
   the patch-honest one.
@@ -98,7 +98,7 @@ What the code actually does, and the defaults that matter:
 ### Stage 2, ban-aware variant (`--ban-side --ban-fearless --counter-rank`)
 
 The diagram above is the default path. The ban-awareness flags
-(`pro/model/bans/`) add three off-by-default switches to the same
+(`pro/model/archive/bans/`) add three off-by-default switches to the same
 `PolicyValueModel`; this is the same forward pass with all three on.
 
 ```mermaid
@@ -141,7 +141,7 @@ graph TD
 What the switches actually change, in the order the diagram reads:
 
 - **The encoder here is the pro-only stage-1 checkpoint, and it is not frozen.**
-  `pro/model/bans/run_arms.sh` initialises every arm from
+  `pro/model/archive/bans/run_arms.sh` initialises every arm from
   `masking-proonly-randomvalsplit-through-wlds-ig-tes/best.pt` (D256, 2 intra +
   1 cross, no value head) and `train_policy.py` calls
   `set_freeze_encoder(False)`, exactly like the default path above. An earlier
@@ -163,7 +163,7 @@ What the switches actually change, in the order the diagram reads:
 
 The three together measured **+0.60 pp top-5** (p = 4.3e-8) against the
 control, but each switch alone is flat (+0.08 counter, +0.11 fearless) — the
-attribution is unresolved and the numbers live in `pro/model/bans/README.md`.
+attribution is unresolved and the numbers live in `pro/model/archive/bans/README.md`.
 
 ## What is here
 
@@ -190,10 +190,13 @@ inference and the stage:
 | `nextpick-proonly` | this folder's `train_policy.py` | next-move ranking |
 | `masking-proonly-through-wlds-ig-tes` | `train_masked.py --no-test --val-scope latest` | the same, on all 46,879 drafts |
 | `nextpick-proonly-through-wlds-ig-tes` | `train_policy.py`, init from the row above | the same, on all 46,879 drafts |
-| `masking-proonly-randomvalsplit-through-wlds-ig-tes` | `train_masked.py --no-test --val-split random` | the same, val drawn at random per patch — **the shipped default** |
-| `nextpick-proonly-randomvalsplit-through-wlds-ig-tes` | `train_policy.py`, init from the row above | the same — the next-move default until 2026-11-05 |
-| `nextpick-proto-ensemble/ensemble.json` | `pro/model/proto/` (seeded 80/10/10 split) | mean of 3 members' logits — the next-move default until 2026-11-07 (`pro/model/proto/README.md` §6) |
-| `nextpick-bans-aware-through-wlds-ig-tes` | `pro/model/bans/` (this recipe + `ban_side`, `ban_fearless`, `counter_rank`) | **the shipped next-move default** (`pro/model/bans/README.md`) |
+| `masking-proonly-randomvalsplit-through-wlds-ig-tes` | `train_masked.py --no-test --val-split random` | the same, val drawn at random per patch — the role default until 2026-11-14 |
+| `nextpick-proonly-randomvalsplit-through-wlds-ig-tes` | `train_policy.py`, init from the row above | the same — the next-move default until 2026-11-14 |
+| `masking-proonly-nov13-through-lcp-df-sw` | `train_masked.py --corpus 2022-full --no-pin` | 46,939 drafts, 85/10/5, no pinned holdout — **the shipped role board** |
+| `nextpick-proonly-nov13-k5-through-lcp-df-sw` | `train_policy.py --corpus 2022-full --no-pin --prefix-mode k --prefix-k 5` | init from the row above — **the shipped next move** |
+| `nextpick-proonly-nov13-k10-through-lcp-df-sw` | the same with `--prefix-k 10` | same top-5 (p 0.07 vs k=5), better top-10, overfits by ep 20 — not shipped |
+| `nextpick-proto-ensemble/ensemble.json` | `pro/model/archive/proto/` (seeded 80/10/10 split) | mean of 3 members' logits — the next-move default until 2026-11-07 (`pro/model/archive/proto/README.md` §6) |
+| `nextpick-bans-aware-through-wlds-ig-tes` | `pro/model/archive/bans/` (this recipe + `ban_side`, `ban_fearless`, `counter_rank`) | the next-move default 2026-11-07..11-14 (`pro/model/archive/bans/README.md`) |
 
 **The `-through-<league>-<a>-<b>` suffix** states which series the training data
 ends on. `--out-dir` is refused unless it ends with the suffix derived from the
@@ -225,12 +228,12 @@ this folder is from-scratch only by design.
 ```bash
 # stage 1: masked completion (~8 min)
 docker compose run --rm dev python pro/model/proonly/train_masked.py \
-    --run-name masking-proonly --out-dir pro/model/checkpoints/masking-proonly --seed 0
+    --run-name masking-proonly --out-dir pro/model/archive/checkpoints/masking-proonly --seed 0
 
 # stage 2: next-pick, from that checkpoint (~13 min)
 docker compose run --rm dev python pro/model/proonly/train_policy.py \
-    --run-name nextpick-proonly --out-dir pro/model/checkpoints/nextpick-proonly \
-    --seed 0 --init-ckpt pro/model/checkpoints/masking-proonly/best.pt --epochs 40
+    --run-name nextpick-proonly --out-dir pro/model/archive/checkpoints/nextpick-proonly \
+    --seed 0 --init-ckpt pro/model/archive/checkpoints/masking-proonly/best.pt --epochs 40
 ```
 
 `--out-dir` is what gives the artefact its stable, self-describing name; without
@@ -260,11 +263,11 @@ recorded number.
 # the shipped defaults: stage 1 (~7 min), then stage 2 (~14 min) from it
 docker compose run --rm dev python pro/model/proonly/train_masked.py \
     --no-test --val-split random --seed 0 \
-    --out-dir pro/model/checkpoints/masking-proonly-randomvalsplit-through-wlds-ig-tes
+    --out-dir pro/model/archive/checkpoints/masking-proonly-randomvalsplit-through-wlds-ig-tes
 docker compose run --rm dev python pro/model/proonly/train_policy.py \
     --no-test --val-split random --seed 0 \
-    --init-ckpt pro/model/checkpoints/masking-proonly-randomvalsplit-through-wlds-ig-tes/best.pt \
-    --out-dir pro/model/checkpoints/nextpick-proonly-randomvalsplit-through-wlds-ig-tes
+    --init-ckpt pro/model/archive/checkpoints/masking-proonly-randomvalsplit-through-wlds-ig-tes/best.pt \
+    --out-dir pro/model/archive/checkpoints/nextpick-proonly-randomvalsplit-through-wlds-ig-tes
 ```
 
 `--no-test` drops the pinned test split entirely. The pinned series become
@@ -304,10 +307,10 @@ rows trained, including the four Worlds final games.
 ```bash
 # the two kept pro-only runs, masked vs policy
 docker compose run --rm dev python pro/model/proonly/compare.py --task masked \
-    --a pro/model/checkpoints/masking-proonly/best.pt \
+    --a pro/model/archive/checkpoints/masking-proonly/best.pt \
     --b solo_queue/model/checkpoints/masking-finetune/best_mask.pt
 docker compose run --rm dev python pro/model/proonly/compare.py --task policy \
-    --a pro/model/checkpoints/nextpick-proonly/best.pt \
+    --a pro/model/archive/checkpoints/nextpick-proonly/best.pt \
     --b solo_queue/model/checkpoints/nextpick-policy/best_policy.pt
 ```
 
@@ -320,14 +323,14 @@ trained by neither. `--other` picks which protocol to intersect with.
 # refresh vs original: 27 games, val for both, trained by neither
 docker compose run --rm dev python pro/model/proonly/compare.py --task policy \
     --split shared --other old \
-    --a pro/model/checkpoints/nextpick-proonly/best.pt \
-    --b pro/model/checkpoints/nextpick-proonly-through-wlds-ig-tes/best.pt
+    --a pro/model/archive/checkpoints/nextpick-proonly/best.pt \
+    --b pro/model/archive/checkpoints/nextpick-proonly-through-wlds-ig-tes/best.pt
 
 # refresh vs an all-patch-val run (--other all), and exhaustive masking
 docker compose run --rm dev python pro/model/proonly/compare.py --task masked \
     --split shared --other all --mask-mode slot \
-    --a pro/model/checkpoints/masking-proonly-through-wlds-ig-tes/best.pt \
-    --b pro/model/checkpoints/masking-proonly-allval-through-wlds-ig-tes/best.pt
+    --a pro/model/archive/checkpoints/masking-proonly-through-wlds-ig-tes/best.pt \
+    --b pro/model/archive/checkpoints/masking-proonly-allval-through-wlds-ig-tes/best.pt
 ```
 
 `--mask-mode slot` hides each pick in turn (10 queries per game) instead of the

@@ -7,7 +7,8 @@ is the part most likely to change.
 ```
 schema.py       build the SQLite corpus + the schema text the model is shown
 sql_tool.py     one read-only query tool with mechanical guards
-model_tools.py  predict_next_move / rank_candidates over the trained heads
+soloq_tool.py   pairwise matchup tool over the soloQ analytical store (DuckDB)
+model_tools.py  predict_next_move / predict_roles over the trained heads
 draft_state.py  the draft as an immutable move log, and a store of them
 state_tools.py  get / clone / apply / undo / list, as tools
 session.py      the registry, the call log, the ablation switch
@@ -87,25 +88,102 @@ file.
 
 ## The model tier carries the judgment
 
-`predict_next_move` answers "what should we pick" (the head's distribution, 50.5 %
-top-5 on the shared val). `rank_candidates` answers "Kled or Olaf" - a k-way
-comparison of a *named* set, which is what a coach asks and what the reranker
-was trained for.
+`predict_next_move` answers "what should we pick" (the **serving** next-move
+model's distribution: the head's, or the 4B reranker's order over the head's
+shortlist when `--rerank` is on - `model` in the result names which, and the
+candidate set is the head's either way, so top-5 recall does not change).
+`k` is the caller's, not the tool's: the head's top-1 is
+right 18.7 % of the time, its top-5 51.1 % and its top-20 85.2 %, so how wide to
+read is a decision, and a caller that fixes k=5 is throwing away a third of the
+answers. The tool reads `predictor.next_move`, not `predictor.head.next_move`:
+the latter is what the first version did, and it silently threw the reranker
+away (`_serving` in `model_tools.py`).
 
-Three refusals, each for a measured reason:
+`predict_roles` answers "what does this team still need" - which role each pick
+fills, from the champion's own pick history (96 % agreement with the real roles),
+with `p_lane` as the confidence and `open_roles` per side. The assignment is
+**one-to-one per side**: five picks, five roles, so the answer is a lineup rather
+than five independent guesses. It reads `data/champ_roles.json`, needs no
+checkpoint, and it is the one thing the head structurally cannot do: the head
+scores champions, not lineups, so it will happily propose a third mid laner.
+Measured on 2,000 pick rows of the shared val: the head's #1 cannot fill any open
+role on **6.6 %** of them, and taking the highest-ranked role-legal champion
+instead is worth **+1.0 pp**; taking the best one *in the right role* is worth
+**+12.3 pp** (21.45 → 33.70). The role set is knowable at pick time, the
+individual role often is not.
+
+`predict_next_move` also takes `role=` and `side=`, which is the role-board
+question - "what does the head believe red's jungle picks" - and it masks the
+head's logits to that role before the top-k. It answers for the side *not* on the
+clock only when the ban block is complete and the move on the clock is a pick,
+because the head has no in-distribution form for a fabricated turn outside that
+window; a refused cell says so instead of guessing.
+
+There is no `rank_candidates`. Comparing a named shortlist ("Kled or Olaf") is
+what the harnessed model does itself now, from the distribution and the evidence,
+so a tool that re-asks the head a question its own top-k already answers was
+removed rather than kept for symmetry.
+
+## A soloQ matchup tool
+
+`soloq_matchup` answers the question the head structurally cannot: *"does Ahri
+beat Zed in mid?"* The next-move head scores champions independently, so it has
+no pairwise number. The pro corpus has pairings too, but only through free-text
+`sql`, and its `cube2` lives in a different store (a DuckDB analytical cube the
+agent cannot reach from SQLite). So this tool wraps that cube with parameters -
+`champion`, `partner`, `kind` ('vs' / 'with'), optional `patch` and `role` - and
+attaches the honesty the pairwise numbers need:
+
+  * a **baseline** - the champion's own win rate with no partner filter, over the
+    same patch scope - so the *marginal* effect of the partner is visible instead
+    of being buried in the champion's own strength;
+  * a **reliable** flag on `n >= min_n` (default 30), because the
+    `pair_reliability` experiment showed the pairwise deviations are mostly
+    champion strength plus noise;
+  * the exact query is returned (like `sql`), so a wrong answer is debuggable;
+  * the rates are **soloQ**, a different population from the pro drafts the head
+    learned on - a complementary signal, not a substitute for
+    `predict_next_move`.
+
+Names and Riot ids both resolve (fuzzy, like `ChampIndex`), and the connection is
+opened lazily and cached, so importing or advertising the tool costs nothing; a
+missing or locked store is a returned error, never a raised one. It is offered
+whenever the soloQ store is on disk, ablated from the one-click reranking button
+(because that turn is a rerank of the head, not a data dive), and advertised to
+the free-form "ask the agent" panel and the MCP server like any other tool.
+
+```bash
+python - <<'PY'   # ad hoc call
+from pro.model.agent import soloq_tool
+print(soloq_tool.run("Ahri", "Zed", kind="vs", patch="16.20"))
+PY
+```
+
+
+Four refusals, each for a measured reason:
 
 - **Never a bare probability.** `p_head` is a share of the legal pool (164),
-  `p_rerank` is a share of the candidate set (5). Every entry carries `rank` and
-  the result carries a `note` saying which is which.
+  `p_lane` is a share of one champion's own picks in that role, `p_in_lane` is a
+  share of the champions that play one role. Every entry carries `rank` and the
+  result carries a `note` saying which is which.
 - **The patch is echoed.** Patch ids are 1-based rows into `patch_vocab`, and a
   label the checkpoint does not know becomes UNK - the head then answers
   patch-agnostically without saying so. `patch_known: false` is the only signal.
+  `rerank.load_head` attaches the vocabulary to the raw module for exactly this
+  reason; without it every tool call on a checkpoint answered as UNK while the
+  batch path used the real patch.
 - **The board is validated.** A champion picked twice, or picked and banned,
   comes back as a refusal. An agent that learns to trust a distribution computed
   for an illegal board is worse than one with no tools.
+- **`model` is a label, not the module.** `PolicyPredictor.model` is a property
+  returning the torch module, so `str(...)` put the whole `PolicyValueModel(...)`
+  repr into every tool result - 2,000 characters of architecture in the JSON the
+  model is meant to read.
 
-The board is passed as `blue_picks` / `red_picks` in slot order, not one 10-slot
-array: a single sparse list cannot say which side the third name belongs to.
+The board is never an argument. `predict_next_move` and `predict_roles` take
+`state="<id>"` and nothing else: a sparse ten-slot list cannot say which side a
+name belongs to, and retyping it is the transcription failure the state exists to
+remove.
 
 ## The log and the ablation
 
@@ -130,13 +208,11 @@ ablation. `--ablate sql` means the same thing in all three.
 
 Three rules, each for a failure that would otherwise be invisible:
 
-- **Omission is filled; disagreement is flagged.** Every model tool takes the
-  whole board, so the model re-types nine champion names on every call. If it
-  omits `blue_picks` it is being lazy and the turn's board is unambiguous, so the
-  loop fills it. If it supplies a *different* board it has made a claim, and
-  correcting that claim silently would hide the most likely failure of the whole
-  architecture. `transcription.mismatched` records it and the tool answers the
-  board it was actually asked about.
+- **The board is never transcribed.** Every tool takes a state id, so there is
+  nothing to retype and nothing to disagree about. An earlier version accepted a
+  board as well as a state and filled or flagged the difference; that machinery
+  existed only to catch a model mistyping nine champion names, and it went with
+  the argument.
 - **The step budget is a routing decision.** A graph that runs out of steps and
   raises `GraphRecursionError` loses the log. The router sends the last assistant
   message to `END` and records `stop="step budget"`. It also does not end on the
@@ -147,11 +223,20 @@ Three rules, each for a failure that would otherwise be invisible:
 - **No key is not a crash.** `client_from_env` returns `None`, `run` returns
   `stop="no client"` with the tools it would have offered.
 
-The prompt is part of the design, not boilerplate: it ranks the tools by
-reliability (`rank_candidates` → `predict_next_move` → `sql`), forbids comparing
-`p_head` with `p_rerank`, and says the head cannot see side. `test_loop.py` pins
-those three sentences, because they are the instructions that decide what gets
-measured.
+The prompt is part of the design, not boilerplate: it orders the moves (`get_state`
+first, then `predict_roles`, then `predict_next_move` with a `k` of the model's own
+choosing, and a sandbox only when the answer turns on a hypothetical), forbids
+inventing a number no tool returned, and says the head cannot see side.
+`test_prompt_explained.py` pins those sentences, because they are the instructions
+that decide what gets measured.
+
+`suggest.py` is the served version of that arm. It owns the fixed question, the
+explained prompt, the `{"sql"}` ablation and the 5-step / 8-call budget, so
+`pro/model/archive/llm/eval_api_agent.py` and the frontend's one-click button run the
+same experiment rather than two that share a name. It also parses the final
+`PICK:` / `BAN:` line into one move and reports the head's own #1 on the board -
+**fidelity**, not accuracy. `test_suggest.py` pins the parser (marker first,
+longest name wins, an illegal or wrong-kind champion is not playable).
 
 ## The MCP server
 
@@ -178,7 +263,7 @@ session through a real subprocess, not only through `StringIO`.
 ```bash
 # build the corpus (~1 min; 46,915 games, 938,300 moves, 107 patches)
 python pro/model/agent/build_db.py \
-  --known-patches-from pro/model/checkpoints/nextpick-sharedsplitthrough-las-dk-c-t1-r/best.pt
+  --known-patches-from pro/model/archive/checkpoints/nextpick-sharedsplitthrough-las-dk-c-t1-r/best.pt
 
 python pro/model/agent/demo.py                  # scripted turn, all tools
 python pro/model/agent/demo.py --ablate sql     # the same turn without SQL
@@ -190,17 +275,17 @@ python pro/model/agent/loop.py --question "Kled or Olaf?" --blue "..." --red "..
 python pro/model/agent/mcp_server.py --self-test   # the protocol, no client
 python pro/model/agent/mcp_server.py               # serve on stdio
 
-pytest pro/model/agent/ -q                         # 96 tests
+pytest pro/model/agent/ -q                         # 137 tests
 ```
 
 The loop reads `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_TIMEOUT` - the
-same contract as `frontend/llm.py`, so a transcript that names a model names the
-one that answered. It also reads `.env` from the repo root, without overriding
-the shell, because that is where this repo keeps its keys and docker compose only
-injects them for the frontend: a host-side script that ignored the file would
-tell a user with a key that there is none. The banner prints the model, the base
-URL and whether a key was found, so a misconfigured run is visible before it
-spends a call.
+same contract as the frontend's agent panel, so a transcript that names a model
+names the one that answered. It also reads `.env` from the repo root, without
+overriding the shell, because that is where this repo keeps its keys and docker
+compose only injects them for the frontend: a host-side script that ignored the
+file would tell a user with a key that there is none. The banner prints the model,
+the base URL and whether a key was found, so a misconfigured run is visible before
+it spends a call.
 
 `--scripted` replaces the model with a fake client that calls one tool and stops,
 which is enough to exercise the graph, the board filling and the ablation without
@@ -232,10 +317,9 @@ call path, so a pass means the wiring is good.
 | **Ollama, local 7-8B** | 0, unlimited | fine for measuring *tool selection*, not for measuring whether an agent beats the reranker |
 | **WorkBuddy cloud LLM** | 0 | **not usable from here** - see below |
 
-`--env-file` exists because `.env` belongs to the frontend: it points at
-`gpt-4o-mini` for `/api/explain`, and changing it would change the frontend's
-behaviour. Put the experiment's provider in `.env.agent` instead; `.env.*` is
-git-ignored.
+`--env-file` exists because `.env` belongs to the frontend panel, and changing
+its model would change what the panel answers. Put the experiment's provider in
+`.env.agent` instead; `.env.*` is git-ignored.
 
 **Why the WorkBuddy keyless model is not an option for this loop.** The cloud
 LLM is `/.cloud/llm/chat/completions` on a deployed app's origin, reached through
@@ -264,9 +348,9 @@ So a draft is a state now (`draft_state.py`), and the tools take an id:
 | `undo_move` | take it back and try the other branch |
 | `list_states` | every live state, with depth and read-only flag |
 
-`predict_next_move` and `rank_candidates` accept `state="<id>"` as well as the
-board arguments, and the state path resolves to *the same call* - there is one
-implementation, so the two forms cannot drift.
+`predict_next_move` and `predict_roles` take `state="<id>"` and nothing else, so
+the model cannot name a board the store does not hold. There is no board-argument
+form left to drift against.
 
 Four decisions, each of which is why this is a move log rather than a set of
 board fields:
@@ -340,18 +424,22 @@ nothing about it. `[]` is the explicit "this series has no pool".
 | `GET /api/state` | the live state and every sandbox, each rendered |
 | `POST /api/state` | `{op: clone\|apply\|undo\|drop\|reset, state, champion, name}` |
 | `POST /api/agent` | one agent turn against `real`; returns the transcript |
+| `POST /api/agent-suggest` | the same loop, a fixed reranking question, one parsed move |
 
-`/api/agent` is the only route that calls a remote model. Three things have to be
+`/api/agent` and `/api/agent-suggest` are the only routes that call a remote
+model. Two things have to be
 true, and each missing one is a sentence rather than a traceback: `langgraph`
-importable (503), a policy loaded (400), a key in the environment (200 with
-`stop: "no client"` and the reason). The board comes from the store, not from the
-payload, which is why the model is never asked to retype nine champion names. The
-corpus database is optional - without it the SQL tool is simply not offered.
+importable (503) and a key in the environment (200 with `stop: "no client"` and
+the reason). No checkpoint is required - without one the model tools are simply
+not offered and the turn answers from the state and the corpus. The board comes
+from the store, not from the payload, which is why the model is never asked to
+retype nine champion names. The corpus database is optional - without it the SQL
+tool is simply not offered.
 
 The frontend image does not ship `langgraph` (it lives in the venv inside the bind
 mount, so it is not baked in). One command adds it, and it survives `--rm`:
 
-    pro/model/llm/.venv/bin/pip install langgraph
+    pro/model/archive/llm/.venv/bin/pip install langgraph
 
 Then put the provider in `.env`, which `docker compose` already passes to the
 frontend container:
@@ -400,6 +488,11 @@ being improved here.
 omitted the head's actual #1 (Rumble in one board, Gwen in another). That breaks
 fidelity: the comparison is confident and about the wrong set. So the prompt now
 says to call `predict_next_move` first when the shortlist is yours.
+
+*(This run predates the removal of `rank_candidates`. The tool it criticises no
+longer exists - comparing a named shortlist is the harnessed model's own job now,
+which is the same lesson taken one step further: the fix for a shortlist written
+before seeing the distribution is to not write one.)*
 
 Two things that follow from reading fidelity rather than accuracy:
 

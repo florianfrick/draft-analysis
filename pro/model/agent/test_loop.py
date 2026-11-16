@@ -24,7 +24,8 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 sys.path.insert(0, str(ROOT))
 
-from pro.model.agent import handrun, llm_client, loop, mcp_server, model_tools, schema  # noqa: E402
+from pro.model.agent import (draft_state, handrun, llm_client, loop,  # noqa: E402
+                             mcp_server, model_tools, schema, soloq_tool)
 from pro.model.agent.session import Session                        # noqa: E402
 from pro.model.agent.test_agent import NAMES, SPLIT, _rows         # noqa: E402
 
@@ -41,7 +42,12 @@ def con(tmp_path_factory):
 
 @pytest.fixture()
 def session(con):
-    return Session(con=con, max_calls=6)
+    """A session with a live board: no tool takes a board any more, so a run
+    without a state has nothing to answer about."""
+    store = draft_state.Store(model_tools.ChampIndex(NAMES))
+    store.set_real(draft_state.log_from_board(
+        BOARD["blue_picks"], BOARD["bans"], red_first=True, patch=BOARD["patch"]))
+    return Session(con=con, store=store, max_calls=6)
 
 
 # ---------------------------------------------------------------- fake model
@@ -79,51 +85,31 @@ def client_that_records():
 
 
 # ---------------------------------------------------------------------- run
-def test_the_board_is_filled_when_the_model_omits_it(session):
-    """Every model tool takes the whole board; re-typing nine names is the tax."""
-    out = loop.run(session, "Kled or Olaf?",
-                   client=client_of(reply("", [("rank_candidates",
-                                                {"candidates": ["Xayah", "Jinx"]})])),
-                   board=BOARD)
-    assert out["stop"] == "answered"
-    assert set(out["transcription"]["filled"]) == {
-        "rank_candidates.blue_picks", "rank_candidates.red_picks",
-        "rank_candidates.bans", "rank_candidates.patch",
-        "rank_candidates.first_pick"}
-    assert out["transcription"]["mismatched"] == []
-    # And the tool really was called with the board, not with an empty one.
-    args = session.log[0]["args"]
-    assert "Aatrox" in args["blue_picks"] and "16.20" in args["patch"]
+def test_no_tool_takes_a_board(session):
+    """The transcription failure is removed by construction, not flagged.
+
+    An earlier version accepted a board as well as a state, filled an omitted
+    field from the turn's board and flagged a contradicted one. Every one of
+    those branches existed to detect a model re-typing nine champion names.
+    """
+    # The transcription failure was nine champion names (plus first_pick and
+    # the ban/fearless sets). `patch` is a legitimate query filter on some tools
+    # (it is a scope, not a board to transcribe), so it is not in this set.
+    board_fields = {"blue_picks", "red_picks", "bans", "first_pick",
+                    "unavailable"}
+    for spec in session.available():
+        props = set((spec["parameters"].get("properties") or {}))
+        assert not (props & board_fields), spec["name"]
+    # `state` is required by the two model tools, not by the state verbs.
+    assert model_tools.PREDICT_SPEC["parameters"]["required"] == ["state"]
+    assert model_tools.ROLES_SPEC["parameters"]["required"] == ["state"]
 
 
-def test_a_board_the_model_retypes_differently_is_flagged_not_corrected(session):
-    """Silently fixing the model's board would hide the likeliest failure here."""
-    out = loop.run(session, "Kled or Olaf?",
-                   client=client_of(reply("", [("rank_candidates",
-                                                {"candidates": ["Xayah", "Jinx"],
-                                                 "blue_picks": ["Vayne"],
-                                                 "red_picks": ["Poppy", "Lee Sin"],
-                                                 "bans": ["Kled", "Olaf"],
-                                                 "patch": "16.20",
-                                                 "first_pick": 1})])),
-                   board=BOARD)
-    assert out["transcription"]["mismatched"] == ["rank_candidates.blue_picks"]
-    assert out["transcription"]["filled"] == []
-    # Not corrected: the tool answered about the board it was asked about.
-    assert "Vayne" in session.log[0]["args"]["blue_picks"]
-
-
-def test_an_omitted_field_is_filled_but_a_contradicted_one_is_not(session):
-    """The two rules have to coexist in one call, not just in isolation."""
-    out = loop.run(session, "x",
-                   client=client_of(reply("", [("rank_candidates",
-                                                {"candidates": ["Xayah", "Jinx"],
-                                                 "blue_picks": ["Vayne"]})])),
-                   board=BOARD)
-    assert out["transcription"]["filled"] == [
-        "rank_candidates.red_picks", "rank_candidates.bans",
-        "rank_candidates.patch", "rank_candidates.first_pick"]
-    assert out["transcription"]["mismatched"] == ["rank_candidates.blue_picks"]
+def test_a_run_without_a_state_says_so(con):
+    """A session with no store has no board, and guessing one is the bug."""
+    out = loop.run(Session(con=con), "Kled or Olaf?")
+    assert out["stop"] == "no state"
+    assert "Store" in out["error"]
 
 
 def test_no_key_is_a_recorded_outcome_not_a_crash(session):
@@ -141,7 +127,7 @@ def test_the_answer_is_the_last_assistant_message(session):
                    client=client_of(reply("", [("sql", {"query":
                                                         "SELECT 1 AS one"})]),
                                     reply("Pick Xayah.")),
-                   board=BOARD)
+                   )
     assert out["answer"] == "Pick Xayah."
     assert out["stop"] == "answered"
     assert [c["name"] for c in out["calls"]] == ["sql"]
@@ -163,7 +149,7 @@ def test_the_loop_stops_at_the_step_budget_and_still_answers(session):
             return reply("", [("sql", {"query": "SELECT 1 AS one"})])
         return reply("One, from the query I already ran.")
 
-    out = loop.run(session, "x", client=client, board=BOARD, max_steps=2)
+    out = loop.run(session, "x", client=client, max_steps=2)
     assert out["stop"] == "step budget"
     assert out["answer"] == "One, from the query I already ran."
     assert len(out["calls"]) == 2          # two tool rounds, then the router
@@ -179,8 +165,7 @@ def test_a_model_that_ignores_the_budget_note_gets_no_answer(session):
     a behaviour - and it is why the budget path drops the tools as well as
     sending the note, instead of relying on the model to notice.
     """
-    out = loop.run(session, "x", client=client_that_records(), board=BOARD,
-                   max_steps=2)
+    out = loop.run(session, "x", client=client_that_records(), max_steps=2)
     assert out["stop"] == "step budget"
     assert len(out["calls"]) == 2
     assert out["answer"] is None
@@ -190,7 +175,7 @@ def test_a_tool_error_does_not_end_the_loop(session):
     out = loop.run(session, "x",
                    client=client_of(reply("", [("sql", {"query": "DELETE FROM move"})]),
                                     reply("I could not query that.")),
-                   board=BOARD)
+                   )
     assert out["stop"] == "answered"
     assert out["summary"]["errors"] == 1
     assert out["answer"] == "I could not query that."
@@ -200,7 +185,7 @@ def test_an_llm_error_is_reported_in_the_stop_reason(session):
     def boom(messages, tools=None):
         raise llm_client.LLMError("HTTP 401 from x: bad key")
 
-    out = loop.run(session, "x", client=boom, board=BOARD)
+    out = loop.run(session, "x", client=boom)
     assert out["stop"].startswith("llm error")
     assert "401" in out["stop"]
 
@@ -209,12 +194,12 @@ def test_a_crashing_client_does_not_lose_the_log(session):
     def boom(messages, tools=None):
         raise RuntimeError("kaboom")
 
-    out = loop.run(session, "x", client=boom, board=BOARD)
+    out = loop.run(session, "x", client=boom)
     assert out["stop"] == "loop error"
     assert "kaboom" in out["error"]
     assert out["summary"]["calls"] == 0
     with pytest.raises(RuntimeError):
-        loop.run(session, "x", client=boom, board=BOARD, raise_errors=True)
+        loop.run(session, "x", client=boom, raise_errors=True)
 
 
 # ------------------------------------------------------------------ ablation
@@ -225,19 +210,27 @@ def test_an_ablated_tool_is_not_advertised(con):
     session = Session(con=con, predictor=object(), champs=object(),
                       ablate={"sql"})
     client = client_of(reply("no tools needed"))
-    out = loop.run(session, "x", client=client, board=BOARD)
-    assert out["tools_offered"] == ["predict_next_move", "rank_candidates"]
+    out = loop.run(session, "x", client=client)
+    # The base set, plus `soloq_matchup` when its store is on disk - the
+    # assertion is store-independent so it passes whether or not the soloQ
+    # analytical store was built in this environment. `sql` is ablated.
+    base = {"get_state", "clone_state", "apply_move", "undo_move",
+            "list_states", "predict_next_move", "predict_roles"}
+    if soloq_tool.available():
+        base.add("soloq_matchup")
+    assert set(out["tools_offered"]) == base
+    assert "sql" not in out["tools_offered"]
     assert out["calls"] == []
     assert out["answer"] == "no tools needed"
 
 
-def test_an_ablated_tool_is_also_refused_at_call_time(con):
+def test_an_ablated_tool_is_also_refused_at_call_time(session):
     """A model that invents a tool name gets a refusal it can read, not a crash."""
-    session = Session(con=con, ablate={"sql"})
+    session.ablate = {"sql"}
     out = loop.run(session, "x",
                    client=client_of(reply("", [("sql", {"query": "SELECT 1"})]),
                                     reply("no sql")),
-                   board=BOARD)
+                   )
     assert out["summary"]["ablated"] == 1
     assert out["summary"]["errors"] == 1
     assert out["stop"] == "answered"
@@ -245,12 +238,11 @@ def test_an_ablated_tool_is_also_refused_at_call_time(con):
     assert "not available" in tool_msg["content"]
 
 
-def test_every_call_goes_through_the_session(con):
+def test_every_call_goes_through_the_session(session):
     """The log is the measurement; a direct call would bypass it."""
-    session = Session(con=con)
     loop.run(session, "x", client=client_of(reply("", [("sql", {"query":
                                                                 "SELECT 1 AS one"})]),
-                                            reply("ok")), board=BOARD)
+                                            reply("ok")))
     assert len(session.log) == 1
     assert session.log[0]["name"] == "sql"
     assert session.log[0]["ok"] is True
@@ -261,10 +253,10 @@ def test_every_call_goes_through_the_session(con):
 def test_the_prompt_reads_the_board_before_it_ranks_anything():
     """The order in the prompt is the design decision; pin it."""
     i_state = loop.SYSTEM.index("get_state")
+    i_roles = loop.SYSTEM.index("predict_roles")
     i_pred = loop.SYSTEM.index("predict_next_move")
-    i_rank = loop.SYSTEM.index("rank_candidates")
     i_sql = loop.SYSTEM.index("`sql`")
-    assert i_state < i_pred < i_rank < i_sql
+    assert i_state < i_roles < i_pred < i_sql
 
 
 def test_the_prompt_forbids_retyping_a_board():
@@ -281,9 +273,17 @@ def test_the_prompt_warns_that_a_shortlist_can_omit_the_heads_top_pick():
     assert "omit the head's top pick" in text
 
 
-def test_the_prompt_says_the_two_probabilities_are_not_comparable():
-    assert "p_head" in loop.SYSTEM and "p_rerank" in loop.SYSTEM
+def test_the_prompt_says_the_probabilities_are_not_comparable():
+    for key in ("p_head", "p_lane", "p_in_lane"):
+        assert key in loop.SYSTEM
     assert "different claims" in loop.SYSTEM
+
+
+def test_the_prompt_sends_a_named_comparison_back_to_the_ranking():
+    """There is no shortlist tool; the model has to widen k instead."""
+    text = loop.SYSTEM.lower()
+    assert "your job, not a tool's" in text
+    assert "wider `k`" in text
 
 
 def test_the_prompt_tells_the_model_it_cannot_see_side():
@@ -453,8 +453,8 @@ def test_tools_list_matches_the_session(session):
         assert t["description"]
 
 
-def test_tools_list_hides_an_ablated_tool(con):
-    session = Session(con=con, ablate={"sql"})
+def test_tools_list_hides_an_ablated_tool(session):
+    session.ablate = {"sql"}
     _n, out = _serve(session, [{"jsonrpc": "2.0", "id": 2, "method": "tools/list"}])
     assert "sql" not in [t["name"] for t in out[0]["result"]["tools"]]
 

@@ -1,0 +1,148 @@
+{
+ "which": "base",
+ "checkpoint": "llm-lora-full2",
+ "chat_format": "chat",
+ "modes": [
+  "chat"
+ ],
+ "records": [
+  {
+   "gameid": "ESPORTSTMNT04_2686330",
+   "move_idx": 12,
+   "kind": "ban",
+   "truth": "Rakan",
+   "head_top1": "Yone",
+   "mode": "chat",
+   "question": "In one sentence, what is a lane swap and why do pro teams use it?",
+   "answer": "<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   Role: Expert League of Legends draft engine.\n    *   Input Data: A draft scenario (Blue picks: Renekton, Amumu, Azir; Red picks: Ornn, Maokai, Aphelios; Bans: Lucian, Milio, Yuumi, Sejuani, Pyke, Vi; Patch: 13.11; First pick: Blue",
+   "seconds": 32.59
+  },
+  {
+   "gameid": "ESPORTSTMNT04_2686330",
+   "move_idx": 12,
+   "kind": "ban",
+   "truth": "Rakan",
+   "head_top1": "Yone",
+   "mode": "chat",
+   "question": "Explain what the fearless draft rule means for the ban phase.",
+   "answer": "<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   **Role:** Expert League of Legends draft engine.\n    *   **Input Data:** A draft scenario with specific picks, bans, and a patch version (13.11).\n    *   **Specific Question:** \"Explain what the fearless draft rule means for the ban phase.\"\n    *   **Context:** The user provided a draft board (Blue: Renekton, Am",
+   "seconds": 6.69
+  },
+  {
+   "gameid": "ESPORTSTMNT04_2686330",
+   "move_idx": 12,
+   "kind": "ban",
+   "truth": "Rakan",
+   "head_top1": "Yone",
+   "mode": "chat",
+   "question": "Which side has the better composition on this board, and why?",
+   "answer": "<think>\n\n</think>\n\nBased on the board state provided (Patch 13.11), here is the analysis of the composition and the likely outcome.\n\n### **The Verdict: Blue Side (Renekton, Amumu, Azir) has the Slightly Better Composition**\n\nWhile Red has strong early-game duelist potential, Blue possesses a more cohesive **mid-to-late game scaling team** with superior teamfight utility and objective control.\n\nHere is the detailed breakdown of why",
+   "seconds": 6.69
+  },
+  {
+   "gameid": "ESPORTSTMNT04_2686330",
+   "move_idx": 12,
+   "kind": "ban",
+   "truth": "Rakan",
+   "head_top1": "Yone",
+   "mode": "chat",
+   "question": "What is the biggest risk for the side on the clock here?",
+   "answer": "<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   **Role:** Expert League of Legends draft engine.\n    *   **Task:** Identify the biggest risk for the side on the clock (Blue) in the given draft scenario.\n    *   **Input Data:**\n        *   State: Red Ban (Move 12 of 20).\n        *   Blue Picks: Renekton, Amumu, Azir.",
+   "seconds": 6.73
+  },
+  {
+   "gameid": "ESPORTSTMNT04_2686330",
+   "move_idx": 12,
+   "kind": "ban",
+   "truth": "Rakan",
+   "head_top1": "Yone",
+   "mode": "chat",
+   "question": "Name one champion that would be a bad pick here and say why, in one line.",
+   "answer": "<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   Role: Expert League of Legends draft engine.\n    *   Input: Draft state (Board, Bans, Picks, Patch, etc.).\n    *   Task: Name one champion that would be a bad pick here and explain why in one line.\n    *   Constraints: One line only.\n\n2.  **Analyze the Draft State:**\n    *   **Patch:** 1",
+   "seconds": 6.71
+  },
+  {
+   "gameid": "ESPORTSTMNT04_2686330",
+   "move_idx": 12,
+   "kind": "ban",
+   "truth": "Rakan",
+   "head_top1": "Yone",
+   "mode": "chat",
+   "question": "Summarise this draft in two sentences for someone who has never watched pro play.",
+   "answer": "<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   **Role:** Expert League of Legends draft engine.\n    *   **Task:** Summarize the provided draft state in two sentences.\n    *   **Target Audience:** Someone who has never watched pro play (needs simple, clear language, avoiding jargon where possible or explaining it).\n    *   **Input Data:**\n        *   Patch: 13.11",
+   "seconds": 6.67
+  },
+  {
+   "gameid": "12588-12588_game_2",
+   "move_idx": 13,
+   "kind": "ban",
+   "truth": "Lucian",
+   "head_top1": "Renekton",
+   "mode": "chat",
+   "question": "In one sentence, what is a lane swap and why do pro teams use it?",
+   "answer": "<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: A text snippet that looks like a League of Legends draft board state (Blue bans, Red picks, etc.), but it's garbled/corrupted (\"State real - to move: blue ban (move 13 of 20)\", \"blue picks: poppy, xin zhao, orianna\", \"red picks: ambessa, wukong, ryze\", etc.).",
+   "seconds": 6.66
+  },
+  {
+   "gameid": "12588-12588_game_2",
+   "move_idx": 13,
+   "kind": "ban",
+   "truth": "Lucian",
+   "head_top1": "Renekton",
+   "mode": "chat",
+   "question": "Explain what the fearless draft rule means for the ban phase.",
+   "answer": "<think>\n\n</think>\n\nIn the context of the **League of Legends** draft engine you provided, the **\"Fearless\"** rule (often referred to as the \"Fearless Draft\" or \"No Fear\" mode in custom games like *League of Legends: Wild Rift* or specific custom server modes) fundamentally alters the ban phase strategy compared to standard ranked or casual drafts.\n\nHere is the breakdown of what the **Fearless** rule means for the ban phase in your specific scenario:\n\n###",
+   "seconds": 6.69
+  },
+  {
+   "gameid": "12588-12588_game_2",
+   "move_idx": 13,
+   "kind": "ban",
+   "truth": "Lucian",
+   "head_top1": "Renekton",
+   "mode": "chat",
+   "question": "Which side has the better composition on this board, and why?",
+   "answer": "<think>\n\n</think>\n\nBased on the board state provided for **Patch 13.14** (Note: The prompt mentions \"15.14\" in the data but lists champions like Galio, Alistar, and Trundle which are classic pre-14.0/14.1 meta picks; assuming the core logic applies to the current meta where these are \"fearless\" or unavailable), here is the draft analysis.\n\n### **The Verdict:",
+   "seconds": 6.73
+  },
+  {
+   "gameid": "12588-12588_game_2",
+   "move_idx": 13,
+   "kind": "ban",
+   "truth": "Lucian",
+   "head_top1": "Renekton",
+   "mode": "chat",
+   "question": "What is the biggest risk for the side on the clock here?",
+   "answer": "<think>\n\n</think>\n\nBased on the draft state provided (Patch 15.14, Blue Ban, Blue Picks: Poppy, Xin Zhao, Orianna; Red Picks: Amethyst, Wukong, Ryze), here is the analysis of the biggest risk for the side on the clock (Blue).\n\n### The Biggest Risk: **Lack of Late-Game Scaling & Top Lane Weakness**\n\nBlue is currently in a **very fragile position** due to a combination of",
+   "seconds": 6.71
+  },
+  {
+   "gameid": "12588-12588_game_2",
+   "move_idx": 13,
+   "kind": "ban",
+   "truth": "Lucian",
+   "head_top1": "Renekton",
+   "mode": "chat",
+   "question": "Name one champion that would be a bad pick here and say why, in one line.",
+   "answer": "<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   Role: Expert League of Legends draft engine.\n    *   Input: Draft state (Blue Ban, Red Ban, Picks, Bans, Patch, Fearless, Legal Champions).\n    *   Task: Name one champion that would be a bad pick here and explain why in one line.\n    *   Constraint: One line only.\n\n2.  **Analyze the Draft State:**",
+   "seconds": 6.7
+  },
+  {
+   "gameid": "12588-12588_game_2",
+   "move_idx": 13,
+   "kind": "ban",
+   "truth": "Lucian",
+   "head_top1": "Renekton",
+   "mode": "chat",
+   "question": "Summarise this draft in two sentences for someone who has never watched pro play.",
+   "answer": "<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   **Role:** Expert League of Legends draft engine.\n    *   **Task:** Summarize the provided draft state in two sentences.\n    *   **Target Audience:** Someone who has never watched pro play (needs simple, clear language, avoiding jargon where possible or explaining it).\n    *   **Input Data:**\n        *   State: Real - to move (Blue Ban,",
+   "seconds": 6.67
+  }
+ ],
+ "summary": {
+  "chat": {
+   "n": 12,
+   "seconds": 8.85
+  }
+ }
+}

@@ -67,6 +67,13 @@ def table():
 
 
 def lane_name(lane):
+    """Display name for a role id.
+
+    The table's `roles` are names, not data values: the corpus cache stores ids
+    and the counts are positional, so renaming role 4 from UTILITY to SUPPORT
+    changes no assignment. The soloQ analysis store is different - its `pos`
+    column holds Riot's own strings and is left alone.
+    """
     return table()["roles"][int(lane)]
 
 

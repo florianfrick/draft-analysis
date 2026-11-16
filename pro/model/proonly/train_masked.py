@@ -106,7 +106,7 @@ def parse_args(argv=None):
     ap.add_argument("--out-dir", default="",
                     help="write the run here instead of ckpt/run_<ts>_<name>. "
                          "Used to give the kept artefacts a stable, "
-                         "self-describing name (pro/model/checkpoints/masking-proonly).")
+                         "self-describing name (pro/model/archive/checkpoints/masking-proonly).")
     return ap.parse_args(argv)
 
 
@@ -225,7 +225,7 @@ def train(args):
     frontier = C.corpus_frontier(rows)
     through = C.through_suffix(frontier)
     C.check_out_dir_name(args.out_dir, through,
-                         "pro/model/checkpoints/masking-proonly-" + through)
+                         "pro/model/archive/checkpoints/masking-proonly-" + through)
     print("data frontier: %s (%s, patch %s) -> %s"
           % (frontier["series_id"], frontier["date"], frontier["patch"],
              through))
@@ -350,7 +350,9 @@ def train(args):
     report = {"protocol": {
         "corpus": args.corpus, "patch_emb": bool(args.patch_emb),
         "n_patches": n_patches,
-        "split": C.split_description(args.val_split, bool(splits["test"])),
+        "split": C.split_description(args.val_split, bool(splits["test"]),
+                                     pinned=not getattr(args, "no_pin",
+                                                         False)),
         "val_scope": args.val_scope,
         "val_split": args.val_split,
         "val_frac": args.val_frac,

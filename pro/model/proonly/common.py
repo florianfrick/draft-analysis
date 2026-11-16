@@ -40,7 +40,23 @@ from solo_queue.model.pretraining.base_model import SiameseBase, load_encoder_st
 # the training seed, otherwise the two arms score different slots.
 EVAL_SEED = 20261101
 
-CORPORA = {"2022": "pro_drafts.pt", "all": "pro_drafts_all.pt"}
+CORPORA = {"2022": "pro_drafts.pt", "all": "pro_drafts_all.pt",
+           # 2022+ exports with the corpus freeze REMOVED: every game in the
+           # CSVs, including whatever the current-season export has appended
+           # since CORPUS_MAX_DATE. Its own cache file, because the freeze is
+           # part of what the rows mean - reusing pro_drafts.pt would either
+           # serve frozen rows or silently overwrite the frozen corpus that
+           # every recorded number in STATUS.md is measured on.
+           "2022-full": "pro_drafts_full.pt"}
+
+# Which corpora are frozen at `pipeline.CORPUS_MAX_DATE`. Only the unfrozen
+# ones pass `max_date=""` down to the scan.
+UNFROZEN_CORPORA = {"2022-full"}
+
+# 2022 = the documented corpus; 2022-full = the same globs, no freeze; all =
+# 2017-2026 (the wider exports), still frozen.
+_CORPUS_GLOB = {"2022": "CSV_GLOB", "2022-full": "CSV_GLOB",
+                "all": "CSV_GLOB_ALL"}
 
 
 def _load(name, path):
@@ -63,8 +79,11 @@ PolicyValueModel = POLICY_MODEL.PolicyValueModel
 
 def add_corpus_args(ap):
     ap.add_argument("--corpus", choices=sorted(CORPORA), default="2022",
-                    help="2022 = the documented 46,879-draft corpus (default); "
-                         "all = 2017-2026, 81,161 drafts")
+                    help="2022 = the documented 46,879-draft corpus, frozen "
+                         "at CORPUS_MAX_DATE (default); all = 2017-2026, "
+                         "81,161 drafts; 2022-full = the 2022+ exports with "
+                         "the freeze removed (every game in the CSVs, its own "
+                         "cache - a different corpus, not a comparable one)")
     ap.add_argument("--val-frac", type=float, default=0.10,
                     help="share of each patch held out for val (the tail, or a "
                          "random draw of the same size - see --val-split)")
@@ -80,6 +99,12 @@ def add_corpus_args(ap):
                          "--val-scope) and the pinned TEST_SERIES are ordinary "
                          "rows. For a production refresh, not a measurement "
                          "run - the resulting checkpoint has no held-out score")
+    ap.add_argument("--no-pin", dest="no_pin", action="store_true",
+                    help="drop the pinned TEST_SERIES but KEEP a fractional "
+                         "test tail (--test-frac). Unlike --no-test this still "
+                         "holds out an out-of-sample set, it just derives it "
+                         "from the fractions instead of from fixed series ids, "
+                         "so the test split moves when the corpus is rebuilt")
     ap.add_argument("--val-scope", choices=("all", "latest"), default="all",
                     help="all (default) = every patch contributes val, the "
                          "protocol every recorded number uses. latest = only "
@@ -93,6 +118,18 @@ def add_corpus_args(ap):
                          "series per patch, so 90%% of every patch's timeline "
                          "- including its end - is trained on and val is "
                          "spread across the patch instead of sitting on it")
+    ap.add_argument("--canonical-split", dest="canonical_split",
+                    action="store_true",
+                    help="force the one split every recorded number is "
+                         "measured on: --corpus 2022-full, --val-frac 0.10, "
+                         "--test-frac 0.05, --min-patch-rows 40, --no-pin, "
+                         "--val-scope all, --val-split tail. Overrides the "
+                         "individual flags (and says so in the log), because "
+                         "a split assembled by hand is how three incompatible "
+                         "protocols accumulated in the first place. "
+                         "pro/model/test_split/split.py is the definition; "
+                         "the resulting checkpoint scores as 'comparable' in "
+                         "that suite only if these are the counts it gets")
     ap.add_argument("--min-patch-rows", type=int, default=40,
                     help="patches smaller than this stay entirely in train "
                          "(their tail would be 1-2 games)")
@@ -105,12 +142,50 @@ def add_corpus_args(ap):
                     help="smoke runs: evenly-strided subsample of the corpus")
 
 
+# The split every recorded number is measured on, mirroring
+# `pro/model/test_split/split.py`. Kept as data rather than as defaults so
+# `--canonical-split` can *force* it: a default can be overridden by accident,
+# and three incompatible protocols is what that produced.
+CANONICAL_SPLIT = dict(corpus="2022-full", val_frac=0.10, test_frac=0.05,
+                       min_patch_rows=40, val_scope="all", val_split="tail")
+
+
+def apply_canonical_split(args):
+    """Overwrite the split flags with the canonical ones, out loud.
+
+    Refuses the two combinations that would silently change the rows:
+    `--no-test` (no held-out set at all) and `--limit-drafts` (a strided
+    subsample, so the counts cannot match and the checkpoint is not
+    comparable whatever it says).
+    """
+    if getattr(args, "no_test", False):
+        raise SystemExit("--canonical-split holds out a test split; --no-test "
+                         "contradicts it")
+    if getattr(args, "limit_drafts", 0):
+        raise SystemExit("--canonical-split cannot be combined with "
+                         "--limit-drafts: the subsample changes the split")
+    for key, want in CANONICAL_SPLIT.items():
+        got = getattr(args, key, None)
+        if got != want:
+            print("canonical split: --%s %r -> %r"
+                  % (key.replace("_", "-"), got, want))
+            setattr(args, key, want)
+    if hasattr(args, "no_pin") and not args.no_pin:
+        print("canonical split: --no-pin on (the test split is the fractional "
+              "tail, not pinned series)")
+        args.no_pin = True
+    return args
+
+
 def load_split(args, verbose=True):
     """rows + within-patch split + patch vocabulary, in one place."""
-    csv_glob = PRO_PIPE.CSV_GLOB if args.corpus == "2022" \
-        else PRO_PIPE.CSV_GLOB_ALL
+    if getattr(args, "canonical_split", False):
+        apply_canonical_split(args)
+    csv_glob = getattr(PRO_PIPE, _CORPUS_GLOB[args.corpus])
+    unfrozen = args.corpus in UNFROZEN_CORPORA
     rows, stats = PRO_PIPE.build_rows(
-        csv_glob=csv_glob, cache_path=PRO_DIR / CORPORA[args.corpus])
+        csv_glob=csv_glob, cache_path=PRO_DIR / CORPORA[args.corpus],
+        max_date="" if unfrozen else None)
     if args.limit_drafts:
         stride = max(1, len(rows) // args.limit_drafts)
         rows = rows[::stride][:args.limit_drafts]
@@ -120,21 +195,24 @@ def load_split(args, verbose=True):
     # usually gone; relax the pin rather than abort, and fall back to the
     # fractional tail. Never true for a measured run.
     no_test = bool(getattr(args, "no_test", False))
+    no_pin = bool(getattr(args, "no_pin", False))
     val_random = getattr(args, "val_split", "tail") == "random"
+    pinned = () if (no_test or no_pin) else PRO_PIPE.TEST_SERIES
     splits = PRO_PIPE.split_within_patch(
         rows, val_frac=args.val_frac,
         test_frac=0.0 if no_test else args.test_frac,
         min_patch_rows=args.min_patch_rows,
-        pinned_test=() if no_test else PRO_PIPE.TEST_SERIES,
+        pinned_test=pinned,
         strict_pin=not args.limit_drafts, verbose=verbose,
         val_patches=("latest" if getattr(args, "val_scope", "all") == "latest"
                      else None),
         val_random=val_random)
     patch_vocab, patch_index = PRO_DATA.build_patch_vocab(rows)
     if verbose:
-        print("corpus %s: %d drafts, %d patches (%s..%s)"
+        print("corpus %s: %d drafts, %d patches (%s..%s), freeze %s"
               % (args.corpus, len(rows), len(patch_vocab),
-                 patch_vocab[0], patch_vocab[-1]))
+                 patch_vocab[0], patch_vocab[-1],
+                 "NONE" if unfrozen else PRO_PIPE.CORPUS_MAX_DATE))
         print("split: train %d / val %d / test %d"
               % (len(splits["train"]), len(splits["val"]),
                  len(splits["test"])))
@@ -144,7 +222,7 @@ def load_split(args, verbose=True):
     return rows, splits, patch_vocab, patch_index
 
 
-def split_description(val_split, has_test):
+def split_description(val_split, has_test, pinned=True):
     """One line naming the split, for the report's own `protocol` block.
 
     A checkpoint records which rows selected it, because `best.pt` is chosen on
@@ -153,9 +231,14 @@ def split_description(val_split, has_test):
     """
     train_how, val_how = (("head", "tail") if val_split == "tail"
                           else ("the rest", "random draw per patch"))
-    return ("within-patch (train=%s, val=%s); " % (train_how, val_how)
-            + ("test = the pinned TEST_SERIES" if has_test
-               else "no test split (--no-test)"))
+    if not has_test:
+        test_how = "no test split (--no-test)"
+    elif pinned:
+        test_how = "test = the pinned TEST_SERIES"
+    else:
+        test_how = "test = a fractional tail (--no-pin, no fixed holdout)"
+    return "within-patch (train=%s, val=%s); %s" % (train_how, val_how,
+                                                    test_how)
 
 
 # ---------------------------------------------------------------- naming ----

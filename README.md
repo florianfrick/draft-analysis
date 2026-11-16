@@ -45,22 +45,31 @@ produces is the siamese base, and both tracks use it.
 | path | what it is |
 |---|---|
 | `model/proonly/` | **the recipe that ships** — pro drafts only, from scratch, patch embedding, within-patch split. Masked stage, next-pick stage, paired comparison |
-| `model/bans/` | ban-awareness experiment: three off-by-default switches (`ban_side`, `ban_fearless`, `counter_rank`) + the ablation probe |
-| `model/proto/` | the arm sandbox, and the shipped 3-member logit ensemble |
-| `model/llm/` | the frozen-LLM soft-prompt experiment |
-| `model/winpred/` | win-prediction runs (logs + weights; the code lived in a deleted `exp/`) |
-| `model/test_split/` | three pinned Worlds 2026 series replayed through **every** checkpoint, both tracks, per class |
-| `model/checkpoints/` | everything else |
+| `model/test_split/` | **the evaluation suite**: the one canonical split (39,720 / 4,771 / 2,448) and two task suites — `next_move` and `masked` — that score any checkpoint against the shipped pair |
+| `model/baselines.py` | the flat-feature encoding the non-neural baselines share, and the legality rule that keeps their candidate set identical to the policy model's |
+| `model/mlp/` | flat-feature MLP baseline (~0.8 M params, both tasks) |
+| `model/forest/` | random-forest baseline, used as a candidate scorer (both tasks) |
+| `model/checkpoints/` | the shipped pair — `masking-proonly-nov13-…` and `nextpick-proonly-nov13-k5-…` — plus the four `*-flat-v1` baseline artefacts |
+| `model/agent/` | the LLM agent that holds the board as an object and calls the models through tools |
+| `model/archive/` | everything retired: `proto/`, `bans/`, `winpred/`, `llm/`, the old pinned-split harness, and `archive/checkpoints/` with every checkpoint that is not the shipped pair |
 
 Each track keeps its own artefact store, so "which data trained this" is a
 path prefix, not a naming convention. Weights are git-ignored in both.
 
 ### Which model actually ships
 
-Both frontend defaults are pro-track (`frontend/server.py`):
+Both frontend defaults are pro-track (`frontend/server.py`), and both moved to
+the 2026-11-13 corpus on 2026-11-14:
 
-- **role board / masked completion** — `masking-proonly-randomvalsplit-through-wlds-ig-tes`
-- **next move** — `nextpick-bans-aware-through-wlds-ig-tes` (pro-only policy + `ban_side`, `ban_fearless`, `counter_rank`)
+- **role board / masked completion** — `masking-proonly-nov13-through-lcp-df-sw`
+- **next move** — `nextpick-proonly-nov13-k5-through-lcp-df-sw` (pro-only policy, 5 prefixes per game per epoch)
+
+That pair is a **different corpus** from everything in `STATUS.md` §7: the
+corpus freeze is lifted (46,939 drafts through 2026-11-13), the pinned test
+series are ordinary rows, the split is a fractional 85/10/5 within-patch tail,
+and there is no fixed holdout. Its own numbers are top-5 **0.5083** (rel 3.36x)
+on 2,448 test games, and +2.55 pp over the same recipe with one prefix
+(p 2.7e-51). Do not put them in the §7 table below, which is the older corpus.
 
 The measured case for the pro track (`STATUS.md` §7, pinned Worlds 2026 test split):
 
@@ -80,7 +89,7 @@ The next-move default changed again on 2026-11-07, from the 3-member
 flags on, **+0.60 pp top-5 over its own control** (0.5056 vs 0.4995, p 4.3e-8).
 That is a *val* number on one seed — the ensemble's +1.33 pp was measured on the
 439 draft rows neither it nor its predecessor had trained on, so the two are not
-comparable and must not be added (`pro/model/bans/README.md`, `STATUS.md` §7).
+comparable and must not be added (`pro/model/archive/bans/README.md`, `STATUS.md` §7).
 The ensemble is still selectable in the UI; its members are fixed at three and
 evicting one on a single seed would void the number that describes it.
 
@@ -230,6 +239,8 @@ last two rows):
 | solo_queue | `nextpick-policy` | soloQ encoder + policy head |
 | pro | `masking-proonly` | pro drafts only, from scratch |
 | pro | `nextpick-proonly` | pro drafts only, encoder + policy from scratch |
-| pro | `masking-proonly-randomvalsplit-through-wlds-ig-tes` | **shipped role board** |
-| pro | `nextpick-bans-aware-through-wlds-ig-tes` | **shipped next move** (ban-aware policy) |
-| pro | `nextpick-proto-ensemble` | 3-member logit mean — selectable, the previous default |
+| pro | `masking-proonly-nov13-through-lcp-df-sw` | **shipped role board** (46,939-draft corpus) |
+| pro | `nextpick-proonly-nov13-k5-through-lcp-df-sw` | **shipped next move** (k=5 prefixes) |
+| pro | `masking-proonly-randomvalsplit-through-wlds-ig-tes` | previous role board — selectable |
+| pro | `nextpick-bans-aware-through-wlds-ig-tes` | ban-aware policy — selectable, previous default |
+| pro | `nextpick-proto-ensemble` | 3-member logit mean — selectable, the default before that |
