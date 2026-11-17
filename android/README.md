@@ -59,7 +59,13 @@ gradle -PapiBase=http://127.0.0.1:8777  assembleDebug   # via `adb reverse`
 gradle -PapiBase=http://192.168.1.20:8777 assembleDebug # LAN device
 ```
 
-**On the emulator, prefer `adb reverse`** if `10.0.2.2` fails:
+You usually do **not** need to set it. `DraftApi` tries the configured address,
+then `10.0.2.2`, then `127.0.0.1`, and caches whichever answers — so the same
+APK works on an emulator and on a phone with `adb reverse`. Only a transport
+failure triggers the next candidate; an HTTP error is surfaced as-is. The final
+error message names every address tried.
+
+**Over adb (emulator or phone), prefer `adb reverse`** if `10.0.2.2` fails:
 
 ```bash
 adb reverse tcp:8777 tcp:8777
@@ -99,14 +105,29 @@ emulator networking problem, not an app bug.
 
 ### On a physical device
 
-The phone cannot see the host's loopback. You need two edits:
+`10.0.2.2` is an emulator-only alias — on a phone it is just some address on
+the carrier network. The simple route is **adb reverse**, which needs no change
+to `serve.sh` or to the compose port binding:
 
-- start the server with `--host 0.0.0.0` (and be aware that `docker-compose.yml`
-  publishes the port to `127.0.0.1` only — that mapping has to change too);
-- put the machine's LAN address in `API_BASE` (`app/build.gradle.kts`) **and** in
-  `res/xml/network_security_config.xml`, or cleartext HTTP is blocked.
+```bash
+adb reverse tcp:8777 tcp:8777
+```
 
-There is no auth and no TLS. Do not expose this beyond your LAN.
+The phone's own `127.0.0.1:8777` is then tunnelled to the machine's loopback,
+where the backend already listens. `127.0.0.1` is already permitted for
+cleartext in `network_security_config.xml`, and the app's fallback will find it
+even if you just press Run with the default build. Re-run `adb reverse` after
+reconnecting the cable or rebooting the device — the mapping does not survive a
+new adb transport.
+
+Verified on a Pixel 7 Pro over Android Studio's adb connection: patch 16.20,
+turn line, all champion portraits and the ranked suggestions load normally.
+
+If you would rather run untethered, use the LAN instead: change the compose
+publish from `127.0.0.1:8777` to `0.0.0.0:8777`, build with
+`-PapiBase=http://<LAN-IP>:8777`, and add that same IP to
+`res/xml/network_security_config.xml` (cleartext is blocked by default). There
+is no auth and no TLS — keep it on the LAN.
 
 ## What the MVP does
 
