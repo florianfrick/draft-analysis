@@ -7,14 +7,36 @@ weights, no corpus, no inference on the device.
 
 ## Status
 
-On branch `android`. **Compiles and tests green** — `:app:assembleDebug` produces
-a 9.6 MB APK with no warnings, and `:app:testDebugUnitTest` passes 6/6 tests
-covering the ported draft order. Not yet run on a device or emulator, so the
-Compose layout is verified by the compiler only, not by eye.
+On branch `android`. **Compiles, tests green, and verified running on an
+emulator** against a live backend. `:app:assembleDebug` produces a 9.6 MB APK
+with no warnings; `:app:testDebugUnitTest` passes 6/6; `:app:lintDebug` reports
+0 errors.
 
-The build used a self-contained toolchain (JDK 21, Android SDK 34/35, Gradle 8.9)
-kept outside the repo, because `sdkmanager.bat` cannot handle the space in the
-default Windows home path:
+The first emulator run (Pixel 5, API 34, 1080×2340) found three real bugs that
+neither the compiler nor the tests could have caught, all now fixed:
+
+1. **`NetworkOnMainThreadException`** — `reload()` called the API from
+   `viewModelScope`, which is `Dispatchers.Main`. `refresh()` was already
+   correct; the initial load was not.
+2. **`patches` was the wrong type.** It is `[{"id": 106, "key": "16.20"}]`, not
+   a list of strings. The `id` is a row of the checkpoint's patch vocabulary and
+   is *not* an index into the list — the list arrives newest-first, 107 down
+   to 1.
+3. **The fresh board read "draft complete".** `turn` was only computed inside
+   `mutate()`, so the initial load left it null. Both paths now share
+   `withTurn()`.
+
+Confirmed on device: patch defaults to 16.20, the turn line and the "on the
+clock" highlight track the plan, the champion grid loads all 173 portraits from
+the dDragon CDN, `/api/next-move` returns a ranked list (Nocturne 13 %, Vi 12 %,
+Poppy 8 % …), "next game" closes G1 into G2 and carries the picks into the
+fearless pool, and a pool champion is dimmed and unselectable in the picker.
+
+### Build
+
+The toolchain is self-contained (JDK 21, Android SDK 34/35, Gradle 8.9) and kept
+outside the repo, because `sdkmanager.bat` cannot handle the space in the default
+Windows home path — it dies with `'C:\Users\Florian' is not recognized`.
 
 ```bash
 TC=/e/android-toolchain
@@ -26,6 +48,36 @@ export ANDROID_HOME="$TC/sdk"
 
 `local.properties` points at `E:/android-toolchain/sdk` and is git-ignored, so
 Android Studio will regenerate it on first open.
+
+### Pointing the app at a backend
+
+`API_BASE` is a build property, so no source edit is needed:
+
+```bash
+gradle -PapiBase=http://10.0.2.2:8777   assembleDebug   # emulator (default)
+gradle -PapiBase=http://127.0.0.1:8777  assembleDebug   # via `adb reverse`
+gradle -PapiBase=http://192.168.1.20:8777 assembleDebug # LAN device
+```
+
+**On the emulator, prefer `adb reverse`** if `10.0.2.2` fails:
+
+```bash
+adb reverse tcp:8777 tcp:8777
+```
+
+This tunnels over the adb transport, so it works even when the guest has no
+route to the host. That happened in this environment: the AVD booted with only a
+link-local route (`10.0.2.0/24 dev wlan0`) and **no default gateway**, so
+`10.0.2.2` was unreachable *and* the champion portraits could not load. Adding
+the route by hand fixed both:
+
+```bash
+adb root
+adb shell ip route add default via 10.0.2.2 dev eth0
+```
+
+If `10.0.2.2` times out and the images are blank, that is the cause — it is an
+emulator networking problem, not an app bug.
 
 ## Running it
 
@@ -40,9 +92,10 @@ Android Studio will regenerate it on first open.
    this machine is 25, which AGP rejects — Studio's bundled JBR 21 is fine, and
    the command-line build above pins JDK 21 explicitly.
 
-3. Run on an **emulator**. `BuildConfig.API_BASE` is `http://10.0.2.2:8777`, and
-   `10.0.2.2` is the emulator's alias for the *host's* loopback interface, so no
-   server flag needs changing.
+3. Run on an **emulator**. `BuildConfig.API_BASE` defaults to
+   `http://10.0.2.2:8777`, the emulator's alias for the *host's* loopback, so no
+   server flag needs changing — but see "Pointing the app at a backend" above if
+   the guest has no route to the host.
 
 ### On a physical device
 
@@ -150,11 +203,11 @@ app/src/test/java/com/draftassistant/data/
 
 ## Next steps, in order
 
-1. Run it on an emulator against a live backend. The layout is compiler-checked
-   only — this is the first time anyone will have *seen* it.
-2. Compare the turn highlight and the suggestion list against the web UI on the
+1. Compare the turn highlight and the suggestion list against the web UI on the
    same boards. If they disagree, `DraftOrder` is wrong, not the server.
-3. Persist the series across process death (the web client uses `localStorage`;
+2. Persist the series across process death (the web client uses `localStorage`;
    this holds it in memory only, so a restart loses the series).
+3. Reach a real game end-to-end: 6 bans, 6 picks, 4 bans, 4 picks, and confirm
+   the board reads "draft complete" at move 21 rather than earlier.
 4. Then decide on hosting: auth, TLS, and a real base URL — before any of the
    agent features ship to anyone else.

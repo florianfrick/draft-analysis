@@ -10,6 +10,7 @@ import com.draftassistant.data.DraftApi
 import com.draftassistant.data.DraftMove
 import com.draftassistant.data.DraftOrder
 import com.draftassistant.data.MoveKind
+import com.draftassistant.data.PatchOption
 import com.draftassistant.data.SeriesBody
 import com.draftassistant.data.SeriesGameBody
 import com.draftassistant.data.Suggestion
@@ -25,6 +26,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
@@ -64,7 +66,7 @@ data class UiState(
     val roles: List<String> = emptyList(),
 
     val plans: Map<Int, List<DraftMove>> = emptyMap(),
-    val patches: List<String> = emptyList(),
+    val patches: List<PatchOption> = emptyList(),
     val patchId: Int = 0,
 
     val firstPick: Int = 0,
@@ -147,12 +149,15 @@ class BoardViewModel : ViewModel() {
     fun reload() {
         viewModelScope.launch {
             _state.update { it.copy(loading = true, error = null) }
-            val result = runCatching { api.champions() }
+            // viewModelScope runs on Dispatchers.Main, and OkHttp's synchronous
+            // execute() on the main thread throws NetworkOnMainThreadException -
+            // so the IO hop is required here, not just good manners.
+            val result = withContext(Dispatchers.IO) { runCatching { api.champions() } }
 
             result.onSuccess { response ->
                 val sorted = response.champions.sortedBy { it.name.lowercase() }
-                _state.update {
-                    it.copy(
+                _state.update { current ->
+                    current.copy(
                         loading = false,
                         champions = sorted,
                         byRiot = sorted.associateBy { c -> c.riot },
@@ -163,7 +168,7 @@ class BoardViewModel : ViewModel() {
                         patches = response.patches,
                         patchId = response.defaultPatchId,
                         modelLabel = response.policyModel?.ckpt ?: response.policyModel?.path,
-                    )
+                    ).withTurn()
                 }
                 refresh()
             }.onFailure { failure ->
@@ -299,6 +304,15 @@ class BoardViewModel : ViewModel() {
      * client's `syncGame`/`loadGame` pair does - so an edit made in one game is
      * still there when you come back to it.
      */
+    /**
+     * The move on the clock is a property of the board, not of a model answer,
+     * so it is recomputed on every state change - including the first load,
+     * where there is no edit and `mutate` never runs. Missing that left the
+     * fresh board reading "draft complete".
+     */
+    private fun UiState.withTurn(): UiState =
+        copy(turn = DraftOrder.nextTurn(plan, banCount, pickCount))
+
     private fun UiState.synced(): UiState {
         val index = series.current
         val slot = series.games.getOrNull(index) ?: return this
@@ -342,10 +356,9 @@ class BoardViewModel : ViewModel() {
         val draft = block(before)
         if (draft === before) return
 
-        val after = draft.synced()
+        val after = draft.synced().withTurn()
         _state.update {
             after.copy(
-                turn = DraftOrder.nextTurn(after.plan, after.banCount, after.pickCount),
                 // Role badges belong to the board they were computed for. A
                 // badge carried onto a board it never saw reads as an answer,
                 // so they go blank until this board's reply lands.

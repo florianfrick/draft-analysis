@@ -145,7 +145,10 @@ private fun DraftTopBar(state: UiState, viewModel: BoardViewModel) {
 @Composable
 private fun PatchMenu(state: UiState, onSelect: (Int) -> Unit) {
     var open by remember { mutableStateOf(false) }
-    val label = state.patches.getOrNull(state.patchId) ?: "patch ${state.patchId}"
+    // Selected by id, not by position: `patch_id` is a row of the checkpoint's
+    // vocabulary and the list arrives newest-first, so index != id.
+    val label = state.patches.firstOrNull { it.id == state.patchId }?.key
+        ?: "patch ${state.patchId}"
 
     Box {
         Row(
@@ -167,17 +170,17 @@ private fun PatchMenu(state: UiState, onSelect: (Int) -> Unit) {
             onDismissRequest = { open = false },
             containerColor = PanelRaised,
         ) {
-            state.patches.forEachIndexed { index, patch ->
+            state.patches.forEach { patch ->
                 DropdownMenuItem(
                     text = {
                         Text(
-                            text = patch,
-                            color = if (index == state.patchId) Accent else TextPrimary,
+                            text = patch.key,
+                            color = if (patch.id == state.patchId) Accent else TextPrimary,
                             fontSize = 13.sp,
                         )
                     },
                     onClick = {
-                        onSelect(index)
+                        onSelect(patch.id)
                         open = false
                     },
                 )

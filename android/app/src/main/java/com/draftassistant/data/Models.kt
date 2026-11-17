@@ -46,6 +46,18 @@ data class ModelInfo(
 )
 
 /**
+ * One row of the loaded checkpoint's patch vocabulary, as the server publishes
+ * it: `{"id": 106, "key": "16.20"}`. The `id` is a 1-based row into that
+ * vocabulary - it is what `patch_id` carries on a request, and it is *not* an
+ * index into this list (the list arrives newest-first, 107 down to 1).
+ */
+@Serializable
+data class PatchOption(
+    val id: Int,
+    val key: String,
+)
+
+/**
  * `GET /api/champions`.
  *
  * `movePlan` is the canonical 20-move order, published by the server precisely
@@ -57,7 +69,7 @@ data class ChampionsResponse(
     val champions: List<Champion> = emptyList(),
     val roles: List<String> = emptyList(),
     @SerialName("move_plan") val movePlan: Map<String, List<List<JsonElement>>> = emptyMap(),
-    val patches: List<String> = emptyList(),
+    val patches: List<PatchOption> = emptyList(),
     @SerialName("default_patch") val defaultPatch: String? = null,
     @SerialName("default_patch_id") val defaultPatchId: Int = 0,
     val model: ModelInfo? = null,

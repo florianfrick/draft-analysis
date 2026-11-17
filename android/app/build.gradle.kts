@@ -5,6 +5,22 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+// Where the Python backend lives. Local-only: no auth, no TLS.
+//
+// Default is the emulator's alias for the *host's* loopback interface, so
+// frontend/serve.sh (which binds 127.0.0.1 only) needs no change.
+//
+// Override without touching code:
+//   gradle -PapiBase=http://127.0.0.1:8777 assembleDebug   # via `adb reverse`
+//   gradle -PapiBase=http://192.168.1.20:8777 assembleDebug  # LAN device
+//
+// The `adb reverse` form is the reliable one on Windows: it tunnels over the
+// adb transport, so it works even when the emulator cannot route to the host
+// loopback. A LAN address additionally needs `--host 0.0.0.0` on the server,
+// a matching entry in res/xml/network_security_config.xml, and a changed
+// port mapping in docker-compose.yml.
+val apiBase = (findProperty("apiBase") as String?) ?: "http://10.0.2.2:8777"
+
 android {
     namespace = "com.draftassistant"
     compileSdk = 35
@@ -21,17 +37,7 @@ android {
         versionCode = 1
         versionName = "0.1-mvp"
 
-        // Where the Python backend lives. Local-only for now: no auth, no TLS.
-        //
-        // 10.0.2.2 is the Android emulator's alias for the *host's* loopback
-        // interface, so frontend/serve.sh (which binds 127.0.0.1 only) is
-        // reachable from the emulator with no server change at all.
-        //
-        // A physical device cannot see the host loopback. For that you must
-        // start the server with --host 0.0.0.0 and put the machine's LAN
-        // address here, plus that same address in
-        // res/xml/network_security_config.xml.
-        buildConfigField("String", "API_BASE", "\"http://10.0.2.2:8777\"")
+        buildConfigField("String", "API_BASE", "\"$apiBase\"")
     }
 
     buildFeatures {
