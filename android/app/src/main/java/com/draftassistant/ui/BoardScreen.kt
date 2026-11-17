@@ -3,6 +3,7 @@ package com.draftassistant.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -78,11 +79,20 @@ fun BoardScreen(viewModel: BoardViewModel = viewModel()) {
         ChampionPickerSheet(
             state = state,
             target = picked,
+            takenRiot = { riot ->
+                when (picked) {
+                    // The pool blocks a pick but never a ban: a champion picked
+                    // in an earlier game is still legal to ban in this one.
+                    is PickerTarget.Ban -> state.contains(riot)
+                    else -> state.contains(riot) || state.pool.contains(riot)
+                }
+            },
             onDismiss = { target = null },
             onChoose = { champion ->
                 when (picked) {
                     is PickerTarget.Slot -> viewModel.placePick(picked.slot, champion.riot)
                     is PickerTarget.Ban -> viewModel.placeBan(picked.side, champion.riot)
+                    PickerTarget.Fearless -> viewModel.addFearless(champion.riot)
                 }
                 target = null
             },
@@ -219,6 +229,10 @@ private fun DraftContent(
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 12.dp, vertical = 12.dp),
     ) {
+        SeriesPanel(state, viewModel)
+        Spacer(Modifier.height(10.dp))
+        FearlessPanel(state, viewModel, onOpenPicker)
+        Spacer(Modifier.height(10.dp))
         TurnBar(state)
         Spacer(Modifier.height(10.dp))
         SidePanel(0, state, viewModel, onOpenPicker)
@@ -451,6 +465,174 @@ private fun AddSlot(accent: Color, onClick: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         Text("+", color = accent, fontSize = 14.sp)
+    }
+}
+
+// ------------------------------------------------------------ series / pool
+
+@Composable
+private fun SeriesPanel(state: UiState, viewModel: BoardViewModel) {
+    val series = state.series
+    val current = series.games.getOrNull(series.current) ?: return
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Panel)
+            .border(1.dp, Line, RoundedCornerShape(12.dp))
+            .padding(10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Series", color = Muted, fontSize = 11.sp)
+            Spacer(Modifier.width(8.dp))
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                series.games.forEachIndexed { index, game ->
+                    GameChip(
+                        index = index,
+                        game = game,
+                        selected = index == series.current,
+                        onClick = { viewModel.openGame(index) },
+                    )
+                }
+            }
+            Spacer(Modifier.width(8.dp))
+            SmallButton("＋ game") { viewModel.addGame() }
+        }
+
+        Spacer(Modifier.height(9.dp))
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            SmallButton("next game ▶", enabled = state.canAdvance) { viewModel.nextGame() }
+            Spacer(Modifier.width(6.dp))
+            SmallButton("clear") { viewModel.clearSeries() }
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = "${series.current + 1}/${series.games.size} · " +
+                    "${current.fearless.size} fearless",
+                color = Muted,
+                fontSize = 10.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun GameChip(index: Int, game: GameSlot, selected: Boolean, onClick: () -> Unit) {
+    val picks = game.picks.count { it != null }
+    val accent = if (game.firstPick == 1) RedSide else BlueSide
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clip(RoundedCornerShape(7.dp))
+            .background(if (selected) PanelRaised else PanelSunken)
+            .border(1.dp, if (selected) Accent else Line, RoundedCornerShape(7.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 5.dp),
+    ) {
+        Text(
+            text = "G${index + 1}",
+            color = if (selected) TextPrimary else Muted,
+            fontSize = 11.sp,
+        )
+        Text(
+            text = (if (game.firstPick == 1) "R" else "B") + " $picks/10" +
+                if (game.done) " ✓" else "",
+            color = accent,
+            fontSize = 9.sp,
+        )
+    }
+}
+
+@Composable
+private fun FearlessPanel(
+    state: UiState,
+    viewModel: BoardViewModel,
+    onOpenPicker: (PickerTarget) -> Unit,
+) {
+    val pool = state.pool
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Panel)
+            .border(1.dp, Line, RoundedCornerShape(12.dp))
+            .padding(10.dp),
+    ) {
+        Text("Fearless", color = Muted, fontSize = 11.sp)
+        Spacer(Modifier.width(8.dp))
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (pool.isEmpty()) {
+                Text("this game — the pool is empty", color = Muted, fontSize = 10.sp)
+            }
+            pool.forEach { riot ->
+                state.byRiot[riot]?.let { champion ->
+                    PoolSlot(champion) { viewModel.removeFearless(riot) }
+                }
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        SmallButton("＋") { onOpenPicker(PickerTarget.Fearless) }
+    }
+}
+
+@Composable
+private fun PoolSlot(champion: Champion, onRemove: () -> Unit) {
+    Box(Modifier.size(28.dp)) {
+        AsyncImage(
+            model = champion.img,
+            contentDescription = champion.name,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(RoundedCornerShape(6.dp))
+                .background(PanelRaised)
+                .border(1.dp, Line, RoundedCornerShape(6.dp)),
+        )
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .size(14.dp)
+                .clip(CircleShape)
+                .background(Color(0xCC0B0D10))
+                .clickable(onClick = onRemove),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("×", color = TextPrimary, fontSize = 8.sp)
+        }
+    }
+}
+
+@Composable
+private fun SmallButton(label: String, enabled: Boolean = true, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(PanelSunken)
+            .border(1.dp, Line, RoundedCornerShape(6.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 9.dp, vertical = 5.dp),
+    ) {
+        Text(
+            text = label,
+            color = if (enabled) TextPrimary else Muted.copy(alpha = 0.5f),
+            fontSize = 11.sp,
+        )
     }
 }
 

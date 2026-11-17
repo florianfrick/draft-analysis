@@ -39,15 +39,17 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.draftassistant.data.Champion
 
-/** What the picker is filling: a specific pick slot, or a ban list on one side. */
+/** What the picker is filling: a pick slot, a ban list, or the fearless pool. */
 sealed interface PickerTarget {
     data class Slot(val slot: Int) : PickerTarget
     data class Ban(val side: Int) : PickerTarget
+    data object Fearless : PickerTarget
 }
 
 private fun titleFor(target: PickerTarget): String = when (target) {
     is PickerTarget.Slot -> "Pick champion — ${sideName(target.slot / 5)}"
     is PickerTarget.Ban -> "Ban champion — ${sideName(target.side)}"
+    PickerTarget.Fearless -> "Add to the fearless pool"
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -55,6 +57,7 @@ private fun titleFor(target: PickerTarget): String = when (target) {
 fun ChampionPickerSheet(
     state: UiState,
     target: PickerTarget,
+    takenRiot: (Int) -> Boolean,
     onDismiss: () -> Unit,
     onChoose: (Champion) -> Unit,
 ) {
@@ -124,7 +127,7 @@ fun ChampionPickerSheet(
                     items(filtered, key = { it.riot }) { champion ->
                         ChampionCell(
                             champion = champion,
-                            taken = state.contains(champion.riot),
+                            taken = takenRiot(champion.riot),
                             onClick = { onChoose(champion) },
                         )
                     }

@@ -111,8 +111,35 @@ data class SuggestResponse(
     @SerialName("open_roles") val openRoles: Map<String, List<String>> = emptyMap(),
     val complete: Boolean = false,
     val method: String? = null,
+    /**
+     * How many pool champions the answer was conditioned on. The head takes the
+     * pool as an input and re-scores; a masking checkpoint was trained without
+     * it and can only have its answer filtered, so `method == "masker"` with a
+     * non-zero count is a weaker statement than it looks.
+     */
+    @SerialName("fearless_filtered") val fearlessFiltered: Int = 0,
     val model: ModelInfo? = null,
     val error: String? = null,
+)
+
+/**
+ * The series context the board cannot carry: which game this is, how many there
+ * are, and how far each got. Numbers only - the server renders these into lines
+ * itself, and no client text reaches a model prompt.
+ */
+@Serializable
+data class SeriesBody(
+    val game: Int,
+    val of: Int,
+    val games: List<SeriesGameBody>,
+)
+
+@Serializable
+data class SeriesGameBody(
+    val game: Int,
+    val picks: Int,
+    val fearless: Int,
+    val closed: Boolean,
 )
 
 /**
@@ -123,9 +150,11 @@ data class SuggestResponse(
  * alternative the web client also uses; sending the flat list alone is the
  * unambiguous form).
  *
- * `fearless` is sent as an explicit empty list rather than omitted, because
- * the server treats *absent* as "keep the existing pool" and `[]` as "this
- * series has no pool". The MVP has no series, so `[]` is the honest value.
+ * `fearless` is the pool for *this game*: champions picked in earlier games of
+ * the series. It is sent as an explicit list even when empty, because the
+ * server treats *absent* as "keep the existing pool" and `[]` as "no pool" -
+ * and `ApiJson` sets `encodeDefaults` so an empty list is not dropped on the
+ * way out.
  */
 @Serializable
 data class BoardRequest(
@@ -133,6 +162,7 @@ data class BoardRequest(
     val bans: List<Int>,
     @SerialName("first_pick") val firstPick: Int,
     val fearless: List<Int> = emptyList(),
+    val series: SeriesBody? = null,
     @SerialName("patch_id") val patchId: Int? = null,
     val k: Int? = null,
 )

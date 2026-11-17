@@ -10,6 +10,8 @@ import com.draftassistant.data.DraftApi
 import com.draftassistant.data.DraftMove
 import com.draftassistant.data.DraftOrder
 import com.draftassistant.data.MoveKind
+import com.draftassistant.data.SeriesBody
+import com.draftassistant.data.SeriesGameBody
 import com.draftassistant.data.Suggestion
 import com.draftassistant.data.Turn
 import kotlinx.coroutines.Dispatchers
@@ -26,6 +28,29 @@ import kotlinx.coroutines.launch
 import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
+
+/**
+ * One game of a series.
+ *
+ * `fearless` lives on the slot rather than being derived from earlier games,
+ * because that is how the reference client models it: the pool is an explicit,
+ * editable list per game (a champion can be added or removed by hand), and
+ * "next game" folds the closed game's picks into a fresh copy. Deriving it from
+ * the picks alone would make the manual edits unrepresentable.
+ */
+data class GameSlot(
+    val firstPick: Int = 0,
+    val picks: List<Int?> = List(10) { null },
+    val bansBlue: List<Int> = emptyList(),
+    val bansRed: List<Int> = emptyList(),
+    val fearless: List<Int> = emptyList(),
+    val done: Boolean = false,
+)
+
+data class SeriesState(
+    val games: List<GameSlot> = listOf(GameSlot()),
+    val current: Int = 0,
+)
 
 data class UiState(
     val loading: Boolean = true,
@@ -47,6 +72,7 @@ data class UiState(
     val bansBlue: List<Int> = emptyList(),
     val bansRed: List<Int> = emptyList(),
 
+    val series: SeriesState = SeriesState(),
     val turn: Turn? = null,
 
     val suggestions: List<Suggestion> = emptyList(),
@@ -61,6 +87,15 @@ data class UiState(
     val allBans: List<Int> get() = bansBlue + bansRed
     val banCount: Int get() = bansBlue.size + bansRed.size
     val pickCount: Int get() = picks.count { it != null }
+
+    val currentGame: GameSlot? get() = series.games.getOrNull(series.current)
+
+    /** Champions picked in earlier games: unpickable, but still legal to ban. */
+    val pool: List<Int> get() = currentGame?.fearless.orEmpty()
+
+    /** A closed game that already has a successor cannot be closed again. */
+    val canAdvance: Boolean
+        get() = currentGame?.let { !(it.done && series.current < series.games.size - 1) } ?: false
 
     fun bans(side: Int): List<Int> = if (side == 0) bansBlue else bansRed
 
@@ -77,7 +112,22 @@ data class UiState(
         append('|').append(bansRed.joinToString(","))
         append('|').append(firstPick)
         append('|').append(patchId)
+        append('|').append(pool.joinToString(","))
+        append('|').append(series.current)
     }
+
+    fun seriesBody(): SeriesBody = SeriesBody(
+        game = series.current + 1,
+        of = series.games.size,
+        games = series.games.mapIndexed { index, game ->
+            SeriesGameBody(
+                game = index + 1,
+                picks = game.picks.count { it != null },
+                fearless = game.fearless.size,
+                closed = game.done,
+            )
+        },
+    )
 }
 
 class BoardViewModel : ViewModel() {
@@ -92,7 +142,7 @@ class BoardViewModel : ViewModel() {
         reload()
     }
 
-    // ------------------------------------------------------------------ load
+    // ------------------------------------------------------------------- load
 
     fun reload() {
         viewModelScope.launch {
@@ -122,14 +172,15 @@ class BoardViewModel : ViewModel() {
         }
     }
 
-    // --------------------------------------------------------------- board edits
+    // ------------------------------------------------------------- board edits
 
     fun setFirstPick(side: Int) = mutate { it.copy(firstPick = side) }
 
     fun setPatch(id: Int) = mutate { it.copy(patchId = id) }
 
     fun placePick(slot: Int, riot: Int) = mutate { state ->
-        if (slot !in 0..9 || state.contains(riot) || state.picks[slot] != null) {
+        val blocked = state.contains(riot) || state.pool.contains(riot)
+        if (slot !in 0..9 || blocked || state.picks[slot] != null) {
             state
         } else {
             state.copy(picks = state.picks.toMutableList().also { it[slot] = riot })
@@ -137,6 +188,8 @@ class BoardViewModel : ViewModel() {
     }
 
     fun placeBan(side: Int, riot: Int) = mutate { state ->
+        // A champion picked in an earlier game is still legal to ban - only the
+        // pick path is closed to the pool. The pool is not a "taken" list.
         val current = state.bans(side)
         if (state.contains(riot) || current.size >= 5) {
             state
@@ -149,7 +202,7 @@ class BoardViewModel : ViewModel() {
     }
 
     fun clearPick(slot: Int) = mutate { state ->
-        if (state.picks[slot] == null) state
+        if (state.picks.getOrNull(slot) == null) state
         else state.copy(picks = state.picks.toMutableList().also { it[slot] = null })
     }
 
@@ -176,6 +229,49 @@ class BoardViewModel : ViewModel() {
         )
     }
 
+    // ----------------------------------------------------------------- series
+
+    fun openGame(index: Int) = mutate { state ->
+        if (index == state.series.current) state else state.synced().loaded(index)
+    }
+
+    fun addGame() = mutate { state ->
+        val base = state.synced()
+        val current = base.currentGame ?: return@mutate state
+        // A game appended at the end is the same point in the series, so it
+        // inherits the current pool unchanged - nothing was closed.
+        val slot = GameSlot(firstPick = current.firstPick, fearless = current.fearless)
+        val index = base.series.games.size
+        base.copy(series = base.series.copy(games = base.series.games + slot)).loaded(index)
+    }
+
+    fun nextGame() = mutate { state ->
+        val base = state.synced()
+        val index = base.series.current
+        val current = base.series.games.getOrNull(index) ?: return@mutate state
+        if (current.done && index < base.series.games.size - 1) return@mutate state
+
+        // This game's pool + everything picked in it = the next game's pool.
+        // Bans never enter it: a banned champion is legal again next game.
+        val pool = LinkedHashSet(current.fearless)
+        current.picks.filterNotNull().forEach { pool.add(it) }
+
+        val games = base.series.games.toMutableList()
+        games[index] = current.copy(done = true)
+        // First pick is kept, not flipped: the teams swap sides but the side
+        // holding first pick stays the same in 94% of pro games.
+        games.add(index + 1, GameSlot(firstPick = current.firstPick, fearless = pool.toList()))
+
+        base.copy(series = base.series.copy(games = games)).loaded(index + 1)
+    }
+
+    fun clearSeries() = mutate { state -> state.copy(series = SeriesState()).loaded(0) }
+
+    fun addFearless(riot: Int) =
+        mutate { it.withPool { pool -> if (riot in pool) pool else pool + riot } }
+
+    fun removeFearless(riot: Int) = mutate { it.withPool { pool -> pool - riot } }
+
     /** Plays a suggested champion into the slot the current turn implies. */
     fun applySuggestion(suggestion: Suggestion) {
         val state = _state.value
@@ -193,13 +289,60 @@ class BoardViewModel : ViewModel() {
         return suggestion.idx?.let { state.byIdx[it] } ?: state.byName[suggestion.name]
     }
 
+    // ----------------------------------------------------- slot <-> live board
+
+    /**
+     * Writes the live board into the current game slot.
+     *
+     * The live `picks`/`bans` are the board on screen; the slot is where it is
+     * kept. Switching games moves state between the two, exactly as the web
+     * client's `syncGame`/`loadGame` pair does - so an edit made in one game is
+     * still there when you come back to it.
+     */
+    private fun UiState.synced(): UiState {
+        val index = series.current
+        val slot = series.games.getOrNull(index) ?: return this
+        val updated = slot.copy(
+            firstPick = firstPick,
+            picks = picks,
+            bansBlue = bansBlue,
+            bansRed = bansRed,
+        )
+        if (updated == slot) return this
+        val games = series.games.toMutableList().also { it[index] = updated }
+        return copy(series = series.copy(games = games))
+    }
+
+    private fun UiState.loaded(index: Int): UiState {
+        val slot = series.games.getOrNull(index) ?: return this
+        return copy(
+            series = series.copy(current = index),
+            firstPick = slot.firstPick,
+            picks = slot.picks,
+            bansBlue = slot.bansBlue,
+            bansRed = slot.bansRed,
+            suggestions = emptyList(),
+            suggestionIndex = -1,
+        )
+    }
+
+    private fun UiState.withPool(transform: (List<Int>) -> List<Int>): UiState {
+        val index = series.current
+        val slot = series.games.getOrNull(index) ?: return this
+        val next = transform(slot.fearless).distinct()
+        if (next == slot.fearless) return this
+        val games = series.games.toMutableList().also { it[index] = slot.copy(fearless = next) }
+        return copy(series = series.copy(games = games))
+    }
+
     // ---------------------------------------------------------------- refresh
 
     private fun mutate(block: (UiState) -> UiState) {
         val before = _state.value
-        val after = block(before)
-        if (after === before) return
+        val draft = block(before)
+        if (draft === before) return
 
+        val after = draft.synced()
         _state.update {
             after.copy(
                 turn = DraftOrder.nextTurn(after.plan, after.banCount, after.pickCount),
@@ -235,7 +378,8 @@ class BoardViewModel : ViewModel() {
                 picks = snapshot.picks,
                 bans = snapshot.allBans,
                 firstPick = snapshot.firstPick,
-                fearless = emptyList(),
+                fearless = snapshot.pool,
+                series = snapshot.seriesBody(),
                 patchId = snapshot.patchId,
                 k = 8,
             )

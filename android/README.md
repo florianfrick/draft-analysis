@@ -7,10 +7,25 @@ weights, no corpus, no inference on the device.
 
 ## Status
 
-Scaffolded on branch `android`. **Not yet compiled** — this machine has a JDK but
-no Android SDK or Gradle, so the first `./gradlew assembleDebug` in Android
-Studio is the real verification. Treat the first build as a debugging session,
-not a formality.
+On branch `android`. **Compiles and tests green** — `:app:assembleDebug` produces
+a 9.6 MB APK with no warnings, and `:app:testDebugUnitTest` passes 6/6 tests
+covering the ported draft order. Not yet run on a device or emulator, so the
+Compose layout is verified by the compiler only, not by eye.
+
+The build used a self-contained toolchain (JDK 21, Android SDK 34/35, Gradle 8.9)
+kept outside the repo, because `sdkmanager.bat` cannot handle the space in the
+default Windows home path:
+
+```bash
+TC=/e/android-toolchain
+export JAVA_HOME="$TC/jdk/jdk-21.0.13+9"
+export ANDROID_HOME="$TC/sdk"
+"$TC/gradle/gradle-8.9/bin/gradle" --no-daemon :app:assembleDebug
+"$TC/gradle/gradle-8.9/bin/gradle" --no-daemon :app:testDebugUnitTest
+```
+
+`local.properties` points at `E:/android-toolchain/sdk` and is git-ignored, so
+Android Studio will regenerate it on first open.
 
 ## Running it
 
@@ -21,9 +36,9 @@ not a formality.
    bash frontend/serve.sh          # http://127.0.0.1:8777
    ```
 
-2. Open `android/` in Android Studio (JDK 17 or 21 — AGP 8.7 does not support
-   JDK 25, and `java -version` on this machine reports 25; Studio's bundled JBR
-   is fine).
+2. Open `android/` in Android Studio. AGP 8.7 needs JDK 17-21; the system JDK on
+   this machine is 25, which AGP rejects — Studio's bundled JBR 21 is fine, and
+   the command-line build above pins JDK 21 explicitly.
 
 3. Run on an **emulator**. `BuildConfig.API_BASE` is `http://10.0.2.2:8777`, and
    `10.0.2.2` is the emulator's alias for the *host's* loopback interface, so no
@@ -53,12 +68,42 @@ There is no auth and no TLS. Do not expose this beyond your LAN.
   lists the head's ranked suggestions; tapping one plays it into the slot the
   current turn implies.
 - Patch selector and first-pick selector.
+- **Series and fearless pool.** Game chips per series, `＋ game`, `next game`,
+  `clear`, a fearless strip you can edit by hand, and per-game first-pick side.
+
+## Series and fearless
+
+The pool is **stored per game, not derived from earlier games**. That mirrors the
+reference client: each game slot owns an explicit, editable `fearless` list, and
+"next game" folds the closed game's picks into a fresh copy. Deriving it from the
+picks alone would make the manual add/remove unrepresentable.
+
+Transitions, matching `app.js`:
+
+- `＋ game` appends a slot that **inherits the current pool unchanged** — nothing
+  was closed, so it is the same point in the series.
+- `next game` sets `done` on the current slot, computes
+  `pool + picks` of this game, and inserts a successor at `current + 1`. Bans
+  never enter the pool: a champion banned in game 1 is legal again in game 2.
+- **First pick is kept, not flipped.** The teams swap sides between games but the
+  side holding first pick stays the same in 94% of pro games.
+- A closed game that already has a successor cannot be closed again — that would
+  splice a duplicate in between. Use `＋ game` to insert one.
+- The pool blocks **picks but never bans**. It is not a "taken" list.
+
+Every request sends `fearless` (this game's pool) and `series`
+(`{game, of, games:[{game, picks, fearless, closed}]}`). The server renders the
+series into lines itself; no client text reaches a model prompt.
+
+One caveat carried over from the web UI that this client does **not** surface:
+if the answering model is a masking checkpoint rather than the next-move head,
+the pool was applied as a post-filter on an answer computed as if those
+champions were available (`method == "masker"` with `fearless_filtered > 0`). The
+head takes the pool as an input and re-scores. The default checkpoints are heads,
+so this is dormant — but it is why `SuggestResponse.fearlessFiltered` is parsed.
 
 ## What it deliberately does not do yet
 
-- **No series / fearless pool.** Requests send `fearless: []` explicitly, which
-  the server reads as "this series has no pool". It is *not* the same as
-  omitting the field, which means "keep the existing pool".
 - No real-draft walkthrough (`/api/drafts`, `/api/draft`).
 - No agent chat (`/api/agent`, `/api/agent-suggest`) — that needs an
   `LLM_API_KEY` server-side, and shipping it means paying for other people's
@@ -94,17 +139,22 @@ app/src/main/java/com/draftassistant/
   data/Models.kt             wire DTOs, field-for-field with server.py
   data/DraftOrder.kt         board -> next turn (ported, not reinvented)
   data/DraftApi.kt           OkHttp + kotlinx.serialization, 3 routes
-  ui/BoardViewModel.kt       board state, debounce, stale-reply guard
-  ui/BoardScreen.kt          board, turn bar, suggestions
+  ui/BoardViewModel.kt       board + series state, debounce, stale-reply guard
+  ui/BoardScreen.kt          board, series bar, fearless strip, suggestions
   ui/ChampionPicker.kt       bottom-sheet champion grid
   ui/Theme.kt                palette lifted from style.css
+
+app/src/test/java/com/draftassistant/data/
+  DraftOrderTest.kt          pins the plan to infer.move_plan's four sequences
 ```
 
 ## Next steps, in order
 
-1. Get it compiling and rendering against a live backend.
-2. Confirm the turn computation against the web UI on the same boards — if the
-   two disagree, `DraftOrder` is wrong, not the server.
-3. Add series + fearless (the state plumbing already accepts a pool).
+1. Run it on an emulator against a live backend. The layout is compiler-checked
+   only — this is the first time anyone will have *seen* it.
+2. Compare the turn highlight and the suggestion list against the web UI on the
+   same boards. If they disagree, `DraftOrder` is wrong, not the server.
+3. Persist the series across process death (the web client uses `localStorage`;
+   this holds it in memory only, so a restart loses the series).
 4. Then decide on hosting: auth, TLS, and a real base URL — before any of the
    agent features ship to anyone else.
