@@ -106,6 +106,14 @@ def patch_vocab_of(blob):
 def load_policy(path):
     blob = torch.load(str(path), map_location="cpu", weights_only=False)
     cfg = blob["config"]
+    if str(cfg.get("arch", "")).startswith("naive_transformer"):
+        # Single-stack model: it builds its own 61-token sequence from the
+        # ordinary prefix batch, so the scorer below needs no changes. The
+        # checkpoint declares its architecture; guessing from weight names
+        # would let an old checkpoint load into the wrong model.
+        from pro.model.naivetransformer.model import load_from_checkpoint
+        model, patch_index, cfg = load_from_checkpoint(path)
+        return model, patch_index, cfg
     n_p = int(cfg.get("n_patches", 0))
     enc = build_encoder(blob, n_p)
     with_value = any(k.startswith("value_head.") for k in blob["model"])

@@ -220,8 +220,8 @@ def swap_sides(sample):
     is the same draft viewed from the other side, with the win label
     flipped.
 
-    Swapped: champ_ids / role_ids / pad_mask (the two 5-slot team blocks
-    trade places - role index is preserved within a team, so the
+    Swapped: champ_ids / role_ids / pad_mask / slot_target (the two 5-slot
+    team blocks trade places - role index is preserved within a team, so the
     role->slot convention survives), to_move, first_pick, win_label, and
     the (blue, red) pairs inside econ_target.
 
@@ -246,7 +246,7 @@ def swap_sides(sample):
     """
     out = dict(sample)
     half = TEAM_SIZE
-    for key in ("champ_ids", "role_ids", "pad_mask"):
+    for key in ("champ_ids", "role_ids", "pad_mask", "slot_target"):
         t = sample[key]
         out[key] = torch.cat([t[half:], t[:half]], dim=0)
     out["to_move"] = 1 - sample["to_move"]
@@ -355,6 +355,13 @@ def build_prefix(row, move_idx, num_champs=NUM_REAL_CHAMPS, patch_index=None,
         # the board, patch-only prior) lost to a lookup table.
         "patch_id": torch.tensor(patch_to_id(row.get("patch"), patch_index),
                                  dtype=torch.long),
+        # Final occupant of each of the ten slots, in slot order. `pad_mask`
+        # says which are still empty at this prefix; those are the supervised
+        # role-conditioned pick targets. Additive: other models ignore it.
+        "slot_target": torch.tensor(row["champ"], dtype=torch.long),
+        "game_num": torch.tensor(
+            min(5, max(0, int(row.get("game_number") or 0))),
+            dtype=torch.long),
         # Econ labels: these were missing from build_prefix entirely, so
         # PolicyValueModel's econ head was trained against nothing (only
         # ProMaskedDraftDataset carried them). Wired here so the head
