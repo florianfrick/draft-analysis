@@ -118,7 +118,8 @@ def draw_frame(state: dict[str, float], n: int, records, active_idx: int,
     d.text((64, 34), "How often was the real pick the model's suggestion?",
            font=F34, fill=TEXT)
     d.text((66, 82),
-           "BLG vs Gen.G · Worlds 2023 · rank before each pick · 50 picks total",
+           f"BLG vs Gen.G · Worlds 2026 Final · rank before each pick · "
+           f"{len(records)} picks total",
            font=F16, fill=MUTED)
 
     top5 = sum(state[str(i)] for i in range(1, 6))
@@ -159,7 +160,8 @@ def draw_frame(state: dict[str, float], n: int, records, active_idx: int,
                fill=TEXT if key == active_key else SOFT, anchor="ma")
 
     # Progress track ------------------------------------------------------
-    track_x, track_y, seg_w, seg_gap = 86, 615, 21, 1
+    track_x, track_y, seg_gap = 86, 615, 1
+    seg_w = max(8, 1100 // len(records) - seg_gap)
     for i, rec in enumerate(records):
         x = track_x + i * (seg_w + seg_gap)
         filled = i < n
@@ -195,8 +197,8 @@ def draw_frame(state: dict[str, float], n: int, records, active_idx: int,
 def main() -> None:
     payload = json.loads(DATA.read_text(encoding="utf-8"))
     records = payload["records"]
-    if len(records) != 50:
-        raise ValueError(f"expected 50 picks, got {len(records)}")
+    if len(records) != 40:
+        raise ValueError(f"expected 40 picks, got {len(records)}")
 
     states = [counts_after(records, i) for i in range(len(records) + 1)]
     if FRAMES.exists():

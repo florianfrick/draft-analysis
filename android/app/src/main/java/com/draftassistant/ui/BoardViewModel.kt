@@ -148,8 +148,9 @@ class BoardViewModel : ViewModel() {
      * Replays a real series from `assets/demo/` for the walkthrough video.
      * Each move goes through the same `placePick`/`placeBan` path a tap uses,
      * so the suggestions on screen are the live engine's answers, not canned
-     * rows. Games are separated with `addGame()`, not `nextGame()`: the 2023
-     * Worlds series had no fearless rule, so no pool may be carried over.
+     * rows. Games are separated with `nextGame(game.firstPick)`: the 2026
+     * Worlds final is fearless, so the previous game's picks must become the
+     * next pool, and the real series alternates the first-pick side.
      */
     fun playDemo(context: Context, name: String) {
         viewModelScope.launch {
@@ -166,7 +167,7 @@ class BoardViewModel : ViewModel() {
             delay(DEMO_LEAD_MS)
             series.games.forEachIndexed { index, game ->
                 if (index > 0) {
-                    addGame()
+                    nextGame(game.firstPick)
                     delay(DEMO_GAME_PAUSE_MS)
                 }
                 for (move in game.moves) {
@@ -292,7 +293,7 @@ class BoardViewModel : ViewModel() {
         base.copy(series = base.series.copy(games = base.series.games + slot)).loaded(index)
     }
 
-    fun nextGame() = mutate { state ->
+    fun nextGame(firstPick: Int? = null) = mutate { state ->
         val base = state.synced()
         val index = base.series.current
         val current = base.series.games.getOrNull(index) ?: return@mutate state
@@ -305,9 +306,11 @@ class BoardViewModel : ViewModel() {
 
         val games = base.series.games.toMutableList()
         games[index] = current.copy(done = true)
-        // First pick is kept, not flipped: the teams swap sides but the side
-        // holding first pick stays the same in 94% of pro games.
-        games.add(index + 1, GameSlot(firstPick = current.firstPick, fearless = pool.toList()))
+        // Optional override lets a scripted series follow the real first-pick
+        // side; the default keeps the side that had it, as the UI expects.
+        val nextFirstPick = firstPick?.coerceIn(0, 1) ?: current.firstPick
+        games.add(index + 1,
+                   GameSlot(firstPick = nextFirstPick, fearless = pool.toList()))
 
         base.copy(series = base.series.copy(games = games)).loaded(index + 1)
     }

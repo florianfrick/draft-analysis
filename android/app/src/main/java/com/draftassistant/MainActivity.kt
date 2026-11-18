@@ -13,7 +13,7 @@ class MainActivity : ComponentActivity() {
         // The engine owns two JNI modules and 36 MB of bundled weights. Give
         // it the application context once, before the ViewModel asks for it.
         LocalEngine.initialize(applicationContext)
-        // `--es demo blg_geng_worlds2023` starts the scripted walkthrough.
+        // `--es demo blg_geng_worlds2026` starts the scripted walkthrough.
         val demo = intent.getStringExtra("demo")
         setContent {
             DraftTheme {

@@ -1,0 +1,598 @@
+{
+  "title": "BLG vs Gen.G — Worlds 2026 Final",
+  "series": "WLDs|Bilibili Gaming|Gen.G|2026-11-14|s1",
+  "source": "/workspace/data/pro play/.downloaded_2026_oe.csv",
+  "games": [
+    {
+      "blue": "Gen.G",
+      "red": "Bilibili Gaming",
+      "firstPick": 0,
+      "gameNumber": 1,
+      "patch": "16.20",
+      "date": "2026-11-14 19:53:13",
+      "fearless": true,
+      "unavailable": [],
+      "moves": [
+        {
+          "k": "ban",
+          "s": 0,
+          "c": 56,
+          "name": "Nocturne"
+        },
+        {
+          "k": "ban",
+          "s": 1,
+          "c": 246,
+          "name": "Qiyana"
+        },
+        {
+          "k": "ban",
+          "s": 0,
+          "c": 61,
+          "name": "Orianna"
+        },
+        {
+          "k": "ban",
+          "s": 1,
+          "c": 69,
+          "name": "Cassiopeia"
+        },
+        {
+          "k": "ban",
+          "s": 0,
+          "c": 254,
+          "name": "Vi"
+        },
+        {
+          "k": "ban",
+          "s": 1,
+          "c": 117,
+          "name": "Lulu"
+        },
+        {
+          "k": "pick",
+          "s": 0,
+          "c": 64,
+          "name": "Lee Sin"
+        },
+        {
+          "k": "pick",
+          "s": 1,
+          "c": 888,
+          "name": "Renata Glasc"
+        },
+        {
+          "k": "pick",
+          "s": 1,
+          "c": 429,
+          "name": "Kalista"
+        },
+        {
+          "k": "pick",
+          "s": 0,
+          "c": 134,
+          "name": "Syndra"
+        },
+        {
+          "k": "pick",
+          "s": 0,
+          "c": 2,
+          "name": "Olaf"
+        },
+        {
+          "k": "pick",
+          "s": 1,
+          "c": 805,
+          "name": "Locke"
+        },
+        {
+          "k": "ban",
+          "s": 1,
+          "c": 81,
+          "name": "Ezreal"
+        },
+        {
+          "k": "ban",
+          "s": 0,
+          "c": 24,
+          "name": "Jax"
+        },
+        {
+          "k": "ban",
+          "s": 1,
+          "c": 147,
+          "name": "Seraphine"
+        },
+        {
+          "k": "ban",
+          "s": 0,
+          "c": 164,
+          "name": "Camille"
+        },
+        {
+          "k": "pick",
+          "s": 1,
+          "c": 897,
+          "name": "K'Sante"
+        },
+        {
+          "k": "pick",
+          "s": 0,
+          "c": 42,
+          "name": "Corki"
+        },
+        {
+          "k": "pick",
+          "s": 0,
+          "c": 267,
+          "name": "Nami"
+        },
+        {
+          "k": "pick",
+          "s": 1,
+          "c": 59,
+          "name": "Jarvan IV"
+        }
+      ]
+    },
+    {
+      "blue": "Gen.G",
+      "red": "Bilibili Gaming",
+      "firstPick": 1,
+      "gameNumber": 2,
+      "patch": "16.20",
+      "date": "2026-11-14 20:59:30",
+      "fearless": true,
+      "unavailable": [
+        2,
+        42,
+        59,
+        64,
+        134,
+        267,
+        429,
+        805,
+        888,
+        897
+      ],
+      "moves": [
+        {
+          "k": "ban",
+          "s": 1,
+          "c": 126,
+          "name": "Jayce"
+        },
+        {
+          "k": "ban",
+          "s": 0,
+          "c": 56,
+          "name": "Nocturne"
+        },
+        {
+          "k": "ban",
+          "s": 1,
+          "c": 254,
+          "name": "Vi"
+        },
+        {
+          "k": "ban",
+          "s": 0,
+          "c": 246,
+          "name": "Qiyana"
+        },
+        {
+          "k": "ban",
+          "s": 1,
+          "c": 3,
+          "name": "Galio"
+        },
+        {
+          "k": "ban",
+          "s": 0,
+          "c": 111,
+          "name": "Nautilus"
+        },
+        {
+          "k": "pick",
+          "s": 1,
+          "c": 69,
+          "name": "Cassiopeia"
+        },
+        {
+          "k": "pick",
+          "s": 0,
+          "c": 81,
+          "name": "Ezreal"
+        },
+        {
+          "k": "pick",
+          "s": 0,
+          "c": 43,
+          "name": "Karma"
+        },
+        {
+          "k": "pick",
+          "s": 1,
+          "c": 164,
+          "name": "Camille"
+        },
+        {
+          "k": "pick",
+          "s": 1,
+          "c": 950,
+          "name": "Naafiri"
+        },
+        {
+          "k": "pick",
+          "s": 0,
+          "c": 31,
+          "name": "Cho'Gath"
+        },
+        {
+          "k": "ban",
+          "s": 0,
+          "c": 117,
+          "name": "Lulu"
+        },
+        {
+          "k": "ban",
+          "s": 1,
+          "c": 58,
+          "name": "Renekton"
+        },
+        {
+          "k": "ban",
+          "s": 0,
+          "c": 84,
+          "name": "Akali"
+        },
+        {
+          "k": "ban",
+          "s": 1,
+          "c": 112,
+          "name": "Viktor"
+        },
+        {
+          "k": "pick",
+          "s": 0,
+          "c": 61,
+          "name": "Orianna"
+        },
+        {
+          "k": "pick",
+          "s": 1,
+          "c": 150,
+          "name": "Gnar"
+        },
+        {
+          "k": "pick",
+          "s": 1,
+          "c": 115,
+          "name": "Ziggs"
+        },
+        {
+          "k": "pick",
+          "s": 0,
+          "c": 67,
+          "name": "Vayne"
+        }
+      ]
+    },
+    {
+      "blue": "Gen.G",
+      "red": "Bilibili Gaming",
+      "firstPick": 0,
+      "gameNumber": 3,
+      "patch": "16.20",
+      "date": "2026-11-14 22:18:28",
+      "fearless": true,
+      "unavailable": [
+        2,
+        31,
+        42,
+        43,
+        59,
+        61,
+        64,
+        67,
+        69,
+        81,
+        115,
+        134,
+        150,
+        164,
+        267,
+        429,
+        805,
+        888,
+        897,
+        950
+      ],
+      "moves": [
+        {
+          "k": "ban",
+          "s": 0,
+          "c": 111,
+          "name": "Nautilus"
+        },
+        {
+          "k": "ban",
+          "s": 1,
+          "c": 246,
+          "name": "Qiyana"
+        },
+        {
+          "k": "ban",
+          "s": 0,
+          "c": 58,
+          "name": "Renekton"
+        },
+        {
+          "k": "ban",
+          "s": 1,
+          "c": 126,
+          "name": "Jayce"
+        },
+        {
+          "k": "ban",
+          "s": 0,
+          "c": 147,
+          "name": "Seraphine"
+        },
+        {
+          "k": "ban",
+          "s": 1,
+          "c": 117,
+          "name": "Lulu"
+        },
+        {
+          "k": "pick",
+          "s": 0,
+          "c": 799,
+          "name": "Ambessa"
+        },
+        {
+          "k": "pick",
+          "s": 1,
+          "c": 24,
+          "name": "Jax"
+        },
+        {
+          "k": "pick",
+          "s": 1,
+          "c": 254,
+          "name": "Vi"
+        },
+        {
+          "k": "pick",
+          "s": 0,
+          "c": 62,
+          "name": "Wukong"
+        },
+        {
+          "k": "pick",
+          "s": 0,
+          "c": 1,
+          "name": "Annie"
+        },
+        {
+          "k": "pick",
+          "s": 1,
+          "c": 112,
+          "name": "Viktor"
+        },
+        {
+          "k": "ban",
+          "s": 1,
+          "c": 498,
+          "name": "Xayah"
+        },
+        {
+          "k": "ban",
+          "s": 0,
+          "c": 145,
+          "name": "Kai'Sa"
+        },
+        {
+          "k": "ban",
+          "s": 1,
+          "c": 78,
+          "name": "Poppy"
+        },
+        {
+          "k": "ban",
+          "s": 0,
+          "c": 15,
+          "name": "Sivir"
+        },
+        {
+          "k": "pick",
+          "s": 1,
+          "c": 12,
+          "name": "Alistar"
+        },
+        {
+          "k": "pick",
+          "s": 0,
+          "c": 497,
+          "name": "Rakan"
+        },
+        {
+          "k": "pick",
+          "s": 0,
+          "c": 202,
+          "name": "Jhin"
+        },
+        {
+          "k": "pick",
+          "s": 1,
+          "c": 163,
+          "name": "Taliyah"
+        }
+      ]
+    },
+    {
+      "blue": "Bilibili Gaming",
+      "red": "Gen.G",
+      "firstPick": 1,
+      "gameNumber": 4,
+      "patch": "16.20",
+      "date": "2026-11-14 23:18:11",
+      "fearless": true,
+      "unavailable": [
+        1,
+        2,
+        12,
+        24,
+        31,
+        42,
+        43,
+        59,
+        61,
+        62,
+        64,
+        67,
+        69,
+        81,
+        112,
+        115,
+        134,
+        150,
+        163,
+        164,
+        202,
+        254,
+        267,
+        429,
+        497,
+        799,
+        805,
+        888,
+        897,
+        950
+      ],
+      "moves": [
+        {
+          "k": "ban",
+          "s": 1,
+          "c": 111,
+          "name": "Nautilus"
+        },
+        {
+          "k": "ban",
+          "s": 0,
+          "c": 246,
+          "name": "Qiyana"
+        },
+        {
+          "k": "ban",
+          "s": 1,
+          "c": 72,
+          "name": "Skarner"
+        },
+        {
+          "k": "ban",
+          "s": 0,
+          "c": 126,
+          "name": "Jayce"
+        },
+        {
+          "k": "ban",
+          "s": 1,
+          "c": 203,
+          "name": "Kindred"
+        },
+        {
+          "k": "ban",
+          "s": 0,
+          "c": 147,
+          "name": "Seraphine"
+        },
+        {
+          "k": "pick",
+          "s": 1,
+          "c": 117,
+          "name": "Lulu"
+        },
+        {
+          "k": "pick",
+          "s": 0,
+          "c": 56,
+          "name": "Nocturne"
+        },
+        {
+          "k": "pick",
+          "s": 0,
+          "c": 804,
+          "name": "Yunara"
+        },
+        {
+          "k": "pick",
+          "s": 1,
+          "c": 498,
+          "name": "Xayah"
+        },
+        {
+          "k": "pick",
+          "s": 1,
+          "c": 80,
+          "name": "Pantheon"
+        },
+        {
+          "k": "pick",
+          "s": 0,
+          "c": 518,
+          "name": "Neeko"
+        },
+        {
+          "k": "ban",
+          "s": 0,
+          "c": 517,
+          "name": "Sylas"
+        },
+        {
+          "k": "ban",
+          "s": 1,
+          "c": 58,
+          "name": "Renekton"
+        },
+        {
+          "k": "ban",
+          "s": 0,
+          "c": 68,
+          "name": "Rumble"
+        },
+        {
+          "k": "ban",
+          "s": 1,
+          "c": 3,
+          "name": "Galio"
+        },
+        {
+          "k": "pick",
+          "s": 0,
+          "c": 887,
+          "name": "Gwen"
+        },
+        {
+          "k": "pick",
+          "s": 1,
+          "c": 84,
+          "name": "Akali"
+        },
+        {
+          "k": "pick",
+          "s": 1,
+          "c": 893,
+          "name": "Aurora"
+        },
+        {
+          "k": "pick",
+          "s": 0,
+          "c": 4,
+          "name": "Twisted Fate"
+        }
+      ]
+    }
+  ]
+}

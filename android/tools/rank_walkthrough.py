@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Rank every real pick in the BLG/Gen.G walkthrough against the served model.
 
-The animation this feeds asks a simple question: as the 2023 Worlds series
+The animation this feeds asks a simple question: as the 2026 Worlds final
 unfolded, how often was the champion a team actually picked the model's 1st,
 2nd, 3rd ... suggestion?  Ranking is done on the board *before* the pick is
 placed, through the exact `NaiveTransformerPolicy.next_move` path the Android
-app's ExecuTorch model mirrors.  No fearless pool is carried between games,
-because the 2023 series had no fearless rule and the app demo uses `addGame()`.
+app's ExecuTorch model mirrors.  The fearless pool carries picks from earlier
+games in the series, exactly like the app demo's `nextGame()` path.
 
 Run from the repo root in the dev container:
 
@@ -27,7 +27,7 @@ if sys_path not in sys.path:
 
 from pro.model.naivetransformer.serve import NaiveTransformerPolicy  # noqa: E402
 
-DEMO = ROOT / "android/app/src/main/assets/demo/blg_geng_worlds2023.json"
+DEMO = ROOT / "android/app/src/main/assets/demo/blg_geng_worlds2026.json"
 OFFLINE = ROOT / "android/app/src/main/assets/offline.json"
 OUT = ROOT / "android/video/blg_geng_rank_data.json"
 
@@ -44,10 +44,14 @@ def main() -> None:
     policy = NaiveTransformerPolicy(str(ckpt), device="cpu")
 
     records = []
+    pool: set[int] = set()
     for game_no, game in enumerate(series["games"], 1):
         picks: list[int | None] = [None] * 10
         bans: list[int] = []
         first_pick = int(game.get("firstPick", 0))
+        expected = {by_riot[int(r)] for r in game.get("unavailable", [])}
+        if expected != pool:
+            raise ValueError(f"fearless pool mismatch at game {game_no}")
         for move_no, move in enumerate(game["moves"], 1):
             champ = by_riot[int(move["c"])]
             if move["k"] == "ban":
@@ -59,6 +63,7 @@ def main() -> None:
             result = policy.next_move(
                 picks, bans, first_pick=first_pick,
                 k=policy.num_champs, patch_id=patch_id, game_num=0,
+                unavailable=sorted(pool),
             )
             if result["complete"] or result["kind"] != "pick":
                 raise ValueError(f"board out of sync at G{game_no} M{move_no}")
@@ -94,6 +99,9 @@ def main() -> None:
                     break
             else:
                 raise ValueError(f"no free slot for side {side}")
+        # The next game's pool is this pool plus this game's picks. Bans do
+        # not carry over, exactly like BoardViewModel.nextGame().
+        pool.update(c for c in picks if c is not None)
 
     buckets = {str(i): 0 for i in range(1, 6)}
     buckets["6+"] = 0
@@ -102,14 +110,15 @@ def main() -> None:
         buckets[key] += 1
 
     payload = {
-        "title": "BLG vs Gen.G — Worlds 2023",
+        "title": "BLG vs Gen.G — Worlds 2026 Final",
         "series": series["title"],
         "model": meta["models"]["policy"]["ckpt"],
         "patch": meta["default_patch"],
         "rank_definition": (
             "Position of the actually picked champion in the model's legal "
             "next-move ranking, evaluated before that pick was placed. "
-            "No fearless pool between games."
+            "Fearless pool = picks from earlier games in this series; bans "
+            "do not carry over."
         ),
         "records": records,
         "final_counts": buckets,

@@ -132,37 +132,47 @@ answers instead. The route is reported in logcat (`method=head|masker|mixed`).
 
 ## Walkthrough video
 
-`video/blg_geng_worlds_2023.mp4` is a 59-second recording of the app replaying
-all five games of the 2023 Worlds BLG vs Gen.G series from
-`assets/demo/blg_geng_worlds2023.json`. Every move goes through the same
-`placePick`/`placeBan` path a tap uses, so the ranked suggestions in the video
-are the live ExecuTorch answers, not canned rows.
+`video/blg_geng_worlds_2026.mp4` is a 53-second recording of the app replaying
+all four games of the **2026 Worlds final**, BLG 3–1 Gen.G, from
+`assets/demo/blg_geng_worlds2026.json`. Every move goes through the same
+`placePick`/`placeBan` path a tap uses, so the ranked suggestions are the live
+ExecuTorch answers, not canned rows.
+
+Games advance with `nextGame(game.firstPick)`, not `addGame()`: the previous
+game's picks become the next game's fearless pool, bans do not carry over, and
+the script passes the real first-pick side (the final alternates 0/1/0/1). The
+game-4 frame therefore shows `4/4 · 30 fearless`. The asset was exported from
+an updated Oracle's Elixir 2026 export newer than the frozen training corpus;
+the CSV itself is not needed at runtime.
 
 To replay it yourself:
 
 ```bash
-adb shell am start -n com.draftassistant/.MainActivity --es demo blg_geng_worlds2023
+adb shell am start -n com.draftassistant/.MainActivity --es demo blg_geng_worlds2026
 ```
 
 The demo is opt-in via that intent extra; a normal launch is unaffected.
 
 ### Rank bar animation
 
-`video/blg_geng_rank_bars.mp4` is a 25-second bar-chart animation built from
-the same series. For each of the 50 real picks it asks where the picked champion
+`video/blg_geng_rank_bars.mp4` is a 21-second bar-chart animation built from
+the same final. For each of the 40 real picks it asks where the picked champion
 ranked in the served model's legal next-move list *before* that pick was
-placed, then eases the cumulative bars forward as the games progress. There is
-no fearless pool between games, matching the 2023 series and the app demo.
+placed, then eases the cumulative bars forward as the games progress. The
+fearless pool carries earlier games' picks, exactly like the in-app demo.
 
-Final counts: `#1` 6, `#2` 2, `#3` 0, `#4` 3, `#5` 4, `6–10` 7, `11–20` 4,
-`21+` 24 — 15/50 top-five hits (30 %). Top-five hits rise from 1/10 in game 1
-to 7/10 in game 5.
+Final counts: `#1` 4, `#2` 2, `#3` 3, `#4` 3, `#5` 0, `6–10` 5, `11–20` 6,
+`21+` 17 — 12/40 top-five hits (30 %). By game: 2, 3, 4, 3.
 
-The rank data is checked in as `video/blg_geng_rank_data.json`. Rebuild both
-steps with:
+The rank data is checked in as `video/blg_geng_rank_data.json`. Rebuild all
+three steps with an updated OE CSV:
 
 ```bash
-docker compose run --rm -T dev python android/tools/rank_walkthrough.py
+# in the dev container; the export asserts OE fearless == nextGame()'s pool
+python android/tools/export_demo_series.py \
+  --csv /path/to/2026_LoL_esports_match_data_from_OraclesElixir.csv \
+  --out android/app/src/main/assets/demo/blg_geng_worlds2026.json
+python android/tools/rank_walkthrough.py
 python android/tools/animate_rank_bars.py   # needs Pillow + ffmpeg
 ```
 
