@@ -30,6 +30,8 @@ The first row is the reference point the question is asked against: a per-patch 
 | `nextpick-proonly-nov13-k5-through-lcp-df-sw` | 3,350,879 | 48,960 | 18.9% | [18.6, 19.3] | 50.8% | 68.3% | 10.17 | - | - | - |
 | `nextpick-forest-flat-v1` | 2,753,344 | 48,960 | 10.5% | [10.2, 10.7] | 34.8% | 52.5% | 17.52 | -8.5 | 2853/6998 | <1e-300 |
 | `nextpick-mlp-flat-v1` | 2,996,705 | 48,960 | 17.2% | [16.9, 17.5] | 48.2% | 66.1% | 11.22 | -1.7 | 3599/4448 | 3.3e-21 |
+| `nextpick-naivetransformer-d512-l8-h8-k5-through-lcp-df-sw` | 25,509,037 | 48,960 | 20.6% | [20.2, 21.0] | 54.1% | 72.2% | 8.98 | +1.7 | 3415/2601 | 1e-25 |
+| `nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw` | 25,509,037 | 48,960 | 20.7% | [20.3, 21.0] | 54.2% | 72.2% | 8.90 | +1.8 | 3496/2636 | 5.3e-28 |
 | `nextpick-proonly-nov13-k10-through-lcp-df-sw` | 3,350,879 | 48,960 | 19.1% | [18.7, 19.4] | 51.1% | 69.3% | 9.96 | +0.1 | 2654/2591 | 0.39 |
 | `nextpick-proonly-nov13-through-lcp-df-sw` | 3,350,879 | 48,960 | 17.4% | [17.1, 17.8] | 48.3% | 66.3% | 10.90 | -1.5 | 2355/3090 | 2.6e-23 |
 
@@ -59,6 +61,8 @@ ban1 is where the board carries no information, so it is where a patch-condition
 | `nextpick-proonly-nov13-k5-through-lcp-df-sw` | 42.9% | 58.4% | 40.0% | 62.3% |
 | `nextpick-forest-flat-v1` | 31.4% | 36.2% | 28.1% | 44.4% |
 | `nextpick-mlp-flat-v1` | 39.8% | 55.3% | 39.6% | 58.7% |
+| `nextpick-naivetransformer-d512-l8-h8-k5-through-lcp-df-sw` | 43.7% | 60.8% | 49.1% | 64.9% |
+| `nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw` | 43.7% | 60.6% | 49.6% | 65.0% |
 | `nextpick-proonly-nov13-k10-through-lcp-df-sw` | 41.8% | 57.8% | 42.9% | 63.2% |
 | `nextpick-proonly-nov13-through-lcp-df-sw` | 42.4% | 55.4% | 36.9% | 57.9% |
 
