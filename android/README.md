@@ -146,6 +146,29 @@ adb shell am start -n com.draftassistant/.MainActivity --es demo blg_geng_worlds
 
 The demo is opt-in via that intent extra; a normal launch is unaffected.
 
+### Rank bar animation
+
+`video/blg_geng_rank_bars.mp4` is a 25-second bar-chart animation built from
+the same series. For each of the 50 real picks it asks where the picked champion
+ranked in the served model's legal next-move list *before* that pick was
+placed, then eases the cumulative bars forward as the games progress. There is
+no fearless pool between games, matching the 2023 series and the app demo.
+
+Final counts: `#1` 6, `#2` 2, `#3` 0, `#4` 3, `#5` 4, `6–10` 7, `11–20` 4,
+`21+` 24 — 15/50 top-five hits (30 %). Top-five hits rise from 1/10 in game 1
+to 7/10 in game 5.
+
+The rank data is checked in as `video/blg_geng_rank_data.json`. Rebuild both
+steps with:
+
+```bash
+docker compose run --rm -T dev python android/tools/rank_walkthrough.py
+python android/tools/animate_rank_bars.py   # needs Pillow + ffmpeg
+```
+
+The rank step uses `NaiveTransformerPolicy.next_move`, the same path the
+ExecuTorch export mirrors; the renderer only draws the resulting counts.
+
 ## Contract notes worth keeping
 
 These are the places where a plausible-looking reimplementation is wrong:

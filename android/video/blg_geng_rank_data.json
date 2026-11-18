@@ -1,0 +1,917 @@
+{
+  "title": "BLG vs Gen.G — Worlds 2023",
+  "series": "BLG vs Gen.G — Worlds 2023",
+  "model": "pro/model/checkpoints/nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw/best.pt",
+  "patch": "16.20",
+  "rank_definition": "Position of the actually picked champion in the model's legal next-move ranking, evaluated before that pick was placed. No fearless pool between games.",
+  "records": [
+    {
+      "game": 1,
+      "move": 7,
+      "side": 0,
+      "champion": "Jax",
+      "riot": 24,
+      "idx": 23,
+      "rank": 63,
+      "prob": 0.00032742792973294854,
+      "top5": [
+        "Vi",
+        "Qiyana",
+        "Syndra",
+        "Wukong",
+        "Lee Sin"
+      ],
+      "top1": "Vi"
+    },
+    {
+      "game": 1,
+      "move": 8,
+      "side": 1,
+      "champion": "Renata Glasc",
+      "riot": 888,
+      "idx": 164,
+      "rank": 36,
+      "prob": 0.0038369514513760805,
+      "top5": [
+        "K'Sante",
+        "Vi",
+        "Kalista",
+        "Wukong",
+        "Lee Sin"
+      ],
+      "top1": "K'Sante"
+    },
+    {
+      "game": 1,
+      "move": 9,
+      "side": 1,
+      "champion": "Kalista",
+      "riot": 429,
+      "idx": 145,
+      "rank": 11,
+      "prob": 0.018866972997784615,
+      "top5": [
+        "Wukong",
+        "Vi",
+        "Lee Sin",
+        "Cho'Gath",
+        "Pantheon"
+      ],
+      "top1": "Wukong"
+    },
+    {
+      "game": 1,
+      "move": 10,
+      "side": 0,
+      "champion": "Azir",
+      "riot": 268,
+      "idx": 138,
+      "rank": 64,
+      "prob": 0.0007352848188020289,
+      "top5": [
+        "Vi",
+        "Lee Sin",
+        "Wukong",
+        "Sejuani",
+        "Lucian"
+      ],
+      "top1": "Vi"
+    },
+    {
+      "game": 1,
+      "move": 11,
+      "side": 0,
+      "champion": "Aphelios",
+      "riot": 523,
+      "idx": 152,
+      "rank": 30,
+      "prob": 0.0029715467244386673,
+      "top5": [
+        "Syndra",
+        "Galio",
+        "Orianna",
+        "Viktor",
+        "Locke"
+      ],
+      "top1": "Syndra"
+    },
+    {
+      "game": 1,
+      "move": 12,
+      "side": 1,
+      "champion": "Orianna",
+      "riot": 61,
+      "idx": 56,
+      "rank": 5,
+      "prob": 0.06917361170053482,
+      "top5": [
+        "Syndra",
+        "Cassiopeia",
+        "Akali",
+        "Ahri",
+        "Orianna"
+      ],
+      "top1": "Syndra"
+    },
+    {
+      "game": 1,
+      "move": 17,
+      "side": 1,
+      "champion": "Jarvan IV",
+      "riot": 59,
+      "idx": 54,
+      "rank": 47,
+      "prob": 0.00029739600722678006,
+      "top5": [
+        "Jhin",
+        "Ezreal",
+        "Jinx",
+        "Lulu",
+        "Zeri"
+      ],
+      "top1": "Jhin"
+    },
+    {
+      "game": 1,
+      "move": 18,
+      "side": 0,
+      "champion": "Rell",
+      "riot": 526,
+      "idx": 153,
+      "rank": 21,
+      "prob": 0.004185158759355545,
+      "top5": [
+        "Ezreal",
+        "Zeri",
+        "Jhin",
+        "Kai'Sa",
+        "Jinx"
+      ],
+      "top1": "Ezreal"
+    },
+    {
+      "game": 1,
+      "move": 19,
+      "side": 0,
+      "champion": "Tahm Kench",
+      "riot": 223,
+      "idx": 126,
+      "rank": 26,
+      "prob": 0.00039963924791663885,
+      "top5": [
+        "Nautilus",
+        "Alistar",
+        "Leona",
+        "Lulu",
+        "Shen"
+      ],
+      "top1": "Nautilus"
+    },
+    {
+      "game": 1,
+      "move": 20,
+      "side": 1,
+      "champion": "Aatrox",
+      "riot": 266,
+      "idx": 136,
+      "rank": 125,
+      "prob": 1.5248212548613083e-05,
+      "top5": [
+        "Seraphine",
+        "Lulu",
+        "Milio",
+        "Alistar",
+        "Yuumi"
+      ],
+      "top1": "Seraphine"
+    },
+    {
+      "game": 2,
+      "move": 7,
+      "side": 0,
+      "champion": "Jarvan IV",
+      "riot": 59,
+      "idx": 54,
+      "rank": 6,
+      "prob": 0.03891848772764206,
+      "top5": [
+        "Vi",
+        "Lee Sin",
+        "Qiyana",
+        "Cassiopeia",
+        "Syndra"
+      ],
+      "top1": "Vi"
+    },
+    {
+      "game": 2,
+      "move": 8,
+      "side": 1,
+      "champion": "Aphelios",
+      "riot": 523,
+      "idx": 152,
+      "rank": 24,
+      "prob": 0.010100209154188633,
+      "top5": [
+        "Camille",
+        "Vi",
+        "Lee Sin",
+        "Syndra",
+        "Olaf"
+      ],
+      "top1": "Camille"
+    },
+    {
+      "game": 2,
+      "move": 9,
+      "side": 1,
+      "champion": "Maokai",
+      "riot": 57,
+      "idx": 52,
+      "rank": 21,
+      "prob": 0.005597658455371857,
+      "top5": [
+        "Vi",
+        "Wukong",
+        "Lee Sin",
+        "Xin Zhao",
+        "Qiyana"
+      ],
+      "top1": "Vi"
+    },
+    {
+      "game": 2,
+      "move": 10,
+      "side": 0,
+      "champion": "Rumble",
+      "riot": 68,
+      "idx": 61,
+      "rank": 36,
+      "prob": 0.0032785243820399046,
+      "top5": [
+        "Vi",
+        "Lee Sin",
+        "Lucian",
+        "Wukong",
+        "Sejuani"
+      ],
+      "top1": "Vi"
+    },
+    {
+      "game": 2,
+      "move": 11,
+      "side": 0,
+      "champion": "Orianna",
+      "riot": 61,
+      "idx": 56,
+      "rank": 16,
+      "prob": 0.013424549251794815,
+      "top5": [
+        "Yone",
+        "Galio",
+        "Jayce",
+        "Tristana",
+        "Ezreal"
+      ],
+      "top1": "Yone"
+    },
+    {
+      "game": 2,
+      "move": 12,
+      "side": 1,
+      "champion": "Aatrox",
+      "riot": 266,
+      "idx": 136,
+      "rank": 99,
+      "prob": 8.053265628404915e-05,
+      "top5": [
+        "Akali",
+        "Yone",
+        "Syndra",
+        "Tristana",
+        "Galio"
+      ],
+      "top1": "Akali"
+    },
+    {
+      "game": 2,
+      "move": 17,
+      "side": 1,
+      "champion": "Azir",
+      "riot": 268,
+      "idx": 138,
+      "rank": 97,
+      "prob": 1.8505887055653147e-05,
+      "top5": [
+        "Jhin",
+        "Ezreal",
+        "Lulu",
+        "Lucian",
+        "Zeri"
+      ],
+      "top1": "Jhin"
+    },
+    {
+      "game": 2,
+      "move": 18,
+      "side": 0,
+      "champion": "Xayah",
+      "riot": 498,
+      "idx": 148,
+      "rank": 4,
+      "prob": 0.08036930859088898,
+      "top5": [
+        "Jhin",
+        "Ezreal",
+        "Lucian",
+        "Xayah",
+        "Kai'Sa"
+      ],
+      "top1": "Jhin"
+    },
+    {
+      "game": 2,
+      "move": 19,
+      "side": 0,
+      "champion": "Renata Glasc",
+      "riot": 888,
+      "idx": 164,
+      "rank": 6,
+      "prob": 0.01504531316459179,
+      "top5": [
+        "Nautilus",
+        "Alistar",
+        "Rell",
+        "Leona",
+        "Blitzcrank"
+      ],
+      "top1": "Nautilus"
+    },
+    {
+      "game": 2,
+      "move": 20,
+      "side": 1,
+      "champion": "Milio",
+      "riot": 902,
+      "idx": 169,
+      "rank": 5,
+      "prob": 0.04769064486026764,
+      "top5": [
+        "Seraphine",
+        "Blitzcrank",
+        "Soraka",
+        "Nautilus",
+        "Milio"
+      ],
+      "top1": "Seraphine"
+    },
+    {
+      "game": 3,
+      "move": 7,
+      "side": 0,
+      "champion": "Maokai",
+      "riot": 57,
+      "idx": 52,
+      "rank": 33,
+      "prob": 0.001520138350315392,
+      "top5": [
+        "Vi",
+        "Qiyana",
+        "Lee Sin",
+        "Syndra",
+        "Wukong"
+      ],
+      "top1": "Vi"
+    },
+    {
+      "game": 3,
+      "move": 8,
+      "side": 1,
+      "champion": "Jarvan IV",
+      "riot": 59,
+      "idx": 54,
+      "rank": 15,
+      "prob": 0.020827576518058777,
+      "top5": [
+        "Olaf",
+        "K'Sante",
+        "Ambessa",
+        "Jayce",
+        "Gnar"
+      ],
+      "top1": "Olaf"
+    },
+    {
+      "game": 3,
+      "move": 9,
+      "side": 1,
+      "champion": "Orianna",
+      "riot": 61,
+      "idx": 56,
+      "rank": 33,
+      "prob": 0.003541521728038788,
+      "top5": [
+        "Vi",
+        "Qiyana",
+        "Wukong",
+        "Lee Sin",
+        "Pantheon"
+      ],
+      "top1": "Vi"
+    },
+    {
+      "game": 3,
+      "move": 10,
+      "side": 0,
+      "champion": "Aatrox",
+      "riot": 266,
+      "idx": 136,
+      "rank": 77,
+      "prob": 0.00042180929449386895,
+      "top5": [
+        "Vi",
+        "Wukong",
+        "Lee Sin",
+        "Qiyana",
+        "Xin Zhao"
+      ],
+      "top1": "Vi"
+    },
+    {
+      "game": 3,
+      "move": 11,
+      "side": 0,
+      "champion": "Yone",
+      "riot": 777,
+      "idx": 156,
+      "rank": 22,
+      "prob": 0.00505926925688982,
+      "top5": [
+        "Syndra",
+        "Galio",
+        "Locke",
+        "Viktor",
+        "Akali"
+      ],
+      "top1": "Syndra"
+    },
+    {
+      "game": 3,
+      "move": 12,
+      "side": 1,
+      "champion": "Renekton",
+      "riot": 58,
+      "idx": 53,
+      "rank": 59,
+      "prob": 0.0003939903690479696,
+      "top5": [
+        "Akali",
+        "Locke",
+        "Syndra",
+        "Galio",
+        "LeBlanc"
+      ],
+      "top1": "Akali"
+    },
+    {
+      "game": 3,
+      "move": 17,
+      "side": 1,
+      "champion": "Caitlyn",
+      "riot": 51,
+      "idx": 47,
+      "rank": 12,
+      "prob": 0.02346022240817547,
+      "top5": [
+        "Kai'Sa",
+        "Jhin",
+        "Lulu",
+        "Lucian",
+        "Ezreal"
+      ],
+      "top1": "Kai'Sa"
+    },
+    {
+      "game": 3,
+      "move": 18,
+      "side": 0,
+      "champion": "Kai'Sa",
+      "riot": 145,
+      "idx": 111,
+      "rank": 6,
+      "prob": 0.03873295709490776,
+      "top5": [
+        "Ziggs",
+        "Jhin",
+        "Ezreal",
+        "Lucian",
+        "Varus"
+      ],
+      "top1": "Ziggs"
+    },
+    {
+      "game": 3,
+      "move": 19,
+      "side": 0,
+      "champion": "Nautilus",
+      "riot": 111,
+      "idx": 92,
+      "rank": 1,
+      "prob": 0.5426622629165649,
+      "top5": [
+        "Nautilus",
+        "Neeko",
+        "Alistar",
+        "Rell",
+        "Leona"
+      ],
+      "top1": "Nautilus"
+    },
+    {
+      "game": 3,
+      "move": 20,
+      "side": 1,
+      "champion": "Braum",
+      "riot": 201,
+      "idx": 121,
+      "rank": 1,
+      "prob": 0.6006414890289307,
+      "top5": [
+        "Braum",
+        "Morgana",
+        "Alistar",
+        "Leona",
+        "Rell"
+      ],
+      "top1": "Braum"
+    },
+    {
+      "game": 4,
+      "move": 7,
+      "side": 0,
+      "champion": "Jarvan IV",
+      "riot": 59,
+      "idx": 54,
+      "rank": 8,
+      "prob": 0.029881149530410767,
+      "top5": [
+        "Vi",
+        "Qiyana",
+        "Lee Sin",
+        "Syndra",
+        "Cassiopeia"
+      ],
+      "top1": "Vi"
+    },
+    {
+      "game": 4,
+      "move": 8,
+      "side": 1,
+      "champion": "Rumble",
+      "riot": 68,
+      "idx": 61,
+      "rank": 6,
+      "prob": 0.04198244959115982,
+      "top5": [
+        "Camille",
+        "Vi",
+        "Olaf",
+        "K'Sante",
+        "Yunara"
+      ],
+      "top1": "Camille"
+    },
+    {
+      "game": 4,
+      "move": 9,
+      "side": 1,
+      "champion": "Vi",
+      "riot": 254,
+      "idx": 135,
+      "rank": 1,
+      "prob": 0.2522868812084198,
+      "top5": [
+        "Vi",
+        "Qiyana",
+        "Pantheon",
+        "Wukong",
+        "Lee Sin"
+      ],
+      "top1": "Vi"
+    },
+    {
+      "game": 4,
+      "move": 10,
+      "side": 0,
+      "champion": "Neeko",
+      "riot": 518,
+      "idx": 151,
+      "rank": 72,
+      "prob": 0.0003313531633466482,
+      "top5": [
+        "Wukong",
+        "Lee Sin",
+        "Kalista",
+        "Xin Zhao",
+        "Lucian"
+      ],
+      "top1": "Wukong"
+    },
+    {
+      "game": 4,
+      "move": 11,
+      "side": 0,
+      "champion": "K'Sante",
+      "riot": 897,
+      "idx": 167,
+      "rank": 28,
+      "prob": 0.0038620934356004,
+      "top5": [
+        "Galio",
+        "Tristana",
+        "Ezreal",
+        "Syndra",
+        "Locke"
+      ],
+      "top1": "Galio"
+    },
+    {
+      "game": 4,
+      "move": 12,
+      "side": 1,
+      "champion": "Akali",
+      "riot": 84,
+      "idx": 74,
+      "rank": 2,
+      "prob": 0.13851800560951233,
+      "top5": [
+        "Ahri",
+        "Akali",
+        "Orianna",
+        "Locke",
+        "Syndra"
+      ],
+      "top1": "Ahri"
+    },
+    {
+      "game": 4,
+      "move": 17,
+      "side": 1,
+      "champion": "Kalista",
+      "riot": 429,
+      "idx": 145,
+      "rank": 7,
+      "prob": 0.054654527455568314,
+      "top5": [
+        "Jhin",
+        "Lulu",
+        "Ezreal",
+        "Zeri",
+        "Alistar"
+      ],
+      "top1": "Jhin"
+    },
+    {
+      "game": 4,
+      "move": 18,
+      "side": 0,
+      "champion": "Tahm Kench",
+      "riot": 223,
+      "idx": 126,
+      "rank": 28,
+      "prob": 0.002034843433648348,
+      "top5": [
+        "Ezreal",
+        "Varus",
+        "Jhin",
+        "Ashe",
+        "Tristana"
+      ],
+      "top1": "Ezreal"
+    },
+    {
+      "game": 4,
+      "move": 19,
+      "side": 0,
+      "champion": "Ashe",
+      "riot": 22,
+      "idx": 21,
+      "rank": 38,
+      "prob": 0.0005272013950161636,
+      "top5": [
+        "Alistar",
+        "Seraphine",
+        "Lulu",
+        "Poppy",
+        "Thresh"
+      ],
+      "top1": "Alistar"
+    },
+    {
+      "game": 4,
+      "move": 20,
+      "side": 1,
+      "champion": "Rell",
+      "riot": 526,
+      "idx": 153,
+      "rank": 4,
+      "prob": 0.0944787934422493,
+      "top5": [
+        "Blitzcrank",
+        "Alistar",
+        "Pyke",
+        "Rell",
+        "Leona"
+      ],
+      "top1": "Blitzcrank"
+    },
+    {
+      "game": 5,
+      "move": 7,
+      "side": 0,
+      "champion": "Rumble",
+      "riot": 68,
+      "idx": 61,
+      "rank": 7,
+      "prob": 0.04702039435505867,
+      "top5": [
+        "Vi",
+        "Qiyana",
+        "Syndra",
+        "Lee Sin",
+        "Cassiopeia"
+      ],
+      "top1": "Vi"
+    },
+    {
+      "game": 5,
+      "move": 8,
+      "side": 1,
+      "champion": "Gnar",
+      "riot": 150,
+      "idx": 113,
+      "rank": 25,
+      "prob": 0.005607123952358961,
+      "top5": [
+        "K'Sante",
+        "Galio",
+        "Ambessa",
+        "Kalista",
+        "Vi"
+      ],
+      "top1": "K'Sante"
+    },
+    {
+      "game": 5,
+      "move": 9,
+      "side": 1,
+      "champion": "Vi",
+      "riot": 254,
+      "idx": 135,
+      "rank": 1,
+      "prob": 0.20527328550815582,
+      "top5": [
+        "Vi",
+        "Wukong",
+        "Lee Sin",
+        "Qiyana",
+        "Jarvan IV"
+      ],
+      "top1": "Vi"
+    },
+    {
+      "game": 5,
+      "move": 10,
+      "side": 0,
+      "champion": "Jarvan IV",
+      "riot": 59,
+      "idx": 54,
+      "rank": 5,
+      "prob": 0.05696582421660423,
+      "top5": [
+        "Wukong",
+        "Lee Sin",
+        "Kalista",
+        "Xin Zhao",
+        "Jarvan IV"
+      ],
+      "top1": "Wukong"
+    },
+    {
+      "game": 5,
+      "move": 11,
+      "side": 0,
+      "champion": "Orianna",
+      "riot": 61,
+      "idx": 56,
+      "rank": 1,
+      "prob": 0.19049717485904694,
+      "top5": [
+        "Orianna",
+        "Galio",
+        "Locke",
+        "Syndra",
+        "Ahri"
+      ],
+      "top1": "Orianna"
+    },
+    {
+      "game": 5,
+      "move": 12,
+      "side": 1,
+      "champion": "Akali",
+      "riot": 84,
+      "idx": 74,
+      "rank": 2,
+      "prob": 0.24987919628620148,
+      "top5": [
+        "Locke",
+        "Akali",
+        "Galio",
+        "Ahri",
+        "Syndra"
+      ],
+      "top1": "Locke"
+    },
+    {
+      "game": 5,
+      "move": 17,
+      "side": 1,
+      "champion": "Kai'Sa",
+      "riot": 145,
+      "idx": 111,
+      "rank": 5,
+      "prob": 0.07809243351221085,
+      "top5": [
+        "Lulu",
+        "Jhin",
+        "Ezreal",
+        "Lucian",
+        "Kai'Sa"
+      ],
+      "top1": "Lulu"
+    },
+    {
+      "game": 5,
+      "move": 18,
+      "side": 0,
+      "champion": "Senna",
+      "riot": 235,
+      "idx": 129,
+      "rank": 27,
+      "prob": 0.001226475345902145,
+      "top5": [
+        "Tristana",
+        "Ezreal",
+        "Zeri",
+        "Jhin",
+        "Lucian"
+      ],
+      "top1": "Tristana"
+    },
+    {
+      "game": 5,
+      "move": 19,
+      "side": 0,
+      "champion": "Tahm Kench",
+      "riot": 223,
+      "idx": 126,
+      "rank": 1,
+      "prob": 0.3183249235153198,
+      "top5": [
+        "Tahm Kench",
+        "Alistar",
+        "Ornn",
+        "Seraphine",
+        "Cho'Gath"
+      ],
+      "top1": "Tahm Kench"
+    },
+    {
+      "game": 5,
+      "move": 20,
+      "side": 1,
+      "champion": "Rell",
+      "riot": 526,
+      "idx": 153,
+      "rank": 4,
+      "prob": 0.0943610817193985,
+      "top5": [
+        "Neeko",
+        "Alistar",
+        "Blitzcrank",
+        "Rell",
+        "Pyke"
+      ],
+      "top1": "Neeko"
+    }
+  ],
+  "final_counts": {
+    "1": 6,
+    "2": 2,
+    "3": 0,
+    "4": 3,
+    "5": 4,
+    "6+": 35
+  }
+}
