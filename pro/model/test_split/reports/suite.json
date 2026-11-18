@@ -33,7 +33,7 @@
   "limited": false,
   "baseline": true,
   "torch": "2.14.1+cu126",
-  "seconds": 1609.0
+  "seconds": 2439.5
  },
  "models": [
   {
@@ -68,6 +68,28 @@
    "params": 2996705,
    "split_note": "",
    "path": "pro/model/checkpoints/nextpick-mlp-flat-v1/model.pt"
+  },
+  {
+   "name": "nextpick-naivetransformer-d512-l8-h8-k5-through-lcp-df-sw",
+   "task": "next_move",
+   "track": "pro",
+   "archived": false,
+   "comparable": true,
+   "kind": "torch",
+   "params": 25509037,
+   "split_note": "",
+   "path": "pro/model/checkpoints/nextpick-naivetransformer-d512-l8-h8-k5-through-lcp-df-sw/best.pt"
+  },
+  {
+   "name": "nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw",
+   "task": "next_move",
+   "track": "pro",
+   "archived": false,
+   "comparable": true,
+   "kind": "torch",
+   "params": 25509037,
+   "split_note": "",
+   "path": "pro/model/checkpoints/nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw/best.pt"
   },
   {
    "name": "nextpick-policy",
@@ -378,7 +400,7 @@
    "kind": "policy",
    "params": 3350879,
    "n_patches": 108,
-   "seconds": 33.2,
+   "seconds": 26.6,
    "agg": {
     "n": 48960,
     "top1": 0.18929738562091503,
@@ -441,7 +463,7 @@
    "kind": "forest",
    "params": 2753344,
    "n_patches": null,
-   "seconds": 49.2,
+   "seconds": 46.8,
    "agg": {
     "n": 48960,
     "top1": 0.10463643790849673,
@@ -568,6 +590,150 @@
     "p": 3.2862686980649227e-21
    }
   },
+  "nextpick-naivetransformer-d512-l8-h8-k5-through-lcp-df-sw": {
+   "name": "nextpick-naivetransformer-d512-l8-h8-k5-through-lcp-df-sw",
+   "path": "pro/model/checkpoints/nextpick-naivetransformer-d512-l8-h8-k5-through-lcp-df-sw/best.pt",
+   "track": "pro",
+   "archived": false,
+   "comparable": true,
+   "split_note": "",
+   "split_counts": {
+    "n_train": 39720,
+    "n_val": 4771,
+    "n_test": 2448
+   },
+   "kind": "policy",
+   "params": 25509037,
+   "n_patches": 108,
+   "seconds": 408.3,
+   "agg": {
+    "n": 48960,
+    "top1": 0.20592320261437908,
+    "top1_ci": [
+     0.20236439359093408,
+     0.2095281569314906
+    ],
+    "top5": 0.5412377450980392,
+    "top5_ci": [
+     0.5368207739739413,
+     0.5456482453686914
+    ],
+    "top10": 0.7218137254901961,
+    "top10_ci": [
+     0.7178271230164005,
+     0.7257655218875075
+    ],
+    "mean_rank": 8.978696895424836,
+    "mean_prob": 0.10989479180008312
+   },
+   "by_phase": {
+    "ban1": {
+     "n": 14688,
+     "top1": 0.1597222222222222,
+     "top5": 0.4366149237472767,
+     "mean_rank": 12.825571895424837
+    },
+    "pick1": {
+     "n": 14688,
+     "top1": 0.24822984749455337,
+     "top5": 0.6076388888888888,
+     "mean_rank": 6.977873093681917
+    },
+    "ban2": {
+     "n": 9792,
+     "top1": 0.1712622549019608,
+     "top5": 0.49111519607843135,
+     "mean_rank": 9.554125816993464
+    },
+    "pick2": {
+     "n": 9792,
+     "top1": 0.24642565359477125,
+     "top5": 0.6486928104575164,
+     "mean_rank": 5.634191176470588
+    }
+   },
+   "paired": {
+    "vs": "nextpick-proonly-nov13-k5-through-lcp-df-sw",
+    "n_paired": 48960,
+    "this_only": 3415,
+    "reference_only": 2601,
+    "delta_top1": 0.01662581699346405,
+    "chi2": 109.86851728723404,
+    "p": 1.0471076347593058e-25
+   }
+  },
+  "nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw": {
+   "name": "nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw",
+   "path": "pro/model/checkpoints/nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw/best.pt",
+   "track": "pro",
+   "archived": false,
+   "comparable": true,
+   "split_note": "",
+   "split_counts": {
+    "n_train": 39720,
+    "n_val": 4771,
+    "n_test": 2448
+   },
+   "kind": "policy",
+   "params": 25509037,
+   "n_patches": 108,
+   "seconds": 433.4,
+   "agg": {
+    "n": 48960,
+    "top1": 0.2068627450980392,
+    "top1_ci": [
+     0.2032978255377346,
+     0.2104736625229571
+    ],
+    "top5": 0.5420547385620915,
+    "top5_ci": [
+     0.5376383081504276,
+     0.5464645699211329
+    ],
+    "top10": 0.7216911764705882,
+    "top10_ci": [
+     0.7177040465198962,
+     0.7256435195746728
+    ],
+    "mean_rank": 8.899795751633986,
+    "mean_prob": 0.1132151616809935
+   },
+   "by_phase": {
+    "ban1": {
+     "n": 14688,
+     "top1": 0.15856481481481483,
+     "top5": 0.43675108932461876,
+     "mean_rank": 12.79786220043573
+    },
+    "pick1": {
+     "n": 14688,
+     "top1": 0.2491149237472767,
+     "top5": 0.6060729847494554,
+     "mean_rank": 6.921636710239651
+    },
+    "ban2": {
+     "n": 9792,
+     "top1": 0.17034313725490197,
+     "top5": 0.4962214052287582,
+     "mean_rank": 9.39828431372549
+    },
+    "pick2": {
+     "n": 9792,
+     "top1": 0.25245098039215685,
+     "top5": 0.6498161764705882,
+     "mean_rank": 5.521446078431373
+    }
+   },
+   "paired": {
+    "vs": "nextpick-proonly-nov13-k5-through-lcp-df-sw",
+    "n_paired": 48960,
+    "this_only": 3496,
+    "reference_only": 2636,
+    "delta_top1": 0.017565359477124176,
+    "chi2": 120.33284409654273,
+    "p": 5.348916852032958e-28
+   }
+  },
   "nextpick-policy": {
    "name": "nextpick-policy",
    "path": "solo_queue/model/checkpoints/nextpick-policy/best_policy.pt",
@@ -583,7 +749,7 @@
    "kind": "policy",
    "params": 31897631,
    "n_patches": 107,
-   "seconds": 130.9,
+   "seconds": 125.0,
    "agg": {
     "n": 48960,
     "top1": 0.07167075163398692,
@@ -655,7 +821,7 @@
    "kind": "policy",
    "params": 3368351,
    "n_patches": 107,
-   "seconds": 35.6,
+   "seconds": 38.3,
    "agg": {
     "n": 48960,
     "top1": 0.19436274509803922,
@@ -727,7 +893,7 @@
    "kind": "policy",
    "params": 3350559,
    "n_patches": 107,
-   "seconds": 31.2,
+   "seconds": 30.9,
    "agg": {
     "n": 48960,
     "top1": 0.1945669934640523,
@@ -799,7 +965,7 @@
    "kind": "policy",
    "params": 3366943,
    "n_patches": 107,
-   "seconds": 30.1,
+   "seconds": 30.9,
    "agg": {
     "n": 48960,
     "top1": 0.19332107843137256,
@@ -871,7 +1037,7 @@
    "kind": "policy",
    "params": 3351199,
    "n_patches": 107,
-   "seconds": 34.6,
+   "seconds": 34.5,
    "agg": {
     "n": 48960,
     "top1": 0.1946282679738562,
@@ -943,7 +1109,7 @@
    "kind": "policy",
    "params": 3350559,
    "n_patches": 107,
-   "seconds": 30.8,
+   "seconds": 30.6,
    "agg": {
     "n": 48960,
     "top1": 0.1790032679738562,
@@ -1015,7 +1181,7 @@
    "kind": "policy",
    "params": 3350879,
    "n_patches": 108,
-   "seconds": 31.6,
+   "seconds": 30.3,
    "agg": {
     "n": 48960,
     "top1": 0.19058415032679737,
@@ -1087,7 +1253,7 @@
    "kind": "policy",
    "params": 3350879,
    "n_patches": 108,
-   "seconds": 31.4,
+   "seconds": 30.4,
    "agg": {
     "n": 48960,
     "top1": 0.17428513071895424,
@@ -1159,7 +1325,7 @@
    "kind": "policy",
    "params": 3350559,
    "n_patches": 107,
-   "seconds": 30.2,
+   "seconds": 29.9,
    "agg": {
     "n": 48960,
     "top1": 0.19446486928104575,
@@ -1231,7 +1397,7 @@
    "kind": "policy",
    "params": 3350559,
    "n_patches": 107,
-   "seconds": 30.1,
+   "seconds": 30.8,
    "agg": {
     "n": 48960,
     "top1": 0.18000408496732026,
@@ -1303,7 +1469,7 @@
    "kind": "policy",
    "params": 3368671,
    "n_patches": 108,
-   "seconds": 35.2,
+   "seconds": 35.5,
    "agg": {
     "n": 48960,
     "top1": 0.2210171568627451,
@@ -1377,7 +1543,7 @@
    "kind": "masked",
    "params": 2489522,
    "n_patches": 108,
-   "seconds": 52.9,
+   "seconds": 53.0,
    "agg": {
     "n": 24480,
     "top1": 0.24689542483660132,
@@ -1415,7 +1581,7 @@
    "kind": "masked",
    "params": 28611250,
    "n_patches": 107,
-   "seconds": 364.5,
+   "seconds": 360.3,
    "agg": {
     "n": 24480,
     "top1": 0.15763888888888888,
@@ -1550,7 +1716,7 @@
    "kind": "masked",
    "params": 31714995,
    "n_patches": 0,
-   "seconds": 412.8,
+   "seconds": 420.9,
    "agg": {
     "n": 24480,
     "top1": 0.11887254901960784,
@@ -1597,7 +1763,7 @@
    "kind": "masked",
    "params": 2489266,
    "n_patches": 107,
-   "seconds": 53.8,
+   "seconds": 52.8,
    "agg": {
     "n": 24480,
     "top1": 0.24448529411764705,
@@ -1644,7 +1810,7 @@
    "kind": "masked",
    "params": 2489266,
    "n_patches": 107,
-   "seconds": 53.4,
+   "seconds": 53.9,
    "agg": {
     "n": 24480,
     "top1": 0.25531045751633985,
@@ -1691,7 +1857,7 @@
    "kind": "masked",
    "params": 2489266,
    "n_patches": 107,
-   "seconds": 52.9,
+   "seconds": 53.2,
    "agg": {
     "n": 24480,
     "top1": 0.2673202614379085,
@@ -1738,7 +1904,7 @@
    "kind": "masked",
    "params": 2489522,
    "n_patches": 108,
-   "seconds": 54.8,
+   "seconds": 53.6,
    "agg": {
     "n": 24480,
     "top1": 0.26376633986928105,

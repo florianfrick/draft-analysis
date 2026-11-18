@@ -1,0 +1,270 @@
+{
+ "suite": {
+  "split": {
+   "corpus": "pro_drafts_full.pt",
+   "corpus_rows": 46939,
+   "max_date": "(none)",
+   "args": {
+    "val_frac": 0.1,
+    "test_frac": 0.05,
+    "min_patch_rows": 40,
+    "val_patches": null,
+    "val_random": false
+   },
+   "pinned_test": [],
+   "counts": {
+    "train": 39720,
+    "val": 4771,
+    "test": 2448
+   },
+   "shares": {
+    "train": 0.8462,
+    "val": 0.1016,
+    "test": 0.0522
+   },
+   "test_fingerprint": "99c72c8550489cbf6f218b517002c9f2276022e53e45270c8e3e545cca252204",
+   "test_gameids": null
+  },
+  "tasks": [
+   "next_move"
+  ],
+  "n_test_games": 2448,
+  "limited": false,
+  "baseline": true,
+  "torch": "2.14.1+cu126",
+  "seconds": 473.2
+ },
+ "models": [
+  {
+   "name": "nextpick-proonly-nov13-k5-through-lcp-df-sw",
+   "task": "next_move",
+   "track": "pro",
+   "archived": false,
+   "comparable": true,
+   "kind": "torch",
+   "params": 3350879,
+   "split_note": "",
+   "path": "pro/model/checkpoints/nextpick-proonly-nov13-k5-through-lcp-df-sw/best.pt"
+  },
+  {
+   "name": "nextpick-naivetransformer-d512-l8-h8-k5-through-lcp-df-sw",
+   "task": "next_move",
+   "track": "pro",
+   "archived": false,
+   "comparable": true,
+   "kind": "torch",
+   "params": 25509037,
+   "split_note": "",
+   "path": "pro/model/checkpoints/nextpick-naivetransformer-d512-l8-h8-k5-through-lcp-df-sw/best.pt"
+  }
+ ],
+ "next_move": {
+  "00-frequency-table": {
+   "name": "00-frequency-table",
+   "path": null,
+   "track": "baseline",
+   "archived": false,
+   "comparable": true,
+   "split_note": "",
+   "kind": "frequency",
+   "params": 342540,
+   "baseline": true,
+   "n_patches": null,
+   "seconds": 0.0,
+   "split_counts": {
+    "train": 39720,
+    "val": 4771,
+    "test": 2448
+   },
+   "agg": {
+    "n": 48960,
+    "top1": 0.1079248366013072,
+    "top1_ci": [
+     0.10520702703239732,
+     0.11070416895513324
+    ],
+    "top5": 0.3440359477124183,
+    "top5_ci": [
+     0.33984031642284873,
+     0.34825605222482703
+    ],
+    "top10": 0.5075367647058824,
+    "top10_ci": [
+     0.5031078534167498,
+     0.5119644933576096
+    ],
+    "mean_rank": 17.829146241830067
+   },
+   "by_phase": {
+    "ban1": {
+     "n": 14688,
+     "top1": 0.14821623093681918,
+     "top5": 0.42592592592592593,
+     "mean_rank": 13.972630718954248
+    },
+    "pick1": {
+     "n": 14688,
+     "top1": 0.12139161220043573,
+     "top5": 0.38895697167755994,
+     "mean_rank": 15.204997276688454
+    },
+    "ban2": {
+     "n": 9792,
+     "top1": 0.0573937908496732,
+     "top5": 0.22794117647058823,
+     "mean_rank": 22.321486928104576
+    },
+    "pick2": {
+     "n": 9792,
+     "top1": 0.0778186274509804,
+     "top5": 0.2699142156862745,
+     "mean_rank": 23.057802287581698
+    }
+   },
+   "paired": {
+    "vs": "nextpick-proonly-nov13-k5-through-lcp-df-sw",
+    "n_paired": 48960,
+    "this_only": 1857,
+    "reference_only": 5841,
+    "delta_top1": -0.08137254901960783,
+    "chi2": 2060.8325539101065,
+    "p": 0.0
+   }
+  },
+  "nextpick-proonly-nov13-k5-through-lcp-df-sw": {
+   "name": "nextpick-proonly-nov13-k5-through-lcp-df-sw",
+   "path": "pro/model/checkpoints/nextpick-proonly-nov13-k5-through-lcp-df-sw/best.pt",
+   "track": "pro",
+   "archived": false,
+   "comparable": true,
+   "split_note": "",
+   "split_counts": {
+    "n_train": 39720,
+    "n_val": 4771,
+    "n_test": 2448
+   },
+   "kind": "policy",
+   "params": 3350879,
+   "n_patches": 108,
+   "seconds": 33.6,
+   "agg": {
+    "n": 48960,
+    "top1": 0.18929738562091503,
+    "top1_ci": [
+     0.1858517413934825,
+     0.19279178399526067
+    ],
+    "top5": 0.5083333333333333,
+    "top5_ci": [
+     0.5039044715274706,
+     0.5127608875075932
+    ],
+    "top10": 0.6834354575163398,
+    "top10_ci": [
+     0.6793010309219717,
+     0.687541100190551
+    ],
+    "mean_rank": 10.171527777777778,
+    "mean_prob": 0.10400792408296927
+   },
+   "by_phase": {
+    "ban1": {
+     "n": 14688,
+     "top1": 0.15162037037037038,
+     "top5": 0.428989651416122,
+     "mean_rank": 13.332244008714596
+    },
+    "pick1": {
+     "n": 14688,
+     "top1": 0.23924291938997821,
+     "top5": 0.5837418300653595,
+     "mean_rank": 7.729915577342048
+    },
+    "ban2": {
+     "n": 9792,
+     "top1": 0.12234477124183006,
+     "top5": 0.39981617647058826,
+     "mean_rank": 12.636540032679738
+    },
+    "pick2": {
+     "n": 9792,
+     "top1": 0.2378472222222222,
+     "top5": 0.6227532679738562,
+     "mean_rank": 6.627859477124183
+    }
+   }
+  },
+  "nextpick-naivetransformer-d512-l8-h8-k5-through-lcp-df-sw": {
+   "name": "nextpick-naivetransformer-d512-l8-h8-k5-through-lcp-df-sw",
+   "path": "pro/model/checkpoints/nextpick-naivetransformer-d512-l8-h8-k5-through-lcp-df-sw/best.pt",
+   "track": "pro",
+   "archived": false,
+   "comparable": true,
+   "split_note": "",
+   "split_counts": {
+    "n_train": 39720,
+    "n_val": 4771,
+    "n_test": 2448
+   },
+   "kind": "policy",
+   "params": 25509037,
+   "n_patches": 108,
+   "seconds": 436.3,
+   "agg": {
+    "n": 48960,
+    "top1": 0.20592320261437908,
+    "top1_ci": [
+     0.20236439359093408,
+     0.2095281569314906
+    ],
+    "top5": 0.5412377450980392,
+    "top5_ci": [
+     0.5368207739739413,
+     0.5456482453686914
+    ],
+    "top10": 0.7218137254901961,
+    "top10_ci": [
+     0.7178271230164005,
+     0.7257655218875075
+    ],
+    "mean_rank": 8.978696895424836,
+    "mean_prob": 0.10989479180008312
+   },
+   "by_phase": {
+    "ban1": {
+     "n": 14688,
+     "top1": 0.1597222222222222,
+     "top5": 0.4366149237472767,
+     "mean_rank": 12.825571895424837
+    },
+    "pick1": {
+     "n": 14688,
+     "top1": 0.24822984749455337,
+     "top5": 0.6076388888888888,
+     "mean_rank": 6.977873093681917
+    },
+    "ban2": {
+     "n": 9792,
+     "top1": 0.1712622549019608,
+     "top5": 0.49111519607843135,
+     "mean_rank": 9.554125816993464
+    },
+    "pick2": {
+     "n": 9792,
+     "top1": 0.24642565359477125,
+     "top5": 0.6486928104575164,
+     "mean_rank": 5.634191176470588
+    }
+   },
+   "paired": {
+    "vs": "nextpick-proonly-nov13-k5-through-lcp-df-sw",
+    "n_paired": 48960,
+    "this_only": 3415,
+    "reference_only": 2601,
+    "delta_top1": 0.01662581699346405,
+    "chi2": 109.86851728723404,
+    "p": 1.0471076347593058e-25
+   }
+  }
+ }
+}
