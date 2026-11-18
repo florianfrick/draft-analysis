@@ -173,8 +173,15 @@ One caveat carried over from the web UI that this client does **not** surface:
 if the answering model is a masking checkpoint rather than the next-move head,
 the pool was applied as a post-filter on an answer computed as if those
 champions were available (`method == "masker"` with `fearless_filtered > 0`). The
-head takes the pool as an input and re-scores. The default checkpoints are heads,
-so this is dormant — but it is why `SuggestResponse.fearlessFiltered` is parsed.
+head takes the pool as an input and re-scores. The default next-move model is
+now the role-conditioned naive transformer
+(`nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw`), so this is
+dormant — but it is why `SuggestResponse.fearlessFiltered` is parsed. The
+transformer sees the pool as 40 tokens and masks it on picks only; a champion in
+the pool can still be banned. Its slot head is **not** wired into this client's
+role board: ban-phase cells still come from the masking checkpoint, and pick-phase
+cells use the role-filtered next-move head. The header's `model` label reports
+whichever checkpoint the server actually loaded at startup.
 
 ## What it deliberately does not do yet
 
