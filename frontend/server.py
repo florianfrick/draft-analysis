@@ -216,7 +216,13 @@ CKPT_PATTERNS = tuple(            # what /api/checkpoints lists (no torch.load)
 
 MASKED_DEFAULT = PRO_CKPT_DIR / "masking-proonly-nov13-through-lcp-df-sw" / "best.pt"
 
-POLICY_DEFAULT = PRO_CKPT_DIR / "nextpick-proonly-nov13-k5-through-lcp-df-sw" / "best.pt"
+# The shipped next-move model is the naive transformer fine-tuned with the
+# auxiliary slot loss: +1.8 pp top-1 over the nov13 head on the canonical split
+# (pro/model/test_split/REPORT_suite.md). It is still a `nextpick-*` checkpoint
+# and still fills the policy slot; only its batch is different.
+POLICY_DEFAULT = (PRO_CKPT_DIR
+                  / "nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw"
+                  / "best.pt")
 
 # The reranker: a *directory* (adapter/ + projector.pt), not a best.pt, because
 # it is a 4.2 B trunk plus a LoRA plus the encoder's projector. It answers the
@@ -497,7 +503,13 @@ def find_best_ckpt():
 
 
 def peek_kind(payload):
-    """Which family a payload belongs to, from its state-dict key names."""
+    """Which family a payload belongs to, from its config / state-dict keys."""
+    cfg = payload.get("config") or {}
+    # The naive transformer's keys look like an encoder's to the old sniffing
+    # rule, but it answers next_move. The checkpoint says what it is; guessing
+    # from weight names would file it in the masker slot.
+    if str(cfg.get("arch", "")).startswith("naive_transformer"):
+        return "policy"
     state = payload.get("model") or {}
     for key in state:
         if key.startswith("policy_head."):
@@ -861,11 +873,18 @@ def make_predictor(path, device=None, head_path=None):
         _MODEL_CACHE[key] = pred
         return pred
     payload = torch.load(str(path), map_location="cpu")
-    kind = peek_kind(payload)
-    if kind == "policy":
-        pred = infer.PolicyPredictor(path, device=device, payload=payload)
+    arch = str((payload.get("config") or {}).get("arch") or "")
+    if arch == "naive_transformer":
+        # Different 61-token prefix batch, same next_move interface. The
+        # adapter is the only place that translates a live board into it.
+        from pro.model.naivetransformer.serve import NaiveTransformerPolicy
+        pred = NaiveTransformerPolicy(path, device=device, payload=payload)
     else:
-        pred = Predictor(path, device=device, payload=payload)
+        kind = peek_kind(payload)
+        if kind == "policy":
+            pred = infer.PolicyPredictor(path, device=device, payload=payload)
+        else:
+            pred = Predictor(path, device=device, payload=payload)
     # The patch vocabulary is stored at the checkpoint top level (both
     # families); keep it on the predictor so the state's patch label can be
     # mapped to the embedding row the model was trained with.
@@ -1787,10 +1806,9 @@ def main():
                          "an llm-* reranker directory - loaded alongside the "
                          "role model, not instead of it (default: "
                          "pro/model/checkpoints/"
-                         "nextpick-proonly-nov13-k5-through-lcp-df-sw/best.pt; "
-                         "the -randomvalsplit- pair, "
-                         "nextpick-bans-aware-through-wlds-ig-tes/best.pt and "
-                         "nextpick-proto-ensemble/ensemble.json are still "
+                         "nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw/best.pt; "
+                         "the -nov13- pair, nextpick-bans-aware-through-wlds-ig-tes/best.pt "
+                         "and nextpick-proto-ensemble/ensemble.json are still "
                          "selectable here)")
     ap.add_argument("--rerank", nargs="?", const=str(RERANK_DEFAULT),
                     default=None, metavar="DIR",

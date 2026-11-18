@@ -36,11 +36,13 @@
 #   bash frontend/serve.sh --policy-ckpt pro/model/archive/checkpoints/nextpick-proto-ensemble/ensemble.json
 #   bash frontend/serve.sh --no-policy           # role board only
 #
-# `pro/model/checkpoints/` holds exactly the shipped pair:
+# `pro/model/checkpoints/` holds the shipped pair:
 # `masking-proonly-nov13-through-lcp-df-sw` (role board) and
-# `nextpick-proonly-nov13-k5-through-lcp-df-sw` (next move). Everything else is
-# under `pro/model/archive/checkpoints/` and is reachable only by naming it, as
-# the two examples above do. The reranker is served only when `--rerank` asks.
+# `nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw` (next move).
+# The nov13 heads and the naive transformer without the slot loss are still on
+# disk and reachable by naming them. Everything else is under
+# `pro/model/archive/checkpoints/`, reachable only by naming it, as the two
+# examples above do. The reranker is served only when `--rerank` asks.
 # There is no model picker in the browser - models are chosen at startup.
 #
 # Every argument is passed through to frontend/server.py; --port and --rerank

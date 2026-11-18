@@ -259,7 +259,7 @@ def test_default_models_are_the_nov13_pair():
     assert S.MASKED_DEFAULT.parent.name == (
         "masking-proonly-nov13-through-lcp-df-sw")
     assert S.POLICY_DEFAULT.parent.name == (
-        "nextpick-proonly-nov13-k5-through-lcp-df-sw")
+        "nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw")
     assert S.MASKED_DEFAULT.name == S.POLICY_DEFAULT.name == "best.pt"
     assert S.MASKED_DEFAULT.parent.parent == S.POLICY_DEFAULT.parent.parent
     assert S.ENSEMBLE_CKPT.suffix == ".json"

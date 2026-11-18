@@ -109,13 +109,18 @@ load (`make_predictor`) - a renamed file still loads, a mis-filed one is refused
 Shipped defaults, both pro-track:
 
 * **role** - `masking-proonly-nov13-through-lcp-df-sw/best.pt`.
-* **next move** - `nextpick-proonly-nov13-k5-through-lcp-df-sw/best.pt`, the
-  head. The 4B reranker (`llm-lora-rerank5/`) is one flag away (`--rerank`) and
-  is **not** the default - §"What the reranker is worth" has the numbers and the
-  reason.
+* **next move** - `nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw/best.pt`,
+  the role-conditioned naive transformer: a single 61-token encoder and a
+  shared policy head, 25.5 M params. It reads a `[STATE]` token plus pick, ban
+  and fearless tokens and beats the nov13 head by +1.8 pp top-1 on the canonical
+  test split (`pro/model/test_split/REPORT_suite.md`). `pro/model/naivetransformer/serve.py`
+  turns a live board into that prefix batch. The 4B reranker (`llm-lora-rerank5/`)
+  is one flag away (`--rerank`) and is **not** the default - §"What the reranker
+  is worth" has the numbers and the reason.
 
-That pair is a different **corpus**, not a newer run of the old one: the freeze
-is lifted (`--corpus 2022-full`, 46,939 drafts through 2026-11-13), the pinned
+The masker is from the nov13 run; the next-move transformer was trained later
+on the same canonical split. Both come from the same **corpus**, not the old
+`-wlds-ig-tes` one: the freeze is lifted (`--corpus 2022-full`, 46,939 drafts through 2026-11-13), the pinned
 test series are ordinary rows (`--no-pin`), the split is the fractional 85/10/5
 within-patch tail, and the policy trains on `--prefix-k 5` (5 distinct prefixes
 per game per epoch). So **none of its numbers belong next to the
