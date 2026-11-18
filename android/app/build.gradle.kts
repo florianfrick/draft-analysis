@@ -45,6 +45,13 @@ android {
         buildConfig = true
     }
 
+    // The two .pte weights are copied out of assets into filesDir at first
+    // launch because Module.load needs a real path. Keep them uncompressed
+    // so that copy is a straight read rather than a decompress.
+    androidResources {
+        noCompress += "pte"
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -81,6 +88,7 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.coil.compose)
+    implementation(libs.executorch.android)
 
     testImplementation(libs.junit)
 }

@@ -1,14 +1,13 @@
 package com.draftassistant.ui
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.draftassistant.BuildConfig
-import com.draftassistant.data.ApiException
 import com.draftassistant.data.BoardRequest
 import com.draftassistant.data.Champion
-import com.draftassistant.data.DraftApi
 import com.draftassistant.data.DraftMove
 import com.draftassistant.data.DraftOrder
+import com.draftassistant.data.LocalEngine
 import com.draftassistant.data.MoveKind
 import com.draftassistant.data.PatchOption
 import com.draftassistant.data.SeriesBody
@@ -27,9 +26,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.net.ConnectException
-import java.net.SocketTimeoutException
-import java.net.UnknownHostException
 
 /**
  * One game of a series.
@@ -134,7 +130,6 @@ data class UiState(
 
 class BoardViewModel : ViewModel() {
 
-    private val api = DraftApi()
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
@@ -149,10 +144,12 @@ class BoardViewModel : ViewModel() {
     fun reload() {
         viewModelScope.launch {
             _state.update { it.copy(loading = true, error = null) }
-            // viewModelScope runs on Dispatchers.Main, and OkHttp's synchronous
-            // execute() on the main thread throws NetworkOnMainThreadException -
-            // so the IO hop is required here, not just good manners.
-            val result = withContext(Dispatchers.IO) { runCatching { api.champions() } }
+            // viewModelScope runs on Dispatchers.Main. The first call also
+            // copies 36 MB of .pte weights out of assets, so it must be off
+            // the main thread here, not just as a courtesy to OkHttp.
+            val result = withContext(Dispatchers.IO) {
+                runCatching { LocalEngine.get().champions() }
+            }
 
             result.onSuccess { response ->
                 val sorted = response.champions.sortedBy { it.name.lowercase() }
@@ -398,8 +395,12 @@ class BoardViewModel : ViewModel() {
             )
 
             val (nextResult, roleResult) = coroutineScope {
-                val next = async(Dispatchers.IO) { runCatching { api.nextMove(request) } }
-                val roles = async(Dispatchers.IO) { runCatching { api.suggest(request.copy(k = 5)) } }
+                val next = async(Dispatchers.IO) {
+                    runCatching { LocalEngine.get().nextMove(request) }
+                }
+                val roles = async(Dispatchers.IO) {
+                    runCatching { LocalEngine.get().suggest(request.copy(k = 5)) }
+                }
                 next.await() to roles.await()
             }
 
@@ -428,13 +429,16 @@ class BoardViewModel : ViewModel() {
         }
     }
 
-    private fun friendly(failure: Throwable): String = when (failure) {
-        is ApiException -> failure.message ?: "The backend refused the request"
-        is ConnectException, is UnknownHostException ->
-            "Cannot reach ${BuildConfig.API_BASE}. Is frontend/serve.sh running?"
-        is SocketTimeoutException ->
-            "The backend did not answer in time. The first model call can be slow."
-        else -> failure.message ?: failure::class.java.simpleName
+    /** Inference failures are local: no backend to blame or retry. */
+    private fun friendly(failure: Throwable): String {
+        Log.e("BoardViewModel", "local inference failed", failure)
+        return when (failure) {
+            is UnsatisfiedLinkError ->
+                "The on-device runtime could not load. Reinstall the app."
+            is OutOfMemoryError ->
+                "Not enough memory to load the models. Restart the app."
+            else -> failure.message ?: failure::class.java.simpleName
+        }
     }
 
     private companion object {

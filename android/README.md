@@ -1,156 +1,109 @@
-# Draft Assistant — Android (MVP)
+# Draft Assistant — Android
 
-Native Kotlin client for the draft-analysis backend in `frontend/`. This is a
-**thin client**: it holds the board, renders it, and asks the Python service two
-questions per board (what to take next, and what fills each open role). No model
-weights, no corpus, no inference on the device.
+Native Kotlin/Compose app for LoL draft analysis. **The models run on the
+phone.** There is no backend, no network dependency, no auth, no API key. Turn
+on airplane mode after installing and the app behaves identically.
 
 ## Status
 
-On branch `android`. **Compiles, tests green, and verified running on an
-emulator** against a live backend. `:app:assembleDebug` produces a 9.6 MB APK
-with no warnings; `:app:testDebugUnitTest` passes 6/6; `:app:lintDebug` reports
-0 errors.
+On branch `android`. `:app:assembleDebug` produces a **75 MB** debug APK
+(36 MB of ExecuTorch weights, 5 MB of portraits); `:app:testDebugUnitTest`
+passes 6/6; `:app:lintDebug` is clean. Verified on a Pixel 5 / API 34 emulator
+and a Pixel 7 Pro, with the backend stopped.
 
-The first emulator run (Pixel 5, API 34, 1080×2340) found three real bugs that
-neither the compiler nor the tests could have caught, all now fixed:
+On-device output was checked against the Python serving path on two boards:
 
-1. **`NetworkOnMainThreadException`** — `reload()` called the API from
-   `viewModelScope`, which is `Dispatchers.Main`. `refresh()` was already
-   correct; the initial load was not.
-2. **`patches` was the wrong type.** It is `[{"id": 106, "key": "16.20"}]`, not
-   a list of strings. The `id` is a row of the checkpoint's patch vocabulary and
-   is *not* an index into the list — the list arrives newest-first, 107 down
-   to 1.
-3. **The fresh board read "draft complete".** `turn` was only computed inside
-   `mutate()`, so the initial load left it null. Both paths now share
-   `withTurn()`.
+| board | device (top 5) | Python reference (top 5) |
+| --- | --- | --- |
+| empty, blue to ban, patch 16.20 | Vi 10.39 %, Poppy 6.59 %, Nocturne 6.39 %, Renata Glasc 5.87 %, Olaf 5.22 % | Vi 10.37 %, Poppy 6.58 %, Nocturne 6.49 %, Renata Glasc 5.85 %, Lee Sin 5.17 % |
+| after banning Poppy | Nocturne 21.42 %, Vi 18.53 %, Cassiopeia 13.64 %, Lee Sin 9.70 %, Qiyana 6.17 % | Nocturne 21.62 %, Vi 18.41 %, Cassiopeia 13.68 %, Lee Sin 9.58 %, Qiyana 6.20 % |
 
-Confirmed on device: patch defaults to 16.20, the turn line and the "on the
-clock" highlight track the plan, the champion grid loads all 173 portraits from
-the dDragon CDN, `/api/next-move` returns a ranked list (Nocturne 13 %, Vi 12 %,
-Poppy 8 % …), "next game" closes G1 into G2 and carries the picks into the
-fearless pool, and a pool champion is dimmed and unselectable in the picker.
+The ranking agrees; the sub-percent deltas are dynamic-int8 noise. The masker's
+blue-SUPPORT cell matches to three decimals (Nautilus 22.7 %, Alistar 13.1 %,
+Rell 9.0 %). A near-tie at ranks 5–6 can flip between the quantized and fp32
+models — that is expected, not a contract failure.
 
-### Build
+## How it works
 
-The toolchain is self-contained (JDK 21, Android SDK 34/35, Gradle 8.9) and kept
-outside the repo, because `sdkmanager.bat` cannot handle the space in the default
-Windows home path — it dies with `'C:\Users\Florian' is not recognized`.
+`LocalEngine` (`data/LocalEngine.kt`) is the whole offline backend. It loads two
+ExecuTorch programs from `assets/`, builds the same tensors the Python serving
+path builds, applies the same legality rules to the logits, and returns the same
+DTOs `DraftApi` used to get over HTTP. `BoardViewModel` and every UI component
+were left untouched at the DTO boundary.
+
+| asset | source checkpoint | size | output |
+| --- | --- | --- | --- |
+| `policy.pte` | `nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw` | 26.6 MB | 173 next-move logits + 10×173 slot logits |
+| `masker.pte` | `masking-proonly-nov13-through-lcp-df-sw` | 10.0 MB | 10×173 role-conditioned completion logits |
+| `offline.json` | both checkpoints + `champ_roles.json` | 40 KB | champions, roles, move plans, patches, lane table |
+| `icons/*.png` | dDragon 16.20.1 | 5 MB | 173 bundled portraits |
+
+The policy is **dynamically quantized int8** (XNNPACK); the masker ships **fp32**
+because ExecuTorch 1.5's out-variant pass cannot lower its quantized ops, and
+10 MB fp32 is a smaller risk than a hand-patched graph.
+
+Both graphs take **int64 tensors only**, including the 0/1 masks. The AAR has
+`Tensor.fromBlob(LongArray, shape)` but no `BooleanArray` overload, so the
+exported graphs cast masks to `bool` internally. Changing that boundary means
+re-exporting both `.pte` files, not patching Kotlin.
+
+First launch copies the weights and portraits into `filesDir` once (a size
+match short-circuits later launches). `Module.load` needs a real path, and Coil
+needs real files. That copy is the only noticeable startup cost.
+
+### Regenerating the assets
+
+Run inside the project's dev container, where the ExecuTorch tooling is cached:
+
+```bash
+docker compose run --rm -T dev python android/tools/export_offline.py
+```
+
+The script reloads both checkpoints, re-exports the graphs, writes
+`offline.json`, and downloads any missing portraits. The export is measured
+once per checkpoint change; do not re-run it as a test.
+
+### Build and verify
+
+The toolchain is outside the repo (the default Windows home contains a space,
+which breaks `sdkmanager.bat`):
 
 ```bash
 TC=/e/android-toolchain
 export JAVA_HOME="$TC/jdk/jdk-21.0.13+9"
 export ANDROID_HOME="$TC/sdk"
 "$TC/gradle/gradle-8.9/bin/gradle" --no-daemon :app:assembleDebug
-"$TC/gradle/gradle-8.9/bin/gradle" --no-daemon :app:testDebugUnitTest
+"$TC/gradle/gradle-8.9/bin/gradle" --no-daemon :app:testDebugUnitTest :app:lintDebug
 ```
 
-`local.properties` points at `E:/android-toolchain/sdk` and is git-ignored, so
-Android Studio will regenerate it on first open.
+`local.properties` points at `E:/android-toolchain/sdk` and is git-ignored.
 
-### Pointing the app at a backend
-
-`API_BASE` is a build property, so no source edit is needed:
+Diagnostics are on logcat under `LocalEngine` (module load, top-8 suggestions,
+role-board method) and `BoardViewModel` (failures with stack traces):
 
 ```bash
-gradle -PapiBase=http://10.0.2.2:8777   assembleDebug   # emulator (default)
-gradle -PapiBase=http://127.0.0.1:8777  assembleDebug   # via `adb reverse`
-gradle -PapiBase=http://192.168.1.20:8777 assembleDebug # LAN device
+adb logcat -v brief | grep -E 'LocalEngine|BoardViewModel'
 ```
 
-You usually do **not** need to set it. `DraftApi` tries the configured address,
-then `10.0.2.2`, then `127.0.0.1`, and caches whichever answers — so the same
-APK works on an emulator and on a phone with `adb reverse`. Only a transport
-failure triggers the next candidate; an HTTP error is surfaced as-is. The final
-error message names every address tried.
+## What the app does
 
-**Over adb (emulator or phone), prefer `adb reverse`** if `10.0.2.2` fails:
+- Empty-to-complete draft board: 5 bans and 5 picks per side, role badge and
+  confidence per placed pick.
+- Ranked next move (k=8), tapped to play into the slot the current turn implies.
+- Patch selector (1-based vocabulary rows) and first-pick selector.
+- **Series and fearless pool**, entirely on-device.
 
-```bash
-adb reverse tcp:8777 tcp:8777
-```
-
-This tunnels over the adb transport, so it works even when the guest has no
-route to the host. That happened in this environment: the AVD booted with only a
-link-local route (`10.0.2.0/24 dev wlan0`) and **no default gateway**, so
-`10.0.2.2` was unreachable *and* the champion portraits could not load. Adding
-the route by hand fixed both:
-
-```bash
-adb root
-adb shell ip route add default via 10.0.2.2 dev eth0
-```
-
-If `10.0.2.2` times out and the images are blank, that is the cause — it is an
-emulator networking problem, not an app bug.
-
-## Running it
-
-1. Start the backend. The default bind is loopback-only, which is exactly what
-   the emulator needs:
-
-   ```bash
-   bash frontend/serve.sh          # http://127.0.0.1:8777
-   ```
-
-2. Open `android/` in Android Studio. AGP 8.7 needs JDK 17-21; the system JDK on
-   this machine is 25, which AGP rejects — Studio's bundled JBR 21 is fine, and
-   the command-line build above pins JDK 21 explicitly.
-
-3. Run on an **emulator**. `BuildConfig.API_BASE` defaults to
-   `http://10.0.2.2:8777`, the emulator's alias for the *host's* loopback, so no
-   server flag needs changing — but see "Pointing the app at a backend" above if
-   the guest has no route to the host.
-
-### On a physical device
-
-`10.0.2.2` is an emulator-only alias — on a phone it is just some address on
-the carrier network. The simple route is **adb reverse**, which needs no change
-to `serve.sh` or to the compose port binding:
-
-```bash
-adb reverse tcp:8777 tcp:8777
-```
-
-The phone's own `127.0.0.1:8777` is then tunnelled to the machine's loopback,
-where the backend already listens. `127.0.0.1` is already permitted for
-cleartext in `network_security_config.xml`, and the app's fallback will find it
-even if you just press Run with the default build. Re-run `adb reverse` after
-reconnecting the cable or rebooting the device — the mapping does not survive a
-new adb transport.
-
-Verified on a Pixel 7 Pro over Android Studio's adb connection: patch 16.20,
-turn line, all champion portraits and the ranked suggestions load normally.
-
-If you would rather run untethered, use the LAN instead: change the compose
-publish from `127.0.0.1:8777` to `0.0.0.0:8777`, build with
-`-PapiBase=http://<LAN-IP>:8777`, and add that same IP to
-`res/xml/network_security_config.xml` (cleartext is blocked by default). There
-is no auth and no TLS — keep it on the LAN.
-
-## What the MVP does
-
-- Fetches `/api/champions`: champions, the role vocabulary, the canonical
-  `move_plan`, the patch list.
-- Renders both sides: 5 bans and 5 picks each, plus a role badge per pick
-  (`assignment` + `conf` from `/api/suggest`).
-- Computes whose turn it is locally, from the published plan.
-- Taps an empty slot to open a searchable champion grid; taps a ban slot to add
-  a ban; the small `×` removes a pick.
-- Asks `/api/next-move` (k=8) and `/api/suggest` (k=5) after every change and
-  lists the head's ranked suggestions; tapping one plays it into the slot the
-  current turn implies.
-- Patch selector and first-pick selector.
-- **Series and fearless pool.** Game chips per series, `＋ game`, `next game`,
-  `clear`, a fearless strip you can edit by hand, and per-game first-pick side.
+`DraftApi` is retained in the tree as a reference implementation of the HTTP
+contract but is no longer called. `BuildConfig.API_BASE` and
+`network_security_config.xml` are likewise inert; they are left so the wire
+format stays inspectable against `frontend/server.py`.
 
 ## Series and fearless
 
-The pool is **stored per game, not derived from earlier games**. That mirrors the
-reference client: each game slot owns an explicit, editable `fearless` list, and
-"next game" folds the closed game's picks into a fresh copy. Deriving it from the
-picks alone would make the manual add/remove unrepresentable.
+The pool is **stored per game, not derived from earlier games**. That mirrors
+the reference client: each game slot owns an explicit, editable `fearless`
+list, and "next game" folds the closed game's picks into a fresh copy.
+Deriving it from the picks alone would make the manual edits unrepresentable.
 
 Transitions, matching `app.js`:
 
@@ -163,33 +116,17 @@ Transitions, matching `app.js`:
   side holding first pick stays the same in 94% of pro games.
 - A closed game that already has a successor cannot be closed again — that would
   splice a duplicate in between. Use `＋ game` to insert one.
-- The pool blocks **picks but never bans**. It is not a "taken" list.
+- The pool blocks **picks but never bans**. The serving head keeps that
+  training-time rule; a fearless champion can still be suggested as a ban.
 
-Every request sends `fearless` (this game's pool) and `series`
-(`{game, of, games:[{game, picks, fearless, closed}]}`). The server renders the
-series into lines itself; no client text reaches a model prompt.
+The pool is sent to the policy as 40 ascending champion-id tokens, PAD-filled,
+all with FLEX roles — the same input `NaiveTransformerPolicy._batch` builds. It
+is also applied as a logit mask before the top-k on picks.
 
-One caveat carried over from the web UI that this client does **not** surface:
-if the answering model is a masking checkpoint rather than the next-move head,
-the pool was applied as a post-filter on an answer computed as if those
-champions were available (`method == "masker"` with `fearless_filtered > 0`). The
-head takes the pool as an input and re-scores. The default next-move model is
-now the role-conditioned naive transformer
-(`nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw`), so this is
-dormant — but it is why `SuggestResponse.fearlessFiltered` is parsed. The
-transformer sees the pool as 40 tokens and masks it on picks only; a champion in
-the pool can still be banned. Its slot head is **not** wired into this client's
-role board: ban-phase cells still come from the masking checkpoint, and pick-phase
-cells use the role-filtered next-move head. The header's `model` label reports
-whichever checkpoint the server actually loaded at startup.
-
-## What it deliberately does not do yet
-
-- No real-draft walkthrough (`/api/drafts`, `/api/draft`).
-- No agent chat (`/api/agent`, `/api/agent-suggest`) — that needs an
-  `LLM_API_KEY` server-side, and shipping it means paying for other people's
-  tokens.
-- No checkpoint picker (`/api/load`). The server's startup defaults are used.
+Role-board routing matches `model_tools.predict_in_lane`: when the next move is
+a pick and all ten bans are placed, the head answers each open cell with a
+lane-constrained logit mask; during the ban phase the masking checkpoint
+answers instead. The route is reported in logcat (`method=head|masker|mixed`).
 
 ## Contract notes worth keeping
 
@@ -198,44 +135,59 @@ These are the places where a plausible-looking reimplementation is wrong:
 - **`move_plan`'s second element is the SIDE (0 blue, 1 red), not a slot index.**
   A pick's slot is not in the plan at all. Position is found by *consuming
   counts* — n bans and n picks against the kinds in order — not by testing which
-  slots look filled. See `data/DraftOrder.kt`, ported from
-  `frontend/static/draft-order.js`.
+  slots look filled. See `data/DraftOrder.kt`.
+- **Champion ids on the wire are Riot ids; tensors use 0..172 model indices.**
+  `offline.json` carries both. Mixing them produces a confident, wrong answer.
+- **`picks` is indexed by slot**, 10 entries, null for empty. Slots 0-4 are blue,
+  5-9 red.
+- **`fearless: []` differs from omitting `fearless`** in the old HTTP contract.
+  The DTOs still set `encodeDefaults` for that reason.
+- **Legality is a logit mask before the top-k**, value `-1e4`, never a filter
+  afterwards. Filtering the top-k empties a lane cell 13 % of the time.
+- **Patch ids are 1-based vocabulary rows**; 0 is UNK. 107 is valid, 108 is not.
 - **Role keys are names** (`TOP..SUPPORT`) on every route. Never index a role
   list numerically.
 - **A reply belongs to the board it was asked about.** `BoardViewModel` stamps
   each request with a board signature and drops a reply whose signature no
-  longer matches; role badges are cleared on every board change so a badge is
-  never shown for a board it never saw. The web client had exactly this bug —
-  a fresh pick looking ignored.
-- **`picks` is indexed by slot**, 10 entries, null for empty. Slots 0-4 are blue,
-  5-9 red.
-- Champion icons are dDragon CDN URLs from the API — nothing is bundled, so the
-  first load needs network.
+  longer matches; role badges are cleared on every board change.
+- **Per-slot role assignment is a joint search**, not a per-champion argmax:
+  120 injective placements per team. A plain argmax would put two flex champions
+  in the same lane and disagree with the server's 96 %-agreement table.
 
 ## Layout
 
 ```
+android/tools/export_offline.py      export .pte + metadata + icons
+app/src/main/assets/
+  policy.pte  masker.pte  offline.json  icons/*.png
 app/src/main/java/com/draftassistant/
-  MainActivity.kt            entry point
+  MainActivity.kt            initialises LocalEngine with app context
   data/Models.kt             wire DTOs, field-for-field with server.py
   data/DraftOrder.kt         board -> next turn (ported, not reinvented)
-  data/DraftApi.kt           OkHttp + kotlinx.serialization, 3 routes
+  data/LocalEngine.kt        ExecuTorch runtime, tensor builder, legality, role table
+  data/DraftApi.kt           legacy HTTP reference, no longer called
   ui/BoardViewModel.kt       board + series state, debounce, stale-reply guard
   ui/BoardScreen.kt          board, series bar, fearless strip, suggestions
-  ui/ChampionPicker.kt       bottom-sheet champion grid
+  ui/ChampionPicker.kt       bundled-portrait champion grid
   ui/Theme.kt                palette lifted from style.css
-
 app/src/test/java/com/draftassistant/data/
   DraftOrderTest.kt          pins the plan to infer.move_plan's four sequences
 ```
 
+## Deliberately absent
+
+- No real-draft walkthrough, agent chat, or LLM features — those need data or
+  tokens that do not belong on a phone.
+- No checkpoint picker. The two shipped defaults are compiled into the assets.
+- No series persistence across process death. The web client uses
+  `localStorage`; this holds the series in memory only.
+
 ## Next steps, in order
 
-1. Compare the turn highlight and the suggestion list against the web UI on the
-   same boards. If they disagree, `DraftOrder` is wrong, not the server.
-2. Persist the series across process death (the web client uses `localStorage`;
-   this holds it in memory only, so a restart loses the series).
-3. Reach a real game end-to-end: 6 bans, 6 picks, 4 bans, 4 picks, and confirm
-   the board reads "draft complete" at move 21 rather than earlier.
-4. Then decide on hosting: auth, TLS, and a real base URL — before any of the
-   agent features ship to anyone else.
+1. Reach a full 20-move draft end-to-end and confirm the header reads "draft
+   complete" at move 21, not earlier.
+2. Exercise the head path of the role board (ban phase complete) on device and
+   compare a lane cell against `model_tools.predict_in_lane`.
+3. Persist the series across process death.
+4. Consider shipping the masker quantized if ExecuTorch gains the missing
+   out-variants — it would save ~6 MB.
