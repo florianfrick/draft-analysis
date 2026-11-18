@@ -130,6 +130,22 @@ a pick and all ten bans are placed, the head answers each open cell with a
 lane-constrained logit mask; during the ban phase the masking checkpoint
 answers instead. The route is reported in logcat (`method=head|masker|mixed`).
 
+## Walkthrough video
+
+`video/blg_geng_worlds_2023.mp4` is a 59-second recording of the app replaying
+all five games of the 2023 Worlds BLG vs Gen.G series from
+`assets/demo/blg_geng_worlds2023.json`. Every move goes through the same
+`placePick`/`placeBan` path a tap uses, so the ranked suggestions in the video
+are the live ExecuTorch answers, not canned rows.
+
+To replay it yourself:
+
+```bash
+adb shell am start -n com.draftassistant/.MainActivity --es demo blg_geng_worlds2023
+```
+
+The demo is opt-in via that intent extra; a normal launch is unaffected.
+
 ## Contract notes worth keeping
 
 These are the places where a plausible-looking reimplementation is wrong:

@@ -32,6 +32,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -42,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -54,9 +56,13 @@ import com.draftassistant.data.Suggestion
 import kotlin.math.roundToInt
 
 @Composable
-fun BoardScreen(viewModel: BoardViewModel = viewModel()) {
+fun BoardScreen(viewModel: BoardViewModel = viewModel(), demo: String? = null) {
     val state by viewModel.state.collectAsState()
     var target by remember { mutableStateOf<PickerTarget?>(null) }
+    val context = LocalContext.current.applicationContext
+    LaunchedEffect(demo) {
+        if (demo != null) viewModel.playDemo(context, demo)
+    }
 
     Scaffold(
         containerColor = Bg,
@@ -70,7 +76,7 @@ fun BoardScreen(viewModel: BoardViewModel = viewModel()) {
             when {
                 state.loading -> CenteredMessage("loading champions…")
                 state.champions.isEmpty() -> ErrorPane(state.error, viewModel::reload)
-                else -> DraftContent(state, viewModel) { target = it }
+                else -> DraftContent(state, viewModel, { target = it }, demo = demo != null)
             }
         }
     }
@@ -237,11 +243,19 @@ private fun DraftContent(
     state: UiState,
     viewModel: BoardViewModel,
     onOpenPicker: (PickerTarget) -> Unit,
+    demo: Boolean = false,
 ) {
+    val scroll = rememberScrollState()
+    // The walkthrough recording wants the board and the live suggestions in
+    // one frame; the normal app starts at the top, where both panels fit only
+    // after a scroll.
+    LaunchedEffect(demo) {
+        if (demo) scroll.animateScrollTo(560)
+    }
     Column(
         Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(scroll)
             .padding(horizontal = 12.dp, vertical = 12.dp),
     ) {
         SeriesPanel(state, viewModel)

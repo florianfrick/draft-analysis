@@ -1,10 +1,13 @@
 package com.draftassistant.ui
 
+import android.content.Context
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.draftassistant.data.ApiJson
 import com.draftassistant.data.BoardRequest
 import com.draftassistant.data.Champion
+import com.draftassistant.data.DemoSeries
 import com.draftassistant.data.DraftMove
 import com.draftassistant.data.DraftOrder
 import com.draftassistant.data.LocalEngine
@@ -137,6 +140,48 @@ class BoardViewModel : ViewModel() {
 
     init {
         reload()
+    }
+
+    // --------------------------------------------------------------- demo
+
+    /**
+     * Replays a real series from `assets/demo/` for the walkthrough video.
+     * Each move goes through the same `placePick`/`placeBan` path a tap uses,
+     * so the suggestions on screen are the live engine's answers, not canned
+     * rows. Games are separated with `addGame()`, not `nextGame()`: the 2023
+     * Worlds series had no fearless rule, so no pool may be carried over.
+     */
+    fun playDemo(context: Context, name: String) {
+        viewModelScope.launch {
+            val series = withContext(Dispatchers.IO) {
+                context.assets.open("demo/$name.json").use { input ->
+                    ApiJson.decodeFromString(
+                        DemoSeries.serializer(),
+                        input.readBytes().toString(Charsets.UTF_8),
+                    )
+                }
+            }
+            Log.i("BoardViewModel", "demo: ${series.title} (${series.games.size} games)")
+            clearSeries()
+            delay(DEMO_LEAD_MS)
+            series.games.forEachIndexed { index, game ->
+                if (index > 0) {
+                    addGame()
+                    delay(DEMO_GAME_PAUSE_MS)
+                }
+                for (move in game.moves) {
+                    when (move.k) {
+                        "ban" -> placeBan(move.s, move.c)
+                        "pick" -> _state.value.firstEmptySlot(move.s)?.let {
+                            placePick(it, move.c)
+                        }
+                    }
+                    delay(DEMO_STEP_MS)
+                }
+                delay(DEMO_GAME_PAUSE_MS)
+            }
+            Log.i("BoardViewModel", "demo finished")
+        }
     }
 
     // ------------------------------------------------------------------- load
@@ -443,5 +488,8 @@ class BoardViewModel : ViewModel() {
 
     private companion object {
         const val DEBOUNCE_MS = 140L
+        const val DEMO_LEAD_MS = 2_000L
+        const val DEMO_STEP_MS = 450L
+        const val DEMO_GAME_PAUSE_MS = 1_400L
     }
 }
