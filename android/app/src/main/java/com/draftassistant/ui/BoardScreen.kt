@@ -191,7 +191,7 @@ private fun PatchMenu(state: UiState, onSelect: (Int) -> Unit) {
 
 /**
  * One control, not two side buttons: a switch whose track carries the label
- * "first pick" and whose thumb slides to the side that will pick first.
+ * "First Pick" and whose thumb slides to the side that will pick first.
  * value 0 = blue, 1 = red (the same convention the request DTO uses).
  */
 @Composable
@@ -200,7 +200,7 @@ private fun FirstPickToggle(value: Int, onChange: (Int) -> Unit) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
-            .width(112.dp)
+            .width(94.dp)
             .height(28.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(accent.copy(alpha = 0.16f))
@@ -211,9 +211,9 @@ private fun FirstPickToggle(value: Int, onChange: (Int) -> Unit) {
         if (value == 0) {
             SwitchThumb(accent)
             Spacer(Modifier.width(6.dp))
-            Text("first pick", color = TextPrimary, fontSize = 11.sp)
+            Text("First Pick", color = TextPrimary, fontSize = 11.sp)
         } else {
-            Text("first pick", color = TextPrimary, fontSize = 11.sp)
+            Text("First Pick", color = TextPrimary, fontSize = 11.sp)
             Spacer(Modifier.width(6.dp))
             SwitchThumb(accent)
         }
