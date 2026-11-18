@@ -127,7 +127,7 @@ private fun DraftTopBar(state: UiState, viewModel: BoardViewModel) {
                     Spacer(Modifier.width(10.dp))
                 }
                 TextButton(onClick = viewModel::reset) {
-                    Text("Reset", color = Muted, fontSize = 13.sp)
+                    Text("Reset Game", color = Muted, fontSize = 13.sp)
                 }
             }
 
@@ -189,33 +189,45 @@ private fun PatchMenu(state: UiState, onSelect: (Int) -> Unit) {
     }
 }
 
+/**
+ * One control, not two side buttons: a switch whose track carries the label
+ * "first pick" and whose thumb slides to the side that will pick first.
+ * value 0 = blue, 1 = red (the same convention the request DTO uses).
+ */
 @Composable
 private fun FirstPickToggle(value: Int, onChange: (Int) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("first pick", color = Muted, fontSize = 11.sp)
-        Spacer(Modifier.width(8.dp))
-        SidePill("Blue", value == 0, BlueSide) { onChange(0) }
-        Spacer(Modifier.width(6.dp))
-        SidePill("Red", value == 1, RedSide) { onChange(1) }
+    val accent = if (value == 1) RedSide else BlueSide
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .width(112.dp)
+            .height(28.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(accent.copy(alpha = 0.16f))
+            .border(1.dp, accent, RoundedCornerShape(14.dp))
+            .clickable { onChange(if (value == 0) 1 else 0) }
+            .padding(horizontal = 5.dp),
+    ) {
+        if (value == 0) {
+            SwitchThumb(accent)
+            Spacer(Modifier.width(6.dp))
+            Text("first pick", color = TextPrimary, fontSize = 11.sp)
+        } else {
+            Text("first pick", color = TextPrimary, fontSize = 11.sp)
+            Spacer(Modifier.width(6.dp))
+            SwitchThumb(accent)
+        }
     }
 }
 
 @Composable
-private fun SidePill(label: String, selected: Boolean, accent: Color, onClick: () -> Unit) {
+private fun SwitchThumb(accent: Color) {
     Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(if (selected) accent.copy(alpha = 0.18f) else PanelSunken)
-            .border(1.dp, if (selected) accent else Line, RoundedCornerShape(6.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 5.dp),
-    ) {
-        Text(
-            text = label,
-            color = if (selected) accent else Muted,
-            fontSize = 12.sp,
-        )
-    }
+        Modifier
+            .size(16.dp)
+            .clip(CircleShape)
+            .background(accent),
+    )
 }
 
 // -------------------------------------------------------------------- content
@@ -498,15 +510,12 @@ private fun SeriesPanel(state: UiState, viewModel: BoardViewModel) {
             ) {
                 series.games.forEachIndexed { index, game ->
                     GameChip(
-                        index = index,
                         game = game,
                         selected = index == series.current,
                         onClick = { viewModel.openGame(index) },
                     )
                 }
             }
-            Spacer(Modifier.width(8.dp))
-            SmallButton("＋ game") { viewModel.addGame() }
         }
 
         Spacer(Modifier.height(9.dp))
@@ -527,7 +536,7 @@ private fun SeriesPanel(state: UiState, viewModel: BoardViewModel) {
 }
 
 @Composable
-private fun GameChip(index: Int, game: GameSlot, selected: Boolean, onClick: () -> Unit) {
+private fun GameChip(game: GameSlot, selected: Boolean, onClick: () -> Unit) {
     val picks = game.picks.count { it != null }
     val accent = if (game.firstPick == 1) RedSide else BlueSide
 
@@ -540,11 +549,6 @@ private fun GameChip(index: Int, game: GameSlot, selected: Boolean, onClick: () 
             .clickable(onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 5.dp),
     ) {
-        Text(
-            text = "G${index + 1}",
-            color = if (selected) TextPrimary else Muted,
-            fontSize = 11.sp,
-        )
         Text(
             text = (if (game.firstPick == 1) "R" else "B") + " $picks/10" +
                 if (game.done) " ✓" else "",
@@ -657,16 +661,6 @@ private fun SuggestionsPanel(state: UiState, viewModel: BoardViewModel) {
                     text = if (it.kind == MoveKind.PICK) "next pick" else "next ban",
                     color = Muted,
                     fontSize = 11.sp,
-                )
-            }
-            Spacer(Modifier.weight(1f))
-            state.modelLabel?.let {
-                Text(
-                    text = it.substringAfterLast('/'),
-                    color = Muted,
-                    fontSize = 10.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }

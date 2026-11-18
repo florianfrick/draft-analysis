@@ -90,7 +90,8 @@ adb logcat -v brief | grep -E 'LocalEngine|BoardViewModel'
 - Empty-to-complete draft board: 5 bans and 5 picks per side, role badge and
   confidence per placed pick.
 - Ranked next move (k=8), tapped to play into the slot the current turn implies.
-- Patch selector (1-based vocabulary rows) and first-pick selector.
+- Patch selector (1-based vocabulary rows) and a first-pick toggle switch whose
+  label sits inside the switch and whose thumb marks blue (left) or red (right).
 - **Series and fearless pool**, entirely on-device.
 
 `DraftApi` is retained in the tree as a reference implementation of the HTTP
@@ -107,15 +108,16 @@ Deriving it from the picks alone would make the manual edits unrepresentable.
 
 Transitions, matching `app.js`:
 
-- `＋ game` appends a slot that **inherits the current pool unchanged** — nothing
-  was closed, so it is the same point in the series.
 - `next game` sets `done` on the current slot, computes
   `pool + picks` of this game, and inserts a successor at `current + 1`. Bans
   never enter the pool: a champion banned in game 1 is legal again in game 2.
+  `addGame()` still exists in the ViewModel (it appends a slot inheriting the
+  current pool unchanged) but the UI no longer exposes a `＋ game` button; game
+  chips show only the side and pick count, not a `G1`/`G2` label.
 - **First pick is kept, not flipped.** The teams swap sides between games but the
   side holding first pick stays the same in 94% of pro games.
 - A closed game that already has a successor cannot be closed again — that would
-  splice a duplicate in between. Use `＋ game` to insert one.
+  splice a duplicate in between. `clear` is the way to start over.
 - The pool blocks **picks but never bans**. The serving head keeps that
   training-time rule; a fearless champion can still be suggested as a ban.
 
