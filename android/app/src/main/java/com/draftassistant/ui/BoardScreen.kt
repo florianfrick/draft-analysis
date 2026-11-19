@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -27,8 +28,10 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -51,6 +54,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.draftassistant.data.Champion
+import com.draftassistant.data.ChatMessage
 import com.draftassistant.data.MoveKind
 import com.draftassistant.data.Suggestion
 import kotlin.math.roundToInt
@@ -132,6 +136,16 @@ private fun DraftTopBar(state: UiState, viewModel: BoardViewModel) {
                     )
                     Spacer(Modifier.width(10.dp))
                 }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Chat", color = Muted, fontSize = 11.sp)
+                    Spacer(Modifier.width(5.dp))
+                    Switch(
+                        checked = state.chatEnabled,
+                        onCheckedChange = viewModel::setChatEnabled,
+                        modifier = Modifier.height(28.dp),
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
                 TextButton(onClick = viewModel::reset) {
                     Text("Reset Game", color = Muted, fontSize = 13.sp)
                 }
@@ -269,6 +283,10 @@ private fun DraftContent(
         SidePanel(1, state, viewModel, onOpenPicker)
         Spacer(Modifier.height(16.dp))
         SuggestionsPanel(state, viewModel)
+        if (state.chatEnabled) {
+            Spacer(Modifier.height(16.dp))
+            ChatPanel(state, viewModel)
+        }
         Spacer(Modifier.height(24.dp))
     }
 }
@@ -764,6 +782,132 @@ private fun SuggestionRow(suggestion: Suggestion, state: UiState, onClick: () ->
             color = Muted,
             fontSize = 12.sp,
         )
+    }
+}
+
+// ----------------------------------------------------------------------- chat
+
+@Composable
+private fun ChatPanel(state: UiState, viewModel: BoardViewModel) {
+    val scroll = rememberScrollState()
+    var draft by remember { mutableStateOf("") }
+
+    LaunchedEffect(state.chatMessages.size) {
+        if (state.chatMessages.isNotEmpty()) scroll.animateScrollTo(scroll.maxValue)
+    }
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Panel)
+            .border(1.dp, Line, RoundedCornerShape(12.dp))
+            .padding(10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Ask about this board",
+                color = TextPrimary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+            )
+            Spacer(Modifier.weight(1f))
+            Text("off by default", color = Muted, fontSize = 10.sp)
+        }
+
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Answers use the board at the moment you send. No call is made on a board change.",
+            color = Muted,
+            fontSize = 10.sp,
+        )
+
+        Spacer(Modifier.height(8.dp))
+        QuickQuestion("Justify the optimal next move.") {
+            viewModel.askChat("Justify the optimal next move.")
+        }
+        QuickQuestion("What team composition archetype is each team aiming toward?") {
+            viewModel.askChat("What team composition archetype is each team aiming toward?")
+        }
+
+        Spacer(Modifier.height(8.dp))
+        if (state.chatMessages.isEmpty()) {
+            Text("No questions yet. The local model above is unchanged.", color = Muted, fontSize = 11.sp)
+        } else {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 340.dp)
+                    .verticalScroll(scroll),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                state.chatMessages.forEach { ChatBubble(it) }
+            }
+        }
+
+        state.chatError?.let { error ->
+            Spacer(Modifier.height(6.dp))
+            Text(error, color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = draft,
+                onValueChange = { draft = it },
+                modifier = Modifier.weight(1f),
+                placeholder = { Text("Ask a question…", color = Muted, fontSize = 12.sp) },
+                singleLine = true,
+                maxLines = 1,
+                enabled = !state.chatBusy,
+            )
+            Spacer(Modifier.width(8.dp))
+            SmallButton(
+                label = if (state.chatBusy) "…" else "send",
+                enabled = draft.isNotBlank() && !state.chatBusy,
+            ) {
+                viewModel.askChat(draft)
+                draft = ""
+            }
+        }
+
+        state.chatRemaining?.let { remaining ->
+            Spacer(Modifier.height(6.dp))
+            Text("$remaining questions left today", color = Muted, fontSize = 10.sp)
+        }
+    }
+}
+
+@Composable
+private fun QuickQuestion(label: String, onClick: () -> Unit) {
+    TextButton(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        colors = ButtonDefaults.textButtonColors(contentColor = Accent),
+    ) {
+        Text(label, fontSize = 12.sp)
+    }
+}
+
+@Composable
+private fun ChatBubble(message: ChatMessage) {
+    val user = message.role == "user"
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (user) PanelSunken else PanelRaised)
+            .border(1.dp, Line, RoundedCornerShape(8.dp))
+            .padding(8.dp),
+    ) {
+        Text(
+            text = if (user) "You" else "Assistant",
+            color = if (user) Accent else BlueSide,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Medium,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(message.content, color = TextPrimary, fontSize = 12.sp)
     }
 }
 

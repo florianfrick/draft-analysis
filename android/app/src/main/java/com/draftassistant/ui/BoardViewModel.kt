@@ -7,6 +7,9 @@ import androidx.lifecycle.viewModelScope
 import com.draftassistant.data.ApiJson
 import com.draftassistant.data.BoardRequest
 import com.draftassistant.data.Champion
+import com.draftassistant.data.ChatClient
+import com.draftassistant.data.ChatMessage
+import com.draftassistant.data.ChatRequest
 import com.draftassistant.data.DemoSeries
 import com.draftassistant.data.DraftMove
 import com.draftassistant.data.DraftOrder
@@ -29,6 +32,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.Locale
+import kotlin.math.roundToInt
 
 /**
  * One game of a series.
@@ -83,6 +88,14 @@ data class UiState(
 
     val note: String? = null,
     val modelLabel: String? = null,
+
+    // Opt-in chat. Nothing here is updated by a board change: a chat turn is
+    // sent only when the user asks a question.
+    val chatEnabled: Boolean = false,
+    val chatMessages: List<ChatMessage> = emptyList(),
+    val chatBusy: Boolean = false,
+    val chatError: String? = null,
+    val chatRemaining: Int? = null,
 ) {
     val plan: List<DraftMove>? get() = plans[firstPick]
     val allBans: List<Int> get() = bansBlue + bansRed
@@ -115,6 +128,59 @@ data class UiState(
         append('|').append(patchId)
         append('|').append(pool.joinToString(","))
         append('|').append(series.current)
+    }
+
+    /** Facts the chat Worker may use. It never sees a DeepSeek key or our UI code. */
+    fun chatEvidence(): List<String> {
+        val lines = ArrayList<String>()
+        fun names(ids: List<Int>): String =
+            ids.joinToString(", ") { byRiot[it]?.name ?: "champion $it" }
+                .ifEmpty { "none" }
+
+        lines += "Board: blue [${names(picks.take(5).filterNotNull())}]; " +
+            "red [${names(picks.drop(5).filterNotNull())}]"
+        lines += "Bans: blue [${names(bansBlue)}]; red [${names(bansRed)}]"
+        lines += "Move on the clock: " + when (val t = turn) {
+            null -> "draft complete"
+            else -> "${sideName(t.side)} to ${if (t.kind == MoveKind.PICK) "pick" else "ban"}, " +
+                "move ${t.index + 1}/20"
+        }
+        lines += "Fearless pool (blocks picks, not bans): ${names(pool)}"
+        lines += "Series: game ${series.current + 1}/${series.games.size}, ${pool.size} fearless"
+        val patchKey = patches.firstOrNull { it.id == patchId }?.key ?: "unknown"
+        lines += "Patch: $patchKey (id $patchId)"
+
+        if (suggestions.isEmpty()) {
+            lines += "predict_next_move: no answer for this board"
+        } else {
+            lines += "predict_next_move (share is a fraction of the legal pool, NOT correctness):"
+            suggestions.take(8).forEachIndexed { i, s ->
+                lines += "  #${i + 1} ${s.name}: ${(s.prob * 100).roundToInt()}% share"
+            }
+        }
+
+        val roleRows = picks.mapIndexedNotNull { slot, riot ->
+            val role = assignment.getOrNull(slot) ?: return@mapIndexedNotNull null
+            val name = byRiot[riot]?.name ?: "champion $riot"
+            val pct = conf.getOrNull(slot)?.let { " (${(it * 100).roundToInt()}% of its own picks)" }
+                ?: ""
+            "${sideName(slot / 5)} $name: ${role.lowercase(Locale.ROOT)}$pct"
+        }
+        if (roleRows.isNotEmpty()) {
+            lines += "predict_roles (one-to-one per side): ${roleRows.joinToString("; ")}"
+        }
+        val allRoles = roles.map { it.lowercase(Locale.ROOT) }
+        fun openFor(side: Int): String {
+            val from = side * 5
+            val taken = (from until from + 5)
+                .mapNotNull { assignment.getOrNull(it)?.lowercase(Locale.ROOT) }
+                .toSet()
+            return allRoles.filterNot { it in taken }.joinToString(", ").ifEmpty { "none" }
+        }
+        lines += "open_roles: blue [${openFor(0)}]; red [${openFor(1)}]"
+
+        note?.takeIf { it.isNotBlank() }?.let { lines += "Model note: $it" }
+        return lines
     }
 
     fun seriesBody(): SeriesBody = SeriesBody(
@@ -275,6 +341,58 @@ class BoardViewModel : ViewModel() {
             suggestions = emptyList(),
             suggestionIndex = -1,
         )
+    }
+
+    // ------------------------------------------------------------------ chat
+
+    /** Chat is opt-in; toggling it never sends a request. */
+    fun setChatEnabled(enabled: Boolean) =
+        _state.update { it.copy(chatEnabled = enabled, chatError = null) }
+
+    fun clearChat() = _state.update {
+        it.copy(chatMessages = emptyList(), chatError = null, chatRemaining = null)
+    }
+
+    /**
+     * The only path that calls the hosted model. A board edit calls `refresh()`
+     * instead, so the LLM is never woken up by a pick, ban, patch or series tap.
+     */
+    fun askChat(question: String) {
+        val text = question.trim()
+        val snapshot = _state.value
+        if (text.isBlank() || snapshot.chatBusy || !snapshot.chatEnabled) return
+
+        val evidence = snapshot.chatEvidence()
+        val history = snapshot.chatMessages.takeLast(6)
+        val userTurn = ChatMessage("user", text)
+        _state.update {
+            it.copy(chatBusy = true, chatError = null, chatMessages = it.chatMessages + userTurn)
+        }
+
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    ChatClient.get().ask(
+                        ChatRequest(question = text, evidence = evidence, history = history))
+                }
+            }
+            result.onSuccess { response ->
+                _state.update { current ->
+                    current.copy(
+                        chatBusy = false,
+                        chatError = null,
+                        chatRemaining = response.remaining ?: current.chatRemaining,
+                        chatMessages = current.chatMessages + ChatMessage("assistant", response.answer),
+                    )
+                }
+            }.onFailure { failure ->
+                Log.e("BoardViewModel", "chat request failed", failure)
+                _state.update {
+                    it.copy(chatBusy = false, chatError = failure.message?.takeIf(String::isNotBlank)
+                        ?: "Chat request failed.")
+                }
+            }
+        }
     }
 
     // ----------------------------------------------------------------- series

@@ -21,6 +21,11 @@ plugins {
 // port mapping in docker-compose.yml.
 val apiBase = (findProperty("apiBase") as String?) ?: "http://10.0.2.2:8777"
 
+// Public Cloudflare Worker URL for the opt-in chat panel. Empty by default:
+// the app stays fully offline until an endpoint is supplied at build time.
+//   gradle -PchatEndpoint=https://draft-assistant-chat.<subdomain>.workers.dev assembleDebug
+val chatEndpoint = (findProperty("chatEndpoint") as String?) ?: ""
+
 android {
     namespace = "com.draftassistant"
     compileSdk = 35
@@ -38,6 +43,7 @@ android {
         versionName = "0.1-mvp"
 
         buildConfigField("String", "API_BASE", "\"$apiBase\"")
+        buildConfigField("String", "CHAT_ENDPOINT", "\"$chatEndpoint\"")
     }
 
     buildFeatures {

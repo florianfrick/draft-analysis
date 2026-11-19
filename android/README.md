@@ -179,6 +179,84 @@ python android/tools/animate_rank_bars.py   # needs Pillow + ffmpeg
 The rank step uses `NaiveTransformerPolicy.next_move`, the same path the
 ExecuTorch export mirrors; the renderer only draws the resulting counts.
 
+## Optional DeepSeek chat
+
+Chat is **off by default** and question-driven. A board edit never calls the
+hosted model: it only refreshes the ExecuTorch suggestions. The chat switch in
+the top bar reveals a panel with two default questions and a free-text field.
+Answers may be several paragraphs — the three-sentence cap in
+`pro/model/agent/prompt_explained.py` belongs to the measured reranking
+experiment and was deliberately **not** applied here.
+
+### Cloudflare dashboard setup
+
+1. Sign in at <https://dash.cloudflare.com> → **Workers & Pages** → **Create** →
+   **Worker**. Name it `draft-assistant-chat` and deploy the starter.
+2. Open the Worker → **Settings → Variables & Secrets**. Add a **secret**
+   `DEEPSEEK_API_KEY` (create one at <https://platform.deepseek.com/api_keys>).
+   Add plain variables:
+   - `DEEPSEEK_BASE_URL` = `https://api.deepseek.com`
+   - `DEEPSEEK_MODEL` = `deepseek-flash`
+   - `DAILY_LIMIT` = `30`
+   - `MAX_TOKENS` = `900`
+3. **Workers & Pages → KV → Create a namespace**, e.g.
+   `draft-assistant-chat-quota`. Back in the Worker's **Variables & Secrets**,
+   add a **KV namespace binding** with variable name `CHAT_QUOTA`.
+4. Paste `android/worker/src/index.js` into the Worker editor and deploy. The
+   key stays in Cloudflare; it is never in the APK or the repo.
+5. Copy the URL from the Worker's **Overview** tab, e.g.
+   `https://draft-assistant-chat.<subdomain>.workers.dev`, and build the app:
+
+   ```bash
+   export JAVA_HOME="E:/android-toolchain/jdk/jdk-21.0.13+9"
+   "E:/android-toolchain/gradle/gradle-8.9/bin/gradle" --no-daemon \
+     -p android -PchatEndpoint=https://draft-assistant-chat.<subdomain>.workers.dev \
+     :app:assembleDebug
+   ```
+
+6. Smoke-test the Worker before installing the APK:
+
+   ```bash
+   curl -X POST https://draft-assistant-chat.<subdomain>.workers.dev \
+     -H 'content-type: application/json' -H 'x-install-id: localtest1234' \
+     -d '{"question":"Hello","evidence":["Board: blue [Aatrox]; red [Poppy]"]}'
+   ```
+
+The `CHAT_QUOTA` daily cap is a server-side abuse throttle keyed by an
+anonymous install id plus IP — **not authentication**. For a stricter per-minute
+burst limit, deploy with Wrangler instead of the dashboard editor: fill in the
+KV id in `android/worker/wrangler.toml`, then
+
+```bash
+cd android/worker
+npx wrangler secret put DEEPSEEK_API_KEY
+npx wrangler deploy
+```
+
+The `[[ratelimits]]` block in `wrangler.toml` adds an 8-per-minute burst guard;
+rate-limit bindings are not configurable in the dashboard.
+
+### Which agent tools carry over
+
+The agent model did not beat the base model, so chat is a **mouth, not a second
+decision maker**. Tools are precomputed on the phone and attached as evidence;
+the Worker owns the prompt and the upstream call.
+
+| From `/agent` | In chat? | Reason |
+|---|---|---|
+| `get_state` | yes, as `ChatViewModel.chatEvidence()` | the board must be read, never retyped by an LLM |
+| `predict_next_move` | yes, top 8 | the head's shortlist is the factual basis for justification |
+| `predict_roles` | yes, assignment + open roles | explains composition without pretending to be a win model |
+| `sql` | no | no corpus on the phone; low-level and token-hungry |
+| `soloq_matchup` | no | DuckDB store is not bundled; different population |
+| `clone/apply/undo/list_states` | no | exploration for reasoning, not explanation |
+| `rank_candidates` | no | already removed from `/agent` |
+
+New pieces: the evidence snapshot (board, bans, fearless, patch, series, model
+shortlist, roles), the two default question buttons, and the server-side quota.
+The Worker prompt explicitly forbids inventing numbers and labels composition
+reads as interpretation.
+
 ## Contract notes worth keeping
 
 These are the places where a plausible-looking reimplementation is wrong:
@@ -212,23 +290,29 @@ android/tools/export_offline.py      export .pte + metadata + icons
 app/src/main/assets/
   policy.pte  masker.pte  offline.json  icons/*.png
 app/src/main/java/com/draftassistant/
-  MainActivity.kt            initialises LocalEngine with app context
+  MainActivity.kt            initialises LocalEngine and ChatClient
   data/Models.kt             wire DTOs, field-for-field with server.py
   data/DraftOrder.kt         board -> next turn (ported, not reinvented)
   data/LocalEngine.kt        ExecuTorch runtime, tensor builder, legality, role table
+  data/ChatClient.kt         optional Worker client; install id, no API key
+  data/ChatModels.kt         chat request/response DTOs
   data/DraftApi.kt           legacy HTTP reference, no longer called
-  ui/BoardViewModel.kt       board + series state, debounce, stale-reply guard
-  ui/BoardScreen.kt          board, series bar, fearless strip, suggestions
+  ui/BoardViewModel.kt       board + series state, debounce, stale-reply guard, chat
+  ui/BoardScreen.kt          board, series bar, fearless strip, suggestions, chat
   ui/ChampionPicker.kt       bundled-portrait champion grid
   ui/Theme.kt                palette lifted from style.css
 app/src/test/java/com/draftassistant/data/
   DraftOrderTest.kt          pins the plan to infer.move_plan's four sequences
+worker/
+  wrangler.toml              Worker name, KV binding, burst limit, model vars
+  src/index.js               DeepSeek proxy + prompt + quota; key is a secret
 ```
 
 ## Deliberately absent
 
-- No real-draft walkthrough, agent chat, or LLM features — those need data or
-  tokens that do not belong on a phone.
+- No automatic chat on board changes. The switch only reveals the panel; the
+  local suggestions stay fully offline.
+- No API key in the app, no key picker, and no tracked `.env` in `worker/`.
 - No checkpoint picker. The two shipped defaults are compiled into the assets.
 - No series persistence across process death. The web client uses
   `localStorage`; this holds the series in memory only.
