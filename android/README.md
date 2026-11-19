@@ -204,20 +204,21 @@ experiment and was deliberately **not** applied here.
    add a **KV namespace binding** with variable name `CHAT_QUOTA`.
 4. Paste `android/worker/src/index.js` into the Worker editor and deploy. The
    key stays in Cloudflare; it is never in the APK or the repo.
-5. Copy the URL from the Worker's **Overview** tab, e.g.
-   `https://draft-assistant-chat.<subdomain>.workers.dev`, and build the app:
+5. The shipped default endpoint is
+   `https://draft-assistant-chat.floriangfrick.workers.dev`. To point a build
+   at a different Worker, pass `-PchatEndpoint=...`:
 
    ```bash
    export JAVA_HOME="E:/android-toolchain/jdk/jdk-21.0.13+9"
    "E:/android-toolchain/gradle/gradle-8.9/bin/gradle" --no-daemon \
-     -p android -PchatEndpoint=https://draft-assistant-chat.<subdomain>.workers.dev \
+     -p android -PchatEndpoint=https://your-worker.workers.dev \
      :app:assembleDebug
    ```
 
 6. Smoke-test the Worker before installing the APK:
 
    ```bash
-   curl -X POST https://draft-assistant-chat.<subdomain>.workers.dev \
+   curl -X POST https://draft-assistant-chat.floriangfrick.workers.dev \
      -H 'content-type: application/json' -H 'x-install-id: localtest1234' \
      -d '{"question":"Hello","evidence":["Board: blue [Aatrox]; red [Poppy]"]}'
    ```
