@@ -911,7 +911,7 @@ private fun ChatPanel(state: UiState, viewModel: BoardViewModel) {
     }
 }
 
-private data class ChampionMention(val start: Int, val end: Int, val color: Color)
+internal data class ChampionMention(val start: Int, val end: Int, val color: Color)
 
 @Composable
 private fun ChatBubble(message: ChatMessage, state: UiState) {
@@ -939,7 +939,7 @@ private fun ChatBubble(message: ChatMessage, state: UiState) {
  * in which case the name wears that side's colour. Bans and the fearless pool
  * are deliberately not recoloured: the request says "picked by blue or red".
  */
-private fun championMentions(text: String, state: UiState): List<ChampionMention> {
+internal fun championMentions(text: String, state: UiState): List<ChampionMention> {
     val colors = HashMap<String, Color>()
     state.champions.forEach { colors[it.name.lowercase(Locale.ROOT)] = Accent }
     state.picks.forEachIndexed { slot, riot ->
@@ -959,7 +959,7 @@ private fun championMentions(text: String, state: UiState): List<ChampionMention
             if (at < 0) break
             val end = at + name.length
             val overlaps = hits.any { at < it.end && end > it.start }
-            if (!overlaps && isNameBoundary(lower, at) && isNameBoundary(lower, end)) {
+            if (!overlaps && isNameStart(lower, at) && isNameEnd(lower, end)) {
                 colors[name]?.let { hits.add(ChampionMention(at, end, it)) }
             }
             from = at + 1
@@ -968,9 +968,14 @@ private fun championMentions(text: String, state: UiState): List<ChampionMention
     return hits.sortedBy { it.start }
 }
 
-private fun isNameBoundary(text: String, index: Int): Boolean {
-    if (index < 0 || index > text.length) return false
-    if (index == 0 || index == text.length) return true
+private fun isNameStart(text: String, index: Int): Boolean {
+    if (index == 0) return true
+    val c = text[index - 1]
+    return !(c.isLetterOrDigit() || c == '\'')
+}
+
+private fun isNameEnd(text: String, index: Int): Boolean {
+    if (index == text.length) return true
     val c = text[index]
     return !(c.isLetterOrDigit() || c == '\'')
 }
@@ -998,7 +1003,7 @@ private fun AnnotatedString.Builder.appendChatSpan(
 }
 
 /** Minimal inline markdown with champion-colour spans layered on top. */
-private fun richChatText(text: String, state: UiState): AnnotatedString {
+internal fun richChatText(text: String, state: UiState): AnnotatedString {
     val mentions = championMentions(text, state)
     return buildAnnotatedString {
         val plain = SpanStyle()
