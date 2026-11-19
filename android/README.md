@@ -188,7 +188,8 @@ Answers are capped at **eight sentences** by the Worker prompt. The separate
 three-sentence cap in `pro/model/agent/prompt_explained.py` still belongs to the
 measured reranking experiment and was not reused here. Champion names in chat
 bubbles are green unless already picked this game, in which case they take the
-picking side's blue or red.
+picking side's blue or red. Matching folds curly apostrophes to ASCII, so
+`Kai’Sa`, `Kai'Sa's` and `'Vel'Koz'` all light up correctly.
 
 ### Cloudflare dashboard setup
 

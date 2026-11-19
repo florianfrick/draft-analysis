@@ -59,7 +59,6 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -941,15 +940,15 @@ private fun ChatBubble(message: ChatMessage, state: UiState) {
  */
 internal fun championMentions(text: String, state: UiState): List<ChampionMention> {
     val colors = HashMap<String, Color>()
-    state.champions.forEach { colors[it.name.lowercase(Locale.ROOT)] = Accent }
+    state.champions.forEach { colors[normalizeForMention(it.name)] = Accent }
     state.picks.forEachIndexed { slot, riot ->
         if (riot != null) state.byRiot[riot]?.let { champion ->
-            colors[champion.name.lowercase(Locale.ROOT)] =
+            colors[normalizeForMention(champion.name)] =
                 if (slot < 5) BlueSide else RedSide
         }
     }
 
-    val lower = text.lowercase(Locale.ROOT)
+    val lower = normalizeForMention(text)
     val hits = ArrayList<ChampionMention>()
     // Longest first: `Viktor` before `Vi`, `Dr. Mundo` before `Mundo`.
     for (name in colors.keys.sortedByDescending { it.length }) {
@@ -971,13 +970,29 @@ internal fun championMentions(text: String, state: UiState): List<ChampionMentio
 private fun isNameStart(text: String, index: Int): Boolean {
     if (index == 0) return true
     val c = text[index - 1]
-    return !(c.isLetterOrDigit() || c == '\'')
+    // Apostrophes are boundaries: "'Kai'Sa'" and "Kai'Sa's" must both match.
+    return !c.isLetterOrDigit()
 }
 
 private fun isNameEnd(text: String, index: Int): Boolean {
     if (index == text.length) return true
     val c = text[index]
-    return !(c.isLetterOrDigit() || c == '\'')
+    return !c.isLetterOrDigit()
+}
+
+/**
+ * Lowercase and fold typographic apostrophes to ASCII. Character-for-character
+ * so match offsets stay valid against the original message text.
+ */
+private fun normalizeForMention(text: String): String = buildString(text.length) {
+    for (c in text) {
+        append(
+            when (c) {
+                '\u2018', '\u2019', '\u02BC', '\uFF07' -> '\''
+                else -> c.lowercaseChar()
+            },
+        )
+    }
 }
 
 private fun AnnotatedString.Builder.appendChatSpan(
