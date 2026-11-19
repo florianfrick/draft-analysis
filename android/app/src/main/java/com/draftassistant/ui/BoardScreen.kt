@@ -59,6 +59,9 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.util.Locale
+import kotlin.math.max
+import kotlin.math.min
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.draftassistant.data.Champion
@@ -873,7 +876,7 @@ private fun ChatPanel(state: UiState, viewModel: BoardViewModel) {
                     .verticalScroll(scroll),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                state.chatMessages.forEach { ChatBubble(it) }
+                state.chatMessages.forEach { ChatBubble(it, state) }
             }
         }
 
@@ -908,8 +911,10 @@ private fun ChatPanel(state: UiState, viewModel: BoardViewModel) {
     }
 }
 
+private data class ChampionMention(val start: Int, val end: Int, val color: Color)
+
 @Composable
-private fun ChatBubble(message: ChatMessage) {
+private fun ChatBubble(message: ChatMessage, state: UiState) {
     val user = message.role == "user"
     Row(
         Modifier.fillMaxWidth(),
@@ -924,62 +929,132 @@ private fun ChatBubble(message: ChatMessage) {
                         RoundedCornerShape(8.dp))
                 .padding(8.dp),
         ) {
-            Text(markdown(message.content), color = TextPrimary, fontSize = 12.sp)
+            Text(richChatText(message.content, state), color = TextPrimary, fontSize = 12.sp)
         }
     }
 }
 
-/** Minimal inline markdown: **bold**, *italic*, `code`, ***both***. */
-private fun markdown(text: String): AnnotatedString = buildAnnotatedString {
-    var i = 0
-    while (i < text.length) {
-        when {
-            text.startsWith("***", i) -> {
-                val end = text.indexOf("***", i + 3)
-                if (end < 0) {
-                    append(text[i++])
-                } else {
-                    withStyle(SpanStyle(fontWeight = FontWeight.Bold,
-                                        fontStyle = FontStyle.Italic)) {
-                        append(text.substring(i + 3, end))
+/**
+ * Champion names are green unless the champion is already picked this game,
+ * in which case the name wears that side's colour. Bans and the fearless pool
+ * are deliberately not recoloured: the request says "picked by blue or red".
+ */
+private fun championMentions(text: String, state: UiState): List<ChampionMention> {
+    val colors = HashMap<String, Color>()
+    state.champions.forEach { colors[it.name.lowercase(Locale.ROOT)] = Accent }
+    state.picks.forEachIndexed { slot, riot ->
+        if (riot != null) state.byRiot[riot]?.let { champion ->
+            colors[champion.name.lowercase(Locale.ROOT)] =
+                if (slot < 5) BlueSide else RedSide
+        }
+    }
+
+    val lower = text.lowercase(Locale.ROOT)
+    val hits = ArrayList<ChampionMention>()
+    // Longest first: `Viktor` before `Vi`, `Dr. Mundo` before `Mundo`.
+    for (name in colors.keys.sortedByDescending { it.length }) {
+        var from = 0
+        while (true) {
+            val at = lower.indexOf(name, from)
+            if (at < 0) break
+            val end = at + name.length
+            val overlaps = hits.any { at < it.end && end > it.start }
+            if (!overlaps && isNameBoundary(lower, at) && isNameBoundary(lower, end)) {
+                colors[name]?.let { hits.add(ChampionMention(at, end, it)) }
+            }
+            from = at + 1
+        }
+    }
+    return hits.sortedBy { it.start }
+}
+
+private fun isNameBoundary(text: String, index: Int): Boolean {
+    if (index < 0 || index > text.length) return false
+    if (index == 0 || index == text.length) return true
+    val c = text[index]
+    return !(c.isLetterOrDigit() || c == '\'')
+}
+
+private fun AnnotatedString.Builder.appendChatSpan(
+    text: String,
+    from: Int,
+    to: Int,
+    style: SpanStyle,
+    mentions: List<ChampionMention>,
+) {
+    var cursor = from
+    for (mention in mentions) {
+        if (mention.end <= from || mention.start >= to) continue
+        val start = max(from, mention.start)
+        val end = min(to, mention.end)
+        if (start < cursor) continue
+        if (start > cursor) withStyle(style) { append(text.substring(cursor, start)) }
+        withStyle(style.copy(color = mention.color, fontWeight = FontWeight.Medium)) {
+            append(text.substring(start, end))
+        }
+        cursor = end
+    }
+    if (cursor < to) withStyle(style) { append(text.substring(cursor, to)) }
+}
+
+/** Minimal inline markdown with champion-colour spans layered on top. */
+private fun richChatText(text: String, state: UiState): AnnotatedString {
+    val mentions = championMentions(text, state)
+    return buildAnnotatedString {
+        val plain = SpanStyle()
+        val bold = SpanStyle(fontWeight = FontWeight.Bold)
+        val italic = SpanStyle(fontStyle = FontStyle.Italic)
+        val boldItalic = SpanStyle(fontWeight = FontWeight.Bold, fontStyle = FontStyle.Italic)
+        val code = SpanStyle(fontFamily = FontFamily.Monospace, color = Accent)
+
+        var i = 0
+        while (i < text.length) {
+            when {
+                text.startsWith("***", i) -> {
+                    val end = text.indexOf("***", i + 3)
+                    if (end < 0) {
+                        appendChatSpan(text, i, i + 1, plain, mentions)
+                        i++
+                    } else {
+                        appendChatSpan(text, i + 3, end, boldItalic, mentions)
+                        i = end + 3
                     }
-                    i = end + 3
+                }
+                text.startsWith("**", i) -> {
+                    val end = text.indexOf("**", i + 2)
+                    if (end < 0) {
+                        appendChatSpan(text, i, i + 1, plain, mentions)
+                        i++
+                    } else {
+                        appendChatSpan(text, i + 2, end, bold, mentions)
+                        i = end + 2
+                    }
+                }
+                text[i] == '*' -> {
+                    val end = text.indexOf("*", i + 1)
+                    if (end < 0) {
+                        appendChatSpan(text, i, i + 1, plain, mentions)
+                        i++
+                    } else {
+                        appendChatSpan(text, i + 1, end, italic, mentions)
+                        i = end + 1
+                    }
+                }
+                text[i] == '`' -> {
+                    val end = text.indexOf("`", i + 1)
+                    if (end < 0) {
+                        appendChatSpan(text, i, i + 1, plain, mentions)
+                        i++
+                    } else {
+                        appendChatSpan(text, i + 1, end, code, mentions)
+                        i = end + 1
+                    }
+                }
+                else -> {
+                    appendChatSpan(text, i, i + 1, plain, mentions)
+                    i++
                 }
             }
-            text.startsWith("**", i) -> {
-                val end = text.indexOf("**", i + 2)
-                if (end < 0) {
-                    append(text[i++])
-                } else {
-                    withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
-                        append(text.substring(i + 2, end))
-                    }
-                    i = end + 2
-                }
-            }
-            text[i] == '*' -> {
-                val end = text.indexOf("*", i + 1)
-                if (end < 0) {
-                    append(text[i++])
-                } else {
-                    withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
-                        append(text.substring(i + 1, end))
-                    }
-                    i = end + 1
-                }
-            }
-            text[i] == '`' -> {
-                val end = text.indexOf("`", i + 1)
-                if (end < 0) {
-                    append(text[i++])
-                } else {
-                    withStyle(SpanStyle(fontFamily = FontFamily.Monospace, color = Accent)) {
-                        append(text.substring(i + 1, end))
-                    }
-                    i = end + 1
-                }
-            }
-            else -> append(text[i++])
         }
     }
 }

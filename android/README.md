@@ -186,7 +186,9 @@ hosted model: it only refreshes the ExecuTorch suggestions. The chat switch in
 the top bar reveals a panel with two default questions and a free-text field.
 Answers are capped at **eight sentences** by the Worker prompt. The separate
 three-sentence cap in `pro/model/agent/prompt_explained.py` still belongs to the
-measured reranking experiment and was not reused here.
+measured reranking experiment and was not reused here. Champion names in chat
+bubbles are green unless already picked this game, in which case they take the
+picking side's blue or red.
 
 ### Cloudflare dashboard setup
 
