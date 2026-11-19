@@ -665,18 +665,25 @@ private fun PoolSlot(champion: Champion, onRemove: () -> Unit) {
 }
 
 @Composable
-private fun SmallButton(label: String, enabled: Boolean = true, onClick: () -> Unit) {
+private fun SmallButton(
+    label: String,
+    enabled: Boolean = true,
+    container: Color = PanelSunken,
+    content: Color = TextPrimary,
+    border: Color = Line,
+    onClick: () -> Unit,
+) {
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(6.dp))
-            .background(PanelSunken)
-            .border(1.dp, Line, RoundedCornerShape(6.dp))
+            .background(if (enabled) container else PanelSunken)
+            .border(1.dp, if (enabled) border else Line, RoundedCornerShape(6.dp))
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 9.dp, vertical = 5.dp),
     ) {
         Text(
             text = label,
-            color = if (enabled) TextPrimary else Muted.copy(alpha = 0.5f),
+            color = if (enabled) content else Muted.copy(alpha = 0.5f),
             fontSize = 11.sp,
         )
     }
@@ -815,24 +822,43 @@ private fun ChatPanel(state: UiState, viewModel: BoardViewModel) {
             .border(1.dp, Line, RoundedCornerShape(12.dp))
             .padding(10.dp),
     ) {
+        val greenContainer = Accent.copy(alpha = 0.16f)
+        val greenBorder = Accent.copy(alpha = 0.55f)
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "Agent",
-                color = TextPrimary,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-            )
-            Spacer(Modifier.weight(1f))
-            Text("deepseek-flash", color = Muted, fontSize = 10.sp)
-            if (state.chatBusy) {
-                Spacer(Modifier.width(6.dp))
-                CircularProgressIndicator(
-                    modifier = Modifier.size(12.dp),
-                    strokeWidth = 2.dp,
-                    color = Accent,
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Agent - deepseek-flash",
+                    color = TextPrimary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
                 )
-                Spacer(Modifier.width(4.dp))
-                Text("thinking…", color = Accent, fontSize = 10.sp)
+                if (state.chatBusy) {
+                    Spacer(Modifier.height(2.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(11.dp),
+                            strokeWidth = 2.dp,
+                            color = Accent,
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text("thinking…", color = Accent, fontSize = 10.sp)
+                    }
+                }
+            }
+            Spacer(Modifier.width(4.dp))
+            SmallButton("Predict", enabled = !state.chatBusy,
+                        container = greenContainer, content = Accent, border = greenBorder) {
+                viewModel.askChat(predictQuestion)
+            }
+            Spacer(Modifier.width(4.dp))
+            SmallButton("Explain", enabled = !state.chatBusy,
+                        container = greenContainer, content = Accent, border = greenBorder) {
+                viewModel.askChat(
+                    "What team composition archetype is each team aiming toward?")
+            }
+            Spacer(Modifier.width(4.dp))
+            SmallButton("Clear", enabled = state.chatMessages.isNotEmpty()) {
+                viewModel.clearChat()
             }
         }
 
@@ -859,24 +885,17 @@ private fun ChatPanel(state: UiState, viewModel: BoardViewModel) {
             OutlinedTextField(
                 value = draft,
                 onValueChange = { draft = it },
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .height(44.dp),
                 placeholder = { Text("Ask the agent", color = Muted, fontSize = 12.sp) },
                 singleLine = true,
                 maxLines = 1,
                 enabled = !state.chatBusy,
             )
-            Spacer(Modifier.width(5.dp))
-            SmallButton("Predict", enabled = !state.chatBusy) {
-                viewModel.askChat(predictQuestion)
-            }
-            Spacer(Modifier.width(4.dp))
-            SmallButton("Explain", enabled = !state.chatBusy) {
-                viewModel.askChat(
-                    "What team composition archetype is each team aiming toward?")
-            }
-            Spacer(Modifier.width(4.dp))
+            Spacer(Modifier.width(6.dp))
             SmallButton(
-                label = if (state.chatBusy) "…" else "send",
+                label = if (state.chatBusy) "…" else "Send",
                 enabled = draft.isNotBlank() && !state.chatBusy,
             ) {
                 viewModel.askChat(draft)
