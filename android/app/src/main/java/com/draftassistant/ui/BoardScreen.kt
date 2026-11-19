@@ -223,13 +223,13 @@ private fun FirstPickToggle(value: Int, onChange: (Int) -> Unit) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
-            .width(94.dp)
+            .width(84.dp)
             .height(28.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(accent.copy(alpha = 0.16f))
             .border(1.dp, accent, RoundedCornerShape(14.dp))
             .clickable { onChange(if (value == 0) 1 else 0) }
-            .padding(horizontal = 5.dp),
+            .padding(horizontal = 8.dp),
     ) {
         if (value == 0) {
             SwitchThumb(accent)
@@ -249,7 +249,7 @@ private fun ChatToggle(enabled: Boolean, onChange: (Boolean) -> Unit) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
-            .width(76.dp)
+            .width(58.dp)
             .height(28.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(Accent.copy(alpha = if (enabled) 0.28f else 0.06f))
@@ -259,7 +259,7 @@ private fun ChatToggle(enabled: Boolean, onChange: (Boolean) -> Unit) {
                 RoundedCornerShape(14.dp),
             )
             .clickable { onChange(!enabled) }
-            .padding(horizontal = 5.dp),
+            .padding(horizontal = 8.dp),
     ) {
         if (enabled) {
             Text("Chat", color = TextPrimary, fontSize = 11.sp)
@@ -628,7 +628,7 @@ private fun FearlessPanel(
             .border(1.dp, Line, RoundedCornerShape(12.dp))
             .padding(10.dp),
     ) {
-        Text("Fearless", color = Muted, fontSize = 11.sp)
+        Text("Fearless bans", color = Muted, fontSize = 11.sp)
         Spacer(Modifier.width(8.dp))
         Row(
             modifier = Modifier
@@ -637,9 +637,6 @@ private fun FearlessPanel(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (pool.isEmpty()) {
-                Text("this game — the pool is empty", color = Muted, fontSize = 10.sp)
-            }
             pool.forEach { riot ->
                 state.byRiot[riot]?.let { champion ->
                     PoolSlot(champion) { viewModel.removeFearless(riot) }
@@ -841,12 +838,20 @@ private fun ChatPanel(state: UiState, viewModel: BoardViewModel) {
         val greenBorder = Accent.copy(alpha = 0.55f)
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(
-                    "Agent - deepseek-flash",
-                    color = TextPrimary,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Agent",
+                        color = TextPrimary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        "- deepseek-flash",
+                        color = Muted,
+                        fontSize = 11.sp,
+                    )
+                }
                 if (state.chatBusy) {
                     Spacer(Modifier.height(2.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
