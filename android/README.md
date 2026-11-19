@@ -184,9 +184,9 @@ ExecuTorch export mirrors; the renderer only draws the resulting counts.
 Chat is **off by default** and question-driven. A board edit never calls the
 hosted model: it only refreshes the ExecuTorch suggestions. The chat switch in
 the top bar reveals a panel with two default questions and a free-text field.
-Answers may be several paragraphs — the three-sentence cap in
-`pro/model/agent/prompt_explained.py` belongs to the measured reranking
-experiment and was deliberately **not** applied here.
+Answers are capped at **eight sentences** by the Worker prompt. The separate
+three-sentence cap in `pro/model/agent/prompt_explained.py` still belongs to the
+measured reranking experiment and was not reused here.
 
 ### Cloudflare dashboard setup
 

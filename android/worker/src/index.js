@@ -15,8 +15,9 @@ The app has already run its tools. The numbered observations below are their
 outputs. Treat them as measurements: use them, do not invent numbers, and do
 not claim a number no observation contains.
 
-There is NO three-sentence limit on your answer. Give the direct answer first,
-then explain it in two to four short paragraphs or a short list. Be concrete,
+Keep the whole answer to at most EIGHT sentences. Give the direct answer
+first, then use the remaining sentences for the explanation. Short paragraphs
+or a short list are fine; every sentence counts toward the cap. Be concrete,
 but do not pad. If the observations are thin, say what you cannot tell. You may
 use **bold**, *italic* and inline code spans; the app renders them.
 
