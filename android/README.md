@@ -1,15 +1,17 @@
 # Draft Assistant — Android
 
 Native Kotlin/Compose app for LoL draft analysis. **The models run on the
-phone.** There is no backend, no network dependency, no auth, no API key. Turn
-on airplane mode after installing and the app behaves identically.
+phone.** The offline core has no backend, no network dependency, no auth, and
+no API key: turn on airplane mode after installing and suggestions still work.
+The optional Agent toggle is off by default; when enabled it can call a
+Cloudflare Worker for explanations.
 
 ## Status
 
-On branch `android`. `:app:assembleDebug` produces a **75 MB** debug APK
-(36 MB of ExecuTorch weights, 5 MB of portraits); `:app:testDebugUnitTest`
-passes 6/6; `:app:lintDebug` is clean. Verified on a Pixel 5 / API 34 emulator
-and a Pixel 7 Pro, with the backend stopped.
+On `main` at release candidate `v0.1.0`. `:app:assembleDebug` produces a
+**75 MB** debug APK (36 MB of ExecuTorch weights, 5 MB of portraits);
+`:app:testDebugUnitTest` passes 11/11; `:app:lintDebug` is clean. Verified on a
+Pixel 5 / API 34 emulator and a Pixel 7 Pro, with the backend stopped.
 
 On-device output was checked against the Python serving path on two boards:
 

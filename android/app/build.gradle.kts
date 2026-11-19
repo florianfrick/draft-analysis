@@ -41,7 +41,7 @@ android {
         // proper WindowInsets pass, not before.
         targetSdk = 34
         versionCode = 1
-        versionName = "0.1-mvp"
+        versionName = "0.1.0"
 
         buildConfigField("String", "API_BASE", "\"$apiBase\"")
         buildConfigField("String", "CHAT_ENDPOINT", "\"$chatEndpoint\"")

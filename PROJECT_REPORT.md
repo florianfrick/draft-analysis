@@ -33,7 +33,11 @@ ExecuTorch.
 - **Frontend:** `bash frontend/serve.sh` serves the local UI on 127.0.0.1.
 - **Android:** Kotlin/Compose with `policy.pte` (26.6 MB, quantized) and
   `masker.pte` (10.0 MB, FP32), bundled champion portraits, and static metadata.
-  It needs no backend, network, auth, TLS, or API key.
+  It needs no backend, network, auth, TLS, or API key. The optional Agent
+  toggle is off by default and talks to `android/worker/` only on an explicit
+  question.
+- The Python/browser stack remains in the repository as the reproduction and
+  evaluation history; it is not required to build or run the Android app.
 
 ## What works
 
@@ -52,9 +56,10 @@ ExecuTorch.
 
 ## Recent work
 
-The `android` branch was fast-forwarded into local `main` at commit `34c3815`.
-It adds the offline ExecuTorch app, UI simplification, the 2026 Worlds final
-walkthrough, and a rank-bar animation.
+The Android work began on branch `android` and was merged into `main` at
+commit `34c3815`; the current release candidate is `98961ae` (`v0.1.0`). It
+adds the offline ExecuTorch app, UI simplification, the opt-in Agent chat, the
+2026 Worlds final walkthrough, and a rank-bar animation.
 
 The walkthrough now replays the real four-game **BLG 3–1 Gen.G 2026 Worlds
 final** using the app's `nextGame()` path, including the alternating first-pick

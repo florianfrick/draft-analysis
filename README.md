@@ -20,7 +20,14 @@ data/        raw + derived data for both sources (git-ignored)
 frontend/    local draft-assistant UI (127.0.0.1 only)
 solo_queue/  everything trained on high-elo solo queue
 pro/         everything trained on pro drafts
+android/     native offline Android client (the shipped app)
+  worker/    optional Cloudflare proxy for the Agent chat toggle
 ```
+
+`main` is the single release line. The Python/browser stack and the `exp/*`
+history remain here because they document how the shipped models were chosen;
+they are not required to build or run the Android app. `STATUS.md` is the
+measurement record, and `FINDINGS.md` indexes the retained experiment snapshots.
 
 The base encoder is defined **once**, in
 `solo_queue/model/pretraining/base_model.py`, and `pro/` imports it. That is a
@@ -70,6 +77,13 @@ series are ordinary rows, the split is a fractional 85/10/5 within-patch tail,
 and there is no fixed holdout. Its own numbers are top-5 **0.5083** (rel 3.36x)
 on 2,448 test games, and +2.55 pp over the same recipe with one prefix
 (p 2.7e-51). Do not put them in the §7 table below, which is the older corpus.
+
+**Shipped Android app.** `android/` bundles that same pair as ExecuTorch
+`policy.pte` / `masker.pte` assets and runs them entirely on the phone, with
+bundled portraits and static metadata. It needs no backend, auth, or API key.
+The Agent chat toggle is off by default; when enabled it calls the optional
+Cloudflare Worker in `android/worker/`, which holds the DeepSeek key as a
+secret. See `android/README.md` for build, parity checks, and Worker setup.
 
 The measured case for the pro track (`STATUS.md` §7, pinned Worlds 2026 test split):
 

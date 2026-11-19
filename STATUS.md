@@ -1,9 +1,11 @@
 # Project record — state, findings and plan
 
-Last updated 2026-11-03. This is the single narrative document: what the models
+Last updated 2026-11-19 (release-cleanup pointer only; the measurements below
+are unchanged). This is the single narrative document: what the models
 are, what they measure, what failed and why, and what to do next. It replaces
-`assumptions.md`, `plan-model-v2.md` and `pro/model/proonly/FINDINGS.md`, whose
-content is distilled here.
+`assumptions.md`, `plan-model-v2.md`, and the old `pro/model/proonly/FINDINGS.md`,
+whose content was distilled here. The top-level `FINDINGS.md` is only an index
+into this document and the archived experiment tags.
 
 Operational docs stay separate and this file does not repeat them: `README.md`
 to get running, `DOCKER.md` for the container, and each folder's `README.md` for
