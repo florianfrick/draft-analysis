@@ -233,11 +233,11 @@ private fun FirstPickToggle(value: Int, onChange: (Int) -> Unit) {
     ) {
         if (value == 0) {
             SwitchThumb(accent)
-            Spacer(Modifier.width(6.dp))
+            Spacer(Modifier.weight(1f))
             Text("First Pick", color = TextPrimary, fontSize = 11.sp)
         } else {
             Text("First Pick", color = TextPrimary, fontSize = 11.sp)
-            Spacer(Modifier.width(6.dp))
+            Spacer(Modifier.weight(1f))
             SwitchThumb(accent)
         }
     }
@@ -246,26 +246,29 @@ private fun FirstPickToggle(value: Int, onChange: (Int) -> Unit) {
 /** Green counterpart to [FirstPickToggle]: label lives on the track, thumb shows state. */
 @Composable
 private fun ChatToggle(enabled: Boolean, onChange: (Boolean) -> Unit) {
-    val border = Accent.copy(alpha = if (enabled) 0.9f else 0.55f)
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .width(76.dp)
             .height(28.dp)
             .clip(RoundedCornerShape(14.dp))
-            .background(Accent.copy(alpha = if (enabled) 0.28f else 0.12f))
-            .border(1.dp, border, RoundedCornerShape(14.dp))
+            .background(Accent.copy(alpha = if (enabled) 0.28f else 0.06f))
+            .border(
+                1.dp,
+                Accent.copy(alpha = if (enabled) 0.9f else 0.3f),
+                RoundedCornerShape(14.dp),
+            )
             .clickable { onChange(!enabled) }
             .padding(horizontal = 5.dp),
     ) {
         if (enabled) {
             Text("Chat", color = TextPrimary, fontSize = 11.sp)
-            Spacer(Modifier.width(6.dp))
+            Spacer(Modifier.weight(1f))
             SwitchThumb(Accent)
         } else {
-            SwitchThumb(Accent.copy(alpha = 0.75f))
-            Spacer(Modifier.width(6.dp))
-            Text("Chat", color = TextPrimary, fontSize = 11.sp)
+            SwitchThumb(Accent.copy(alpha = 0.45f))
+            Spacer(Modifier.weight(1f))
+            Text("Chat", color = Muted, fontSize = 11.sp)
         }
     }
 }
@@ -550,7 +553,6 @@ private fun AddSlot(accent: Color, onClick: () -> Unit) {
 @Composable
 private fun SeriesPanel(state: UiState, viewModel: BoardViewModel) {
     val series = state.series
-    val current = series.games.getOrNull(series.current) ?: return
 
     Column(
         Modifier
@@ -578,21 +580,10 @@ private fun SeriesPanel(state: UiState, viewModel: BoardViewModel) {
                     )
                 }
             }
-        }
-
-        Spacer(Modifier.height(9.dp))
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
+            Spacer(Modifier.width(8.dp))
             SmallButton("next game ▶", enabled = state.canAdvance) { viewModel.nextGame() }
             Spacer(Modifier.width(6.dp))
             SmallButton("clear") { viewModel.clearSeries() }
-            Spacer(Modifier.weight(1f))
-            Text(
-                text = "${series.current + 1}/${series.games.size} · " +
-                    "${current.fearless.size} fearless",
-                color = Muted,
-                fontSize = 10.sp,
-            )
         }
     }
 }
