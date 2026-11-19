@@ -249,7 +249,7 @@ private fun ChatToggle(enabled: Boolean, onChange: (Boolean) -> Unit) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
-            .width(58.dp)
+            .width(63.dp)
             .height(28.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(Accent.copy(alpha = if (enabled) 0.28f else 0.06f))
@@ -305,9 +305,7 @@ private fun DraftContent(
             .verticalScroll(scroll)
             .padding(horizontal = 12.dp, vertical = 12.dp),
     ) {
-        SeriesPanel(state, viewModel)
-        Spacer(Modifier.height(10.dp))
-        FearlessPanel(state, viewModel, onOpenPicker)
+        SeriesPanel(state, viewModel, onOpenPicker)
         Spacer(Modifier.height(10.dp))
         if (state.chatEnabled) {
             ChatPanel(state, viewModel)
@@ -551,7 +549,11 @@ private fun AddSlot(accent: Color, onClick: () -> Unit) {
 // ------------------------------------------------------------ series / pool
 
 @Composable
-private fun SeriesPanel(state: UiState, viewModel: BoardViewModel) {
+private fun SeriesPanel(
+    state: UiState,
+    viewModel: BoardViewModel,
+    onOpenPicker: (PickerTarget) -> Unit,
+) {
     val series = state.series
 
     Column(
@@ -585,6 +587,9 @@ private fun SeriesPanel(state: UiState, viewModel: BoardViewModel) {
             Spacer(Modifier.width(6.dp))
             SmallButton("clear") { viewModel.clearSeries() }
         }
+
+        Spacer(Modifier.height(8.dp))
+        FearlessRow(state, viewModel, onOpenPicker)
     }
 }
 
@@ -612,7 +617,7 @@ private fun GameChip(game: GameSlot, selected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun FearlessPanel(
+private fun FearlessRow(
     state: UiState,
     viewModel: BoardViewModel,
     onOpenPicker: (PickerTarget) -> Unit,
@@ -621,12 +626,7 @@ private fun FearlessPanel(
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(Panel)
-            .border(1.dp, Line, RoundedCornerShape(12.dp))
-            .padding(10.dp),
+        modifier = Modifier.fillMaxWidth(),
     ) {
         Text("Fearless bans", color = Muted, fontSize = 11.sp)
         Spacer(Modifier.width(8.dp))
@@ -847,7 +847,7 @@ private fun ChatPanel(state: UiState, viewModel: BoardViewModel) {
                     )
                     Spacer(Modifier.width(4.dp))
                     Text(
-                        "- deepseek-flash",
+                        "deepseek-flash",
                         color = Muted,
                         fontSize = 11.sp,
                     )
