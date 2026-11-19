@@ -90,7 +90,7 @@ async function callDeepSeek(messages, env) {
   const base = String(env.DEEPSEEK_BASE_URL || "https://api.deepseek.com")
     .replace(/\/+$/, "");
   const model = String(env.DEEPSEEK_MODEL || "deepseek-flash");
-  const maxTokens = Number(env.MAX_TOKENS || 900);
+  const maxTokens = Number(env.MAX_TOKENS || 1600);
 
   const response = await fetch(`${base}/chat/completions`, {
     method: "POST",

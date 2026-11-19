@@ -6,7 +6,7 @@ compatibility_date = "2026-11-19"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-flash"
 DAILY_LIMIT = "30"
-MAX_TOKENS = "900"
+MAX_TOKENS = "1600"
 
 [[kv_namespaces]]
 binding = "CHAT_QUOTA"

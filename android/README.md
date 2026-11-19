@@ -198,7 +198,13 @@ experiment and was deliberately **not** applied here.
    - `DEEPSEEK_BASE_URL` = `https://api.deepseek.com`
    - `DEEPSEEK_MODEL` = `deepseek-flash`
    - `DAILY_LIMIT` = `30`
-   - `MAX_TOKENS` = `900`
+   - `MAX_TOKENS` = `1600`
+
+   `MAX_TOKENS` is a ceiling, not a target; most answers stop earlier. At Flash
+   output rates, 1,600 output tokens cost about $0.001 off-peak or $0.002 at
+   peak — about 2,000–4,000 full answers per $5. DeepSeek still bills only the
+   tokens actually produced. If the Worker was already deployed, update the
+   dashboard variable too: a dashboard value overrides the code default.
 3. **Workers & Pages → KV → Create a namespace**, e.g.
    `draft-assistant-chat-quota`. Back in the Worker's **Variables & Secrets**,
    add a **KV namespace binding** with variable name `CHAT_QUOTA`.
