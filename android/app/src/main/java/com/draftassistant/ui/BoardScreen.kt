@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -47,8 +48,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -791,6 +798,10 @@ private fun SuggestionRow(suggestion: Suggestion, state: UiState, onClick: () ->
 private fun ChatPanel(state: UiState, viewModel: BoardViewModel) {
     val scroll = rememberScrollState()
     var draft by remember { mutableStateOf("") }
+    val predictQuestion = state.turn?.let { turn ->
+        val verb = if (turn.kind == MoveKind.PICK) "pick" else "ban"
+        "Predict and justify the optimal next move (${sideName(turn.side)} to $verb)."
+    } ?: "Predict and justify the optimal next move."
 
     LaunchedEffect(state.chatMessages.size) {
         if (state.chatMessages.isNotEmpty()) scroll.animateScrollTo(scroll.maxValue)
@@ -813,6 +824,16 @@ private fun ChatPanel(state: UiState, viewModel: BoardViewModel) {
             )
             Spacer(Modifier.weight(1f))
             Text("deepseek-flash", color = Muted, fontSize = 10.sp)
+            if (state.chatBusy) {
+                Spacer(Modifier.width(6.dp))
+                CircularProgressIndicator(
+                    modifier = Modifier.size(12.dp),
+                    strokeWidth = 2.dp,
+                    color = Accent,
+                )
+                Spacer(Modifier.width(4.dp))
+                Text("thinking…", color = Accent, fontSize = 10.sp)
+            }
         }
 
         if (state.chatMessages.isNotEmpty()) {
@@ -820,7 +841,7 @@ private fun ChatPanel(state: UiState, viewModel: BoardViewModel) {
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 300.dp)
+                    .heightIn(max = 200.dp)
                     .verticalScroll(scroll),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
@@ -839,13 +860,14 @@ private fun ChatPanel(state: UiState, viewModel: BoardViewModel) {
                 value = draft,
                 onValueChange = { draft = it },
                 modifier = Modifier.weight(1f),
+                placeholder = { Text("Ask the agent", color = Muted, fontSize = 12.sp) },
                 singleLine = true,
                 maxLines = 1,
                 enabled = !state.chatBusy,
             )
             Spacer(Modifier.width(5.dp))
             SmallButton("Predict", enabled = !state.chatBusy) {
-                viewModel.askChat("Justify the optimal next move.")
+                viewModel.askChat(predictQuestion)
             }
             Spacer(Modifier.width(4.dp))
             SmallButton("Explain", enabled = !state.chatBusy) {
@@ -873,14 +895,69 @@ private fun ChatBubble(message: ChatMessage) {
     ) {
         Column(
             Modifier
-                .fillMaxWidth(0.88f)
+                .widthIn(max = 300.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(if (user) Accent.copy(alpha = 0.16f) else PanelRaised)
                 .border(1.dp, if (user) Accent.copy(alpha = 0.5f) else Line,
                         RoundedCornerShape(8.dp))
                 .padding(8.dp),
         ) {
-            Text(message.content, color = TextPrimary, fontSize = 12.sp)
+            Text(markdown(message.content), color = TextPrimary, fontSize = 12.sp)
+        }
+    }
+}
+
+/** Minimal inline markdown: **bold**, *italic*, `code`, ***both***. */
+private fun markdown(text: String): AnnotatedString = buildAnnotatedString {
+    var i = 0
+    while (i < text.length) {
+        when {
+            text.startsWith("***", i) -> {
+                val end = text.indexOf("***", i + 3)
+                if (end < 0) {
+                    append(text[i++])
+                } else {
+                    withStyle(SpanStyle(fontWeight = FontWeight.Bold,
+                                        fontStyle = FontStyle.Italic)) {
+                        append(text.substring(i + 3, end))
+                    }
+                    i = end + 3
+                }
+            }
+            text.startsWith("**", i) -> {
+                val end = text.indexOf("**", i + 2)
+                if (end < 0) {
+                    append(text[i++])
+                } else {
+                    withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                        append(text.substring(i + 2, end))
+                    }
+                    i = end + 2
+                }
+            }
+            text[i] == '*' -> {
+                val end = text.indexOf("*", i + 1)
+                if (end < 0) {
+                    append(text[i++])
+                } else {
+                    withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+                        append(text.substring(i + 1, end))
+                    }
+                    i = end + 1
+                }
+            }
+            text[i] == '`' -> {
+                val end = text.indexOf("`", i + 1)
+                if (end < 0) {
+                    append(text[i++])
+                } else {
+                    withStyle(SpanStyle(fontFamily = FontFamily.Monospace, color = Accent)) {
+                        append(text.substring(i + 1, end))
+                    }
+                    i = end + 1
+                }
+            }
+            else -> append(text[i++])
         }
     }
 }

@@ -5,6 +5,7 @@ compatibility_date = "2026-11-19"
 [vars]
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-flash"
+REASONING_EFFORT = "low"
 DAILY_LIMIT = "30"
 MAX_TOKENS = "1600"
 

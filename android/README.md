@@ -197,14 +197,17 @@ experiment and was deliberately **not** applied here.
    Add plain variables:
    - `DEEPSEEK_BASE_URL` = `https://api.deepseek.com`
    - `DEEPSEEK_MODEL` = `deepseek-flash`
+   - `REASONING_EFFORT` = `low`  (`high` if you want deeper thinking)
    - `DAILY_LIMIT` = `30`
    - `MAX_TOKENS` = `1600`
 
-   `MAX_TOKENS` is a ceiling, not a target; most answers stop earlier. At Flash
-   output rates, 1,600 output tokens cost about $0.001 off-peak or $0.002 at
-   peak — about 2,000–4,000 full answers per $5. DeepSeek still bills only the
-   tokens actually produced. If the Worker was already deployed, update the
-   dashboard variable too: a dashboard value overrides the code default.
+   Thinking stays **on** — that is a deliberate preference. `low` effort keeps
+   the hidden reasoning from consuming the whole token budget; if you set
+   `high`, raise `MAX_TOKENS` too. `max_tokens` is a ceiling, not a target, and
+   DeepSeek bills only the tokens actually produced. At Flash output rates,
+   1,600 tokens cost about $0.001 off-peak or $0.002 at peak — roughly
+   2,000–4,000 full answers per $5. Dashboard values override code defaults, so
+   update the variables in Cloudflare after redeploying.
 3. **Workers & Pages → KV → Create a namespace**, e.g.
    `draft-assistant-chat-quota`. Back in the Worker's **Variables & Secrets**,
    add a **KV namespace binding** with variable name `CHAT_QUOTA`.
@@ -243,18 +246,20 @@ npx wrangler deploy
 The `[[ratelimits]]` block in `wrangler.toml` adds an 8-per-minute burst guard;
 rate-limit bindings are not configurable in the dashboard.
 
-**If the app reports "DeepSeek returned an empty answer":** the deployed Worker
-is still the earlier copy. DeepSeek V4 has thinking mode **on by default** at
-high effort, so a long board prompt can spend all `max_tokens` on hidden
-`reasoning_content` and return an empty `content`. `src/index.js` now sends
-`thinking: { type: "disabled" }`. Paste the updated file into the dashboard
-Worker and redeploy; no app rebuild is needed for this fix.
+**If the app reports "DeepSeek returned an empty answer":** hidden reasoning
+consumed all of `max_tokens` before the final `content` was produced. Keep
+`REASONING_EFFORT=low`, or raise `MAX_TOKENS` (2,400 is a reasonable next step)
+and redeploy. The app shows a `thinking…` indicator while the Worker is busy;
+the request is non-streaming, so that indicator covers both reasoning and answer
+generation.
 
 ### Which agent tools carry over
 
 The agent model did not beat the base model, so chat is a **mouth, not a second
 decision maker**. Tools are precomputed on the phone and attached as evidence;
-the Worker owns the prompt and the upstream call.
+the Worker owns the prompt and the upstream call. There is **no OpenAI `tools`
+parameter and no function calling**: the model reads the evidence as already
+measured facts and cannot query the corpus or DuckDB at chat time.
 
 | From `/agent` | In chat? | Reason |
 |---|---|---|

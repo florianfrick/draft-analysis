@@ -17,7 +17,8 @@ not claim a number no observation contains.
 
 There is NO three-sentence limit on your answer. Give the direct answer first,
 then explain it in two to four short paragraphs or a short list. Be concrete,
-but do not pad. If the observations are thin, say what you cannot tell.
+but do not pad. If the observations are thin, say what you cannot tell. You may
+use **bold**, *italic* and inline code spans; the app renders them.
 
 Facts you must keep straight:
 - The next-move model is a trained set transformer over professional drafts.
@@ -91,6 +92,10 @@ async function callDeepSeek(messages, env) {
     .replace(/\/+$/, "");
   const model = String(env.DEEPSEEK_MODEL || "deepseek-flash");
   const maxTokens = Number(env.MAX_TOKENS || 1600);
+  // Thinking stays on by preference. "low" keeps the hidden reasoning from
+  // eating the whole token budget; set REASONING_EFFORT=high in the dashboard
+  // if you want deeper reasoning (and raise MAX_TOKENS with it).
+  const reasoningEffort = String(env.REASONING_EFFORT || "low");
 
   const response = await fetch(`${base}/chat/completions`, {
     method: "POST",
@@ -101,11 +106,9 @@ async function callDeepSeek(messages, env) {
     body: JSON.stringify({
       model,
       messages,
-      // Thinking is ON by default with effort "high". On a long board prompt
-      // it can consume the entire max_tokens budget on reasoning_content and
-      // leave content empty - the "DeepSeek returned an empty answer" error on
-      // device. We want the explanation, so turn thinking off explicitly.
-      thinking: { type: "disabled" },
+      // Explicit rather than relying on DeepSeek's default (enabled/high).
+      thinking: { type: "enabled" },
+      reasoning_effort: reasoningEffort,
       temperature: 0.35,
       max_tokens: maxTokens,
       stream: false,
