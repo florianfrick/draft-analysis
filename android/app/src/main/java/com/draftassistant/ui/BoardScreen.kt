@@ -56,6 +56,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -671,16 +672,17 @@ private fun SmallButton(
     container: Color = PanelSunken,
     content: Color = TextPrimary,
     border: Color = Line,
+    height: Dp? = null,
     onClick: () -> Unit,
 ) {
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(if (enabled) container else PanelSunken)
-            .border(1.dp, if (enabled) border else Line, RoundedCornerShape(6.dp))
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 9.dp, vertical = 5.dp),
-    ) {
+    var modifier = Modifier
+        .clip(RoundedCornerShape(6.dp))
+        .background(if (enabled) container else PanelSunken)
+        .border(1.dp, if (enabled) border else Line, RoundedCornerShape(6.dp))
+        .clickable(enabled = enabled, onClick = onClick)
+        .padding(horizontal = 9.dp, vertical = 5.dp)
+    if (height != null) modifier = modifier.height(height)
+    Box(modifier, contentAlignment = Alignment.Center) {
         Text(
             text = label,
             color = if (enabled) content else Muted.copy(alpha = 0.5f),
@@ -887,7 +889,7 @@ private fun ChatPanel(state: UiState, viewModel: BoardViewModel) {
                 onValueChange = { draft = it },
                 modifier = Modifier
                     .weight(1f)
-                    .height(44.dp),
+                    .height(36.dp),
                 placeholder = { Text("Ask the agent", color = Muted, fontSize = 12.sp) },
                 singleLine = true,
                 maxLines = 1,
@@ -897,6 +899,7 @@ private fun ChatPanel(state: UiState, viewModel: BoardViewModel) {
             SmallButton(
                 label = if (state.chatBusy) "…" else "Send",
                 enabled = draft.isNotBlank() && !state.chatBusy,
+                height = 36.dp,
             ) {
                 viewModel.askChat(draft)
                 draft = ""
