@@ -276,6 +276,10 @@ private fun DraftContent(
         Spacer(Modifier.height(10.dp))
         FearlessPanel(state, viewModel, onOpenPicker)
         Spacer(Modifier.height(10.dp))
+        if (state.chatEnabled) {
+            ChatPanel(state, viewModel)
+            Spacer(Modifier.height(10.dp))
+        }
         TurnBar(state)
         Spacer(Modifier.height(10.dp))
         SidePanel(0, state, viewModel, onOpenPicker)
@@ -283,10 +287,6 @@ private fun DraftContent(
         SidePanel(1, state, viewModel, onOpenPicker)
         Spacer(Modifier.height(16.dp))
         SuggestionsPanel(state, viewModel)
-        if (state.chatEnabled) {
-            Spacer(Modifier.height(16.dp))
-            ChatPanel(state, viewModel)
-        }
         Spacer(Modifier.height(24.dp))
     }
 }
@@ -806,38 +806,21 @@ private fun ChatPanel(state: UiState, viewModel: BoardViewModel) {
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                "Ask about this board",
+                "Agent",
                 color = TextPrimary,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
             )
             Spacer(Modifier.weight(1f))
-            Text("off by default", color = Muted, fontSize = 10.sp)
+            Text("deepseek-flash", color = Muted, fontSize = 10.sp)
         }
 
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "Answers use the board at the moment you send. No call is made on a board change.",
-            color = Muted,
-            fontSize = 10.sp,
-        )
-
-        Spacer(Modifier.height(8.dp))
-        QuickQuestion("Justify the optimal next move.") {
-            viewModel.askChat("Justify the optimal next move.")
-        }
-        QuickQuestion("What team composition archetype is each team aiming toward?") {
-            viewModel.askChat("What team composition archetype is each team aiming toward?")
-        }
-
-        Spacer(Modifier.height(8.dp))
-        if (state.chatMessages.isEmpty()) {
-            Text("No questions yet. The local model above is unchanged.", color = Muted, fontSize = 11.sp)
-        } else {
+        if (state.chatMessages.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 340.dp)
+                    .heightIn(max = 300.dp)
                     .verticalScroll(scroll),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
@@ -847,7 +830,7 @@ private fun ChatPanel(state: UiState, viewModel: BoardViewModel) {
 
         state.chatError?.let { error ->
             Spacer(Modifier.height(6.dp))
-            Text(error, color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
+            Text(error, color = MaterialTheme.colorScheme.error, fontSize = 10.sp)
         }
 
         Spacer(Modifier.height(8.dp))
@@ -856,12 +839,20 @@ private fun ChatPanel(state: UiState, viewModel: BoardViewModel) {
                 value = draft,
                 onValueChange = { draft = it },
                 modifier = Modifier.weight(1f),
-                placeholder = { Text("Ask a question…", color = Muted, fontSize = 12.sp) },
                 singleLine = true,
                 maxLines = 1,
                 enabled = !state.chatBusy,
             )
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(5.dp))
+            SmallButton("Predict", enabled = !state.chatBusy) {
+                viewModel.askChat("Justify the optimal next move.")
+            }
+            Spacer(Modifier.width(4.dp))
+            SmallButton("Explain", enabled = !state.chatBusy) {
+                viewModel.askChat(
+                    "What team composition archetype is each team aiming toward?")
+            }
+            Spacer(Modifier.width(4.dp))
             SmallButton(
                 label = if (state.chatBusy) "…" else "send",
                 enabled = draft.isNotBlank() && !state.chatBusy,
@@ -870,44 +861,27 @@ private fun ChatPanel(state: UiState, viewModel: BoardViewModel) {
                 draft = ""
             }
         }
-
-        state.chatRemaining?.let { remaining ->
-            Spacer(Modifier.height(6.dp))
-            Text("$remaining questions left today", color = Muted, fontSize = 10.sp)
-        }
-    }
-}
-
-@Composable
-private fun QuickQuestion(label: String, onClick: () -> Unit) {
-    TextButton(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        colors = ButtonDefaults.textButtonColors(contentColor = Accent),
-    ) {
-        Text(label, fontSize = 12.sp)
     }
 }
 
 @Composable
 private fun ChatBubble(message: ChatMessage) {
     val user = message.role == "user"
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(if (user) PanelSunken else PanelRaised)
-            .border(1.dp, Line, RoundedCornerShape(8.dp))
-            .padding(8.dp),
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = if (user) Arrangement.End else Arrangement.Start,
     ) {
-        Text(
-            text = if (user) "You" else "Assistant",
-            color = if (user) Accent else BlueSide,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Medium,
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(message.content, color = TextPrimary, fontSize = 12.sp)
+        Column(
+            Modifier
+                .fillMaxWidth(0.88f)
+                .clip(RoundedCornerShape(8.dp))
+                .background(if (user) Accent.copy(alpha = 0.16f) else PanelRaised)
+                .border(1.dp, if (user) Accent.copy(alpha = 0.5f) else Line,
+                        RoundedCornerShape(8.dp))
+                .padding(8.dp),
+        ) {
+            Text(message.content, color = TextPrimary, fontSize = 12.sp)
+        }
     }
 }
 

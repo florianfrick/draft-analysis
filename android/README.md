@@ -237,6 +237,13 @@ npx wrangler deploy
 The `[[ratelimits]]` block in `wrangler.toml` adds an 8-per-minute burst guard;
 rate-limit bindings are not configurable in the dashboard.
 
+**If the app reports "DeepSeek returned an empty answer":** the deployed Worker
+is still the earlier copy. DeepSeek V4 has thinking mode **on by default** at
+high effort, so a long board prompt can spend all `max_tokens` on hidden
+`reasoning_content` and return an empty `content`. `src/index.js` now sends
+`thinking: { type: "disabled" }`. Paste the updated file into the dashboard
+Worker and redeploy; no app rebuild is needed for this fix.
+
 ### Which agent tools carry over
 
 The agent model did not beat the base model, so chat is a **mouth, not a second
@@ -245,7 +252,7 @@ the Worker owns the prompt and the upstream call.
 
 | From `/agent` | In chat? | Reason |
 |---|---|---|
-| `get_state` | yes, as `ChatViewModel.chatEvidence()` | the board must be read, never retyped by an LLM |
+| `get_state` | yes, as `UiState.chatEvidence()` | the board must be read, never retyped by an LLM |
 | `predict_next_move` | yes, top 8 | the head's shortlist is the factual basis for justification |
 | `predict_roles` | yes, assignment + open roles | explains composition without pretending to be a win model |
 | `sql` | no | no corpus on the phone; low-level and token-hungry |

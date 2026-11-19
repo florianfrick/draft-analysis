@@ -101,6 +101,11 @@ async function callDeepSeek(messages, env) {
     body: JSON.stringify({
       model,
       messages,
+      // Thinking is ON by default with effort "high". On a long board prompt
+      // it can consume the entire max_tokens budget on reasoning_content and
+      // leave content empty - the "DeepSeek returned an empty answer" error on
+      // device. We want the explanation, so turn thinking off explicitly.
+      thinking: { type: "disabled" },
       temperature: 0.35,
       max_tokens: maxTokens,
       stream: false,
