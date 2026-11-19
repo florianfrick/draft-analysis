@@ -22,14 +22,15 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -886,22 +887,39 @@ private fun ChatPanel(state: UiState, viewModel: BoardViewModel) {
 
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = draft,
-                onValueChange = { draft = it },
-                modifier = Modifier
+            Box(
+                Modifier
                     .weight(1f)
-                    .height(36.dp),
-                placeholder = { Text("Ask the agent", color = Muted, fontSize = 12.sp) },
-                singleLine = true,
-                maxLines = 1,
-                enabled = !state.chatBusy,
-            )
+                    .height(28.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(PanelSunken)
+                    .border(1.dp, Line, RoundedCornerShape(6.dp))
+                    .padding(horizontal = 9.dp, vertical = 2.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                BasicTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !state.chatBusy,
+                    singleLine = true,
+                    maxLines = 1,
+                    textStyle = LocalTextStyle.current.copy(
+                        fontSize = 15.sp,
+                        color = TextPrimary,
+                    ),
+                    decorationBox = { innerTextField ->
+                        if (draft.isEmpty()) {
+                            Text("Ask the agent", color = Muted, fontSize = 15.sp)
+                        }
+                        innerTextField()
+                    },
+                )
+            }
             Spacer(Modifier.width(6.dp))
             SmallButton(
                 label = if (state.chatBusy) "…" else "Send",
                 enabled = draft.isNotBlank() && !state.chatBusy,
-                height = 36.dp,
             ) {
                 viewModel.askChat(draft)
                 draft = ""
