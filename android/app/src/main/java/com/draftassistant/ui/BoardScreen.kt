@@ -33,7 +33,6 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -147,27 +146,20 @@ private fun DraftTopBar(state: UiState, viewModel: BoardViewModel) {
                     )
                     Spacer(Modifier.width(10.dp))
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Chat", color = Muted, fontSize = 11.sp)
-                    Spacer(Modifier.width(5.dp))
-                    Switch(
-                        checked = state.chatEnabled,
-                        onCheckedChange = viewModel::setChatEnabled,
-                        modifier = Modifier.height(28.dp),
-                    )
-                }
-                Spacer(Modifier.width(8.dp))
-                TextButton(onClick = viewModel::reset) {
-                    Text("Reset Game", color = Muted, fontSize = 13.sp)
-                }
             }
 
             Spacer(Modifier.height(6.dp))
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 PatchMenu(state, viewModel::setPatch)
-                Spacer(Modifier.width(14.dp))
+                Spacer(Modifier.width(8.dp))
                 FirstPickToggle(state.firstPick, viewModel::setFirstPick)
+                Spacer(Modifier.width(8.dp))
+                ChatToggle(state.chatEnabled, viewModel::setChatEnabled)
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = viewModel::reset) {
+                    Text("Reset Game", color = Muted, fontSize = 13.sp)
+                }
             }
         }
     }
@@ -247,6 +239,33 @@ private fun FirstPickToggle(value: Int, onChange: (Int) -> Unit) {
             Text("First Pick", color = TextPrimary, fontSize = 11.sp)
             Spacer(Modifier.width(6.dp))
             SwitchThumb(accent)
+        }
+    }
+}
+
+/** Green counterpart to [FirstPickToggle]: label lives on the track, thumb shows state. */
+@Composable
+private fun ChatToggle(enabled: Boolean, onChange: (Boolean) -> Unit) {
+    val border = Accent.copy(alpha = if (enabled) 0.9f else 0.55f)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .width(76.dp)
+            .height(28.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(Accent.copy(alpha = if (enabled) 0.28f else 0.12f))
+            .border(1.dp, border, RoundedCornerShape(14.dp))
+            .clickable { onChange(!enabled) }
+            .padding(horizontal = 5.dp),
+    ) {
+        if (enabled) {
+            Text("Chat", color = TextPrimary, fontSize = 11.sp)
+            Spacer(Modifier.width(6.dp))
+            SwitchThumb(Accent)
+        } else {
+            SwitchThumb(Accent.copy(alpha = 0.75f))
+            Spacer(Modifier.width(6.dp))
+            Text("Chat", color = TextPrimary, fontSize = 11.sp)
         }
     }
 }
