@@ -1,19 +1,21 @@
 # Release notes — v0.1.0
 
-First source/GitHub release candidate for the LoL Draft Assistant.
+First GitHub source release for the LoL Draft Assistant.
 
 ## Highlights
 
-- Native Kotlin/Compose Android app; the offline core runs both models on the
-  phone with ExecuTorch and needs no backend, login, or API key.
+- Native Kotlin/Compose Android app with a custom launcher icon. The offline
+  core runs both models on the phone with ExecuTorch and needs no backend,
+  login, network access, or API key. The old HTTP fallback was removed.
 - Series and fearless support, including `nextGame()` carryover and alternating
   first-pick side.
 - Bundled 2026 Worlds final BLG 3–1 Gen.G walkthrough and rank-bar animation.
 - Opt-in Agent chat for explanations. It is off by default, never fires on a
   board update, and uses a Cloudflare Worker so the DeepSeek key stays
   server-side.
-- The research pipeline, evaluation split, baselines, and negative-result
-  history remain in the repository as the provenance of the shipped models.
+- The research pipeline, evaluation split (including the `role_next` suite),
+  baselines, and negative-result history remain in the repository as the
+  provenance of the shipped models.
 
 ## What is in the repository
 
