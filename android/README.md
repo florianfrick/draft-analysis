@@ -29,9 +29,9 @@ models — that is expected, not a contract failure.
 
 `LocalEngine` (`data/LocalEngine.kt`) is the whole offline backend. It loads two
 ExecuTorch programs from `assets/`, builds the same tensors the Python serving
-path builds, applies the same legality rules to the logits, and returns the same
-DTOs `DraftApi` used to get over HTTP. `BoardViewModel` and every UI component
-were left untouched at the DTO boundary.
+path builds, applies the same legality rules to the logits, and publishes the
+same DTOs the server's board routes use. `BoardViewModel` and every UI component
+consume that DTO boundary.
 
 | asset | source checkpoint | size | output |
 | --- | --- | --- | --- |
@@ -96,10 +96,8 @@ adb logcat -v brief | grep -E 'LocalEngine|BoardViewModel'
   label sits inside the switch and whose thumb marks blue (left) or red (right).
 - **Series and fearless pool**, entirely on-device.
 
-`DraftApi` is retained in the tree as a reference implementation of the HTTP
-contract but is no longer called. `BuildConfig.API_BASE` and
-`network_security_config.xml` are likewise inert; they are left so the wire
-format stays inspectable against `frontend/server.py`.
+The DTOs in `data/Models.kt` stay field-for-field with `frontend/server.py`; the
+app itself makes no request to the Python backend.
 
 ## Series and fearless
 
@@ -113,9 +111,7 @@ Transitions, matching `app.js`:
 - `next game` sets `done` on the current slot, computes
   `pool + picks` of this game, and inserts a successor at `current + 1`. Bans
   never enter the pool: a champion banned in game 1 is legal again in game 2.
-  `addGame()` still exists in the ViewModel (it appends a slot inheriting the
-  current pool unchanged) but the UI no longer exposes a `＋ game` button; game
-  chips show only the side and pick count, not a `G1`/`G2` label.
+  Game chips show only the side and pick count, not a `G1`/`G2` label.
 - **First pick is kept, not flipped.** The teams swap sides between games but the
   side holding first pick stays the same in 94% of pro games.
 - A closed game that already has a successor cannot be closed again — that would
@@ -140,12 +136,12 @@ all four games of the **2026 Worlds final**, BLG 3–1 Gen.G, from
 `placePick`/`placeBan` path a tap uses, so the ranked suggestions are the live
 ExecuTorch answers, not canned rows.
 
-Games advance with `nextGame(game.firstPick)`, not `addGame()`: the previous
-game's picks become the next game's fearless pool, bans do not carry over, and
-the script passes the real first-pick side (the final alternates 0/1/0/1). The
-game-4 frame therefore shows `4/4 · 30 fearless`. The asset was exported from
-an updated Oracle's Elixir 2026 export newer than the frozen training corpus;
-the CSV itself is not needed at runtime.
+Games advance with `nextGame(game.firstPick)`: the previous game's picks become
+the next game's fearless pool, bans do not carry over, and the script passes the
+real first-pick side (the final alternates 0/1/0/1). The game-4 frame therefore
+shows `4/4 · 30 fearless`. The asset was exported from an updated Oracle's Elixir
+2026 export newer than the frozen training corpus; the CSV itself is not needed
+at runtime.
 
 To replay it yourself:
 
@@ -293,8 +289,9 @@ These are the places where a plausible-looking reimplementation is wrong:
   `offline.json` carries both. Mixing them produces a confident, wrong answer.
 - **`picks` is indexed by slot**, 10 entries, null for empty. Slots 0-4 are blue,
   5-9 red.
-- **`fearless: []` differs from omitting `fearless`** in the old HTTP contract.
-  The DTOs still set `encodeDefaults` for that reason.
+- **`fearless: []` differs from omitting `fearless`** in the server contract.
+  The DTOs keep `encodeDefaults` so that distinction stays inspectable, even
+  though the app no longer posts `BoardRequest`.
 - **Legality is a logit mask before the top-k**, value `-1e4`, never a filter
   afterwards. Filtering the top-k empties a lane cell 13 % of the time.
 - **Patch ids are 1-based vocabulary rows**; 0 is UNK. 107 is valid, 108 is not.
@@ -320,7 +317,6 @@ app/src/main/java/com/draftassistant/
   data/LocalEngine.kt        ExecuTorch runtime, tensor builder, legality, role table
   data/ChatClient.kt         optional Worker client; install id, no API key
   data/ChatModels.kt         chat request/response DTOs
-  data/DraftApi.kt           legacy HTTP reference, no longer called
   ui/BoardViewModel.kt       board + series state, debounce, stale-reply guard, chat
   ui/BoardScreen.kt          board, series bar, fearless strip, suggestions, chat
   ui/ChampionPicker.kt       bundled-portrait champion grid
@@ -336,6 +332,8 @@ worker/
 
 - No automatic chat on board changes. The switch only reveals the panel; the
   local suggestions stay fully offline.
+- No HTTP client for the Python backend; on-device inference is the only board
+  path. The optional chat Worker is the app's sole network call.
 - No API key in the app, no key picker, and no tracked `.env` in `worker/`.
 - No checkpoint picker. The two shipped defaults are compiled into the assets.
 - No series persistence across process death. The web client uses

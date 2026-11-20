@@ -5,22 +5,6 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
-// Where the Python backend lives. Local-only: no auth, no TLS.
-//
-// Default is the emulator's alias for the *host's* loopback interface, so
-// frontend/serve.sh (which binds 127.0.0.1 only) needs no change.
-//
-// Override without touching code:
-//   gradle -PapiBase=http://127.0.0.1:8777 assembleDebug   # via `adb reverse`
-//   gradle -PapiBase=http://192.168.1.20:8777 assembleDebug  # LAN device
-//
-// The `adb reverse` form is the reliable one on Windows: it tunnels over the
-// adb transport, so it works even when the emulator cannot route to the host
-// loopback. A LAN address additionally needs `--host 0.0.0.0` on the server,
-// a matching entry in res/xml/network_security_config.xml, and a changed
-// port mapping in docker-compose.yml.
-val apiBase = (findProperty("apiBase") as String?) ?: "http://10.0.2.2:8777"
-
 // Public Cloudflare Worker URL for the opt-in chat panel. This is a public
 // endpoint, not a secret: the API key lives only in the Worker. Override with
 //   gradle -PchatEndpoint=https://another-worker.workers.dev assembleDebug
@@ -43,7 +27,6 @@ android {
         versionCode = 1
         versionName = "0.1.0"
 
-        buildConfigField("String", "API_BASE", "\"$apiBase\"")
         buildConfigField("String", "CHAT_ENDPOINT", "\"$chatEndpoint\"")
     }
 

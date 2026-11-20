@@ -19,10 +19,9 @@ val ApiJson: Json = Json {
     isLenient = true
     coerceInputValues = true
     explicitNulls = true
-    // Required, not cosmetic: without it a field equal to its default is
-    // omitted, so `fearless = emptyList()` would never reach the wire and the
-    // server would read the missing key as "keep the existing pool" instead of
-    // "this series has no pool".
+    // Kept for server-contract parity: the server reads a missing `fearless`
+    // as "keep the existing pool", so `[]` must be encoded explicitly. The app
+    // no longer posts BoardRequest; chat is the only outgoing payload.
     encodeDefaults = true
 }
 
@@ -163,10 +162,10 @@ data class SeriesGameBody(
  * unambiguous form).
  *
  * `fearless` is the pool for *this game*: champions picked in earlier games of
- * the series. It is sent as an explicit list even when empty, because the
- * server treats *absent* as "keep the existing pool" and `[]` as "no pool" -
- * and `ApiJson` sets `encodeDefaults` so an empty list is not dropped on the
- * way out.
+ * the series. The server treats *absent* as "keep the existing pool" and `[]`
+ * as "no pool" - `ApiJson` keeps `encodeDefaults` so that contract stays
+ * visible, even though the app now answers on-device instead of posting this
+ * body.
  */
 @Serializable
 data class BoardRequest(
@@ -178,6 +177,3 @@ data class BoardRequest(
     @SerialName("patch_id") val patchId: Int? = null,
     val k: Int? = null,
 )
-
-@Serializable
-data class ErrorResponse(val error: String? = null)

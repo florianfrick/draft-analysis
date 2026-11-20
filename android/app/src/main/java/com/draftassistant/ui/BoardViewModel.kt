@@ -82,12 +82,10 @@ data class UiState(
     val turn: Turn? = null,
 
     val suggestions: List<Suggestion> = emptyList(),
-    val suggestionIndex: Int = -1,
     val assignment: List<String?> = List(10) { null },
     val conf: List<Double?> = List(10) { null },
 
     val note: String? = null,
-    val modelLabel: String? = null,
 
     // Opt-in chat. Nothing here is updated by a board change: a chat turn is
     // sent only when the user asks a question.
@@ -276,7 +274,6 @@ class BoardViewModel : ViewModel() {
                         plans = DraftOrder.parse(response.movePlan),
                         patches = response.patches,
                         patchId = response.defaultPatchId,
-                        modelLabel = response.policyModel?.ckpt ?: response.policyModel?.path,
                     ).withTurn()
                 }
                 refresh()
@@ -339,7 +336,6 @@ class BoardViewModel : ViewModel() {
             bansBlue = emptyList(),
             bansRed = emptyList(),
             suggestions = emptyList(),
-            suggestionIndex = -1,
         )
     }
 
@@ -399,16 +395,6 @@ class BoardViewModel : ViewModel() {
 
     fun openGame(index: Int) = mutate { state ->
         if (index == state.series.current) state else state.synced().loaded(index)
-    }
-
-    fun addGame() = mutate { state ->
-        val base = state.synced()
-        val current = base.currentGame ?: return@mutate state
-        // A game appended at the end is the same point in the series, so it
-        // inherits the current pool unchanged - nothing was closed.
-        val slot = GameSlot(firstPick = current.firstPick, fearless = current.fearless)
-        val index = base.series.games.size
-        base.copy(series = base.series.copy(games = base.series.games + slot)).loaded(index)
     }
 
     fun nextGame(firstPick: Int? = null) = mutate { state ->
@@ -499,7 +485,6 @@ class BoardViewModel : ViewModel() {
             bansBlue = slot.bansBlue,
             bansRed = slot.bansRed,
             suggestions = emptyList(),
-            suggestionIndex = -1,
         )
     }
 
@@ -584,11 +569,9 @@ class BoardViewModel : ViewModel() {
                 state.copy(
                     busy = false,
                     suggestions = next?.suggestions.orEmpty(),
-                    suggestionIndex = next?.state?.moveIdx ?: -1,
                     assignment = roles?.assignment?.takeIf { it.size == 10 } ?: state.assignment,
                     conf = roles?.conf?.takeIf { it.size == 10 } ?: state.conf,
                     note = next?.note ?: next?.error ?: roles?.error,
-                    modelLabel = next?.model?.ckpt ?: state.modelLabel,
                     error = failure?.let(::friendly),
                 )
             }

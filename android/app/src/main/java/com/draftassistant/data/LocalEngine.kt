@@ -14,7 +14,7 @@ import kotlin.math.ln
 
 /**
  * Offline backend: runs the shipped checkpoints on the phone through
- * ExecuTorch and returns the *same* DTOs `DraftApi` gets from the server.
+ * ExecuTorch and returns the *same* DTOs the server's board routes publish.
  *
  * The whole point of this class is contract fidelity. Every quirk that is
  * easy to get wrong on a second implementation is deliberate here:
