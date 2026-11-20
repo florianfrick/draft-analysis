@@ -116,8 +116,18 @@ def test_sample_games_is_reproducible_and_inside_the_test_set(corpus):
 def test_prefixes_map_to_tasks():
     assert R.task_of("masking-proonly-nov13-through-lcp-df-sw") == "masked"
     assert R.task_of("nextpick-proonly-nov13-k5-through-lcp-df-sw") == "next_move"
+    assert R.task_of("role-next-x") == "role_next"
     assert R.task_of("value-something") is None
     assert R.task_of("llm-lora-rerank5") is None
+
+
+def test_the_transformer_is_scored_on_two_distinct_tasks():
+    """One checkpoint, two questions - not one pooled number."""
+    name = "nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw"
+    assert R.task_of(name) == "next_move"
+    assert R.tasks_of(name) == ("next_move", "role_next")
+    assert R.tasks_of("role-next-x") == ("role_next",)
+    assert R.tasks_of("masking-proonly-nov13-through-lcp-df-sw") == ("masked",)
 
 
 def test_the_reference_is_first_in_its_task():
@@ -271,6 +281,46 @@ def test_legality_matches_the_policy_model(corpus):
                     m, row["gameid"], len(mine), int(allowed.sum()))
 
 
+def test_role_next_states_pin_the_true_role_and_exclude_bans(corpus):
+    """The new suite asks 'who fills this role?', not 'what is move m?'.
+
+    build_prefix leaves unpicked slots at FLEX. If the pin were missing, this
+    would silently collapse back into the next-move question with a different
+    scorer; if ban moves were included, the target would have no true role.
+    """
+    rows, splits = corpus
+    row = rows[splits["test"][0]]
+    states = M.role_next_states([row], None, None)
+    picks = [m for m, move in enumerate(row["moves"])
+             if move[0] == M.MOVE_PICK]
+    assert len(states) == len(picks) == 10
+    for st, m in zip(states, picks):
+        assert st["move"] == m
+        assert st["slot"] == row["moves"][m][1] * 5 + row["moves"][m][3]
+        assert st["target"] == row["moves"][m][2]
+        sample = st["sample"]
+        assert int(sample["role_ids"][st["slot"]]) == st["role"]
+        assert int(sample["champ_ids"][st["slot"]]) == M.PRO_DATA.CHAMP_PAD_ID
+        assert bool(sample["pad_mask"][st["slot"]])
+
+
+def test_role_next_baseline_uses_only_train_picks(corpus):
+    """A train-only (patch, role) table, with no test leakage."""
+    rows, splits = corpus
+    freq = M.role_next_frequency_tables(rows, splits["train"])
+    by_pair, by_role = freq
+    assert len(by_pair) > 50
+    assert by_role.shape == (5, M.NUM_CHAMPS)
+    first_patch = M.P.patch_key(rows[splits["train"][0]].get("patch"))
+    expected = sum(1 for i in splits["train"]
+                   for move in rows[i]["moves"]
+                   if move[0] == M.MOVE_PICK
+                   and M.P.patch_key(rows[i].get("patch")) == first_patch)
+    assert by_pair[(first_patch, 0)].sum() + by_pair[(first_patch, 1)].sum() \
+        + by_pair[(first_patch, 2)].sum() + by_pair[(first_patch, 3)].sum() \
+        + by_pair[(first_patch, 4)].sum() == expected
+
+
 def test_the_flat_scorer_ranks_inside_the_candidate_set(corpus):
     """A target outside the candidate list must raise, not rank 173rd.
 
@@ -309,7 +359,7 @@ def _phase(n=1, top5=0.1):
             for p in ("ban1", "pick1", "ban2", "pick2")}
 
 
-def test_the_report_renders_both_sections_and_never_ranks_the_unverified():
+def test_the_report_renders_all_sections_and_never_ranks_the_unverified():
     report = {
         "suite": {
             "split": {"corpus": "pro_drafts_full.pt", "corpus_rows": 46939,
@@ -350,6 +400,13 @@ def test_the_report_renders_both_sections_and_never_ranks_the_unverified():
                            "reference_only": 0, "delta_top1": 0.7,
                            "chi2": 5.0, "p": 0.01, "n_paired": 10}},
         },
+        "role_next": {
+            R.REFERENCE["role_next"]: {
+                "name": R.REFERENCE["role_next"], "comparable": True,
+                "kind": "role_next", "params": 25509037,
+                "agg": {"n": 10, "top1": 0.2, "top5": 0.6, "top10": 0.8,
+                        "mean_rank": 6.0, "top1_ci": [0.1, 0.3]}},
+        },
     }
     md = REP.render(report)
     assert "### Comparable" in md
@@ -372,6 +429,12 @@ def test_the_report_renders_both_sections_and_never_ranks_the_unverified():
 
     # the split header is the manifest, not a hand-typed number
     assert "39,720 / 4,771 / 2,448".replace(",", "") in md.replace(",", "")
+
+    # the third suite renders, with its own definition rather than a copy of
+    # the next-move question
+    assert "## Role-conditioned next pick" in md
+    assert "true role of that pick" in md
+    assert R.REFERENCE["role_next"] in md
 
 
 def test_every_row_carries_a_param_count_or_an_explicit_dash():

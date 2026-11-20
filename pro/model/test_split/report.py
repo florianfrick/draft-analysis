@@ -30,11 +30,12 @@ DEFAULT_OUT = HERE / "REPORT_suite.md"
 
 # `suite.BASELINE`, restated rather than imported: `report.py` reads only the
 # JSON and must keep working on a run produced before a name change.
-BASELINE = "00-frequency-table"
+BASELINES = ("00-frequency-table", "00-role-frequency-table")
 
 TASK_TITLE = {
     "next_move": "Next move",
     "masked": "Masked completion (the role board's question)",
+    "role_next": "Role-conditioned next pick",
 }
 TASK_QUESTION = {
     "next_move": "Given the first *m* moves, what is move *m*? 20 states per "
@@ -42,6 +43,11 @@ TASK_QUESTION = {
     "masked": "Given a complete draft with one pick hidden, who was it? 10 "
               "states per game; the other nine slots - including later picks - "
               "are visible.",
+    "role_next": "Given the prefix before a PICK and the true role of that "
+                 "pick, who is the champion? Only the target slot's role is "
+                 "pinned; the other empty slots stay FLEX. 10 pick states per "
+                 "game; no later picks are visible. Ban moves are excluded "
+                 "because their target has no true role.",
 }
 
 
@@ -97,11 +103,12 @@ HEADER = ("| model | params | n | top-1 | 95% CI | top-5 | top-10 | mean rank "
 PARAMS_NOTE = (
     "`params` counts what the model stores. For anything with a weight vector "
     "(the set transformers, the flat MLP) it is `sum(p.numel())` off the loaded "
-    "module. For the frequency table it is the table's own size - 20 moves x "
-    "173 champions x one per test patch - because that is what it costs to "
-    "hold. For the forest it is the total node count across all trees, a tree "
-    "ensemble having no weight vector. The three are not the same kind of "
-    "quantity and the column is there to size a model, not to rank one.")
+    "module. For a frequency table it is the table's own size - one entry per "
+    "champion per patch (and per move or role, depending on the question) - "
+    "because that is what it costs to hold. For the forest it is the total "
+    "node count across all trees, a tree ensemble having no weight vector. "
+    "The three are not the same kind of quantity and the column is there to "
+    "size a model, not to rank one.")
 
 
 def render(report):
@@ -133,7 +140,7 @@ def render(report):
       "run. Nothing in this report is measured on a row any comparable model "
       "trained on.\n")
 
-    for task in ("next_move", "masked"):
+    for task in ("next_move", "masked", "role_next"):
         block = report.get(task)
         if not block:
             continue
@@ -150,10 +157,10 @@ def render(report):
         others = {k: v for k, v in models.items() if not v.get("comparable")}
 
         w("### Comparable\n")
-        if BASELINE in models:
-            w("The first row is the reference point the question is asked "
-              "against: a per-patch move-frequency table fitted on train rows "
-              "only, ranked under the same legality filter every model gets. "
+        if any(k in models for k in BASELINES):
+            w("The `00-*` row is the reference point the question is asked "
+              "against: a train-only frequency table fitted on the same states "
+              "and ranked under the same legality filter every model gets. "
               "Its `Δ vs ref` is the incumbent's margin over a lookup table.\n")
         w(HEADER)
         for name, payload in comparable.items():
@@ -181,6 +188,10 @@ def render(report):
                 cells = [pct(payload["by_phase"][c]["top5"]) for c in cols]
                 w("| `%s` | %s |" % (name, " | ".join(cells)))
             w("\nCells are top-5.\n")
+        else:
+            # Keep a blank line before the next section; masked/role_next have
+            # no by-phase table to supply one.
+            w("")
 
     w("\n## Reading it honestly\n")
     w(PARAMS_NOTE + "\n")
@@ -190,9 +201,11 @@ def render(report):
       "sharper test because it only counts items where the two models "
       "disagree. A `p` above 0.05 with a small `Δ` means \"not shown to be "
       "different\", not \"equal\".\n")
-    w("The two tasks are never pooled: masked completion is an easier question "
-      "by construction, so a single accuracy number across both families would "
-      "rank the easier question higher rather than the better model.\n")
+    w("The three tasks are never pooled: `masked` can see the target's "
+      "neighbourhood (including later picks) and `role_next` is told the "
+      "target's true role, so both are easier questions than `next_move`. A "
+      "single accuracy number across the families would rank the easiest "
+      "question higher rather than the better model.\n")
     return "\n".join(out) + "\n"
 
 

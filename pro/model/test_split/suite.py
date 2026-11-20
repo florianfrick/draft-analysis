@@ -8,10 +8,15 @@ Two suites, because the two model families answer two different questions:
   it?". The other nine slots, including later picks, are visible. 10 states per
   game. Every `masking-*` checkpoint, which is also the model the role board
   asks.
+* `--task role_next` - "given this prefix and the TRUE role of the next pick,
+  who is it?". 10 pick states per game, no later picks. The two
+  `nextpick-naivetransformer-*` checkpoints, scored on their role-conditioned
+  slot read-out. This is the role board's cell-level question without the
+  future leakage of `masked`.
 
-They are never pooled. Masked completion is an easier question by construction
-(it can see the answer's neighbourhood, and the role vector is given), so a
-single accuracy number across both families would rank the easier question
+They are never pooled. `masked` sees the answer's neighbourhood and `role_next`
+is told the answer's role, so both are easier questions by construction; a
+single accuracy number across the families would rank the easier question
 higher rather than the better model.
 
 What makes a run a comparison
@@ -27,11 +32,13 @@ What makes a run a comparison
    split is scored but marked, and never compared against the reference.
 
 Usage:
-    python -m pro.model.test_split.suite                    # both suites, full test set
+    python -m pro.model.test_split.suite                    # all three suites
     python -m pro.model.test_split.suite --task next_move
-    python -m pro.model.test_split.suite --limit 200         # fast smoke run
-    python -m pro.model.test_split.suite --include-archive   # the pre-nov13 arms too
-    python -m pro.model.test_split.suite --list              # what would be scored
+    python -m pro.model.test_split.suite --task role_next
+    python -m pro.model.test_split.suite --task both        # legacy two
+    python -m pro.model.test_split.suite --limit 200        # fast smoke run
+    python -m pro.model.test_split.suite --include-archive  # the pre-nov13 arms too
+    python -m pro.model.test_split.suite --list             # what would be scored
 """
 from __future__ import annotations
 
@@ -52,14 +59,14 @@ from pro.model.test_split import models as M  # noqa: E402
 from pro.model.test_split import registry as R  # noqa: E402
 from pro.model.test_split import split as S  # noqa: E402
 
-KEY = {"next_move": "steps", "masked": "slots"}
+KEY = {"next_move": "steps", "masked": "slots", "role_next": "slots"}
+TASKS = ("next_move", "masked", "role_next")
 
-# The frequency table is not a checkpoint, but it belongs in the same table as
-# one: it is the reference point the question is asked against, and pairing it
-# against the incumbent turns "the model beats a lookup table" from an assertion
-# into a number with a p-value attached. It is named so it sorts above every
-# `masking-`/`nextpick-` directory.
+# The frequency tables are not checkpoints, but they belong in the same tables
+# as one: they are the reference point each question is asked against. They are
+# named so they sort above every `masking-`/`nextpick-` directory.
 BASELINE = "00-frequency-table"
+ROLE_BASELINE = "00-role-frequency-table"
 
 
 def id_to_name():
@@ -71,10 +78,13 @@ def flat_states(task, test_rows):
     """Every state of every test game, in the shape `models.score_flat` wants."""
     if task == "next_move":
         return [(row, m) for row in test_rows for m in range(M.N_MOVES)]
+    if task == "role_next":
+        return [(row, m) for row in test_rows for m in range(M.N_MOVES)
+                if row["moves"][m][0] == M.MOVE_PICK]
     return [(row, s) for row in test_rows for s in range(M.N_SLOTS)]
 
 
-def score_one(entry, task, test_rows, names):
+def score_one(entry, task, test_rows, names, rows=None, train_idx=None):
     """Load, score, aggregate. Returns a dict of everything the row needs."""
     if entry.kind in ("mlp", "forest"):
         # The baseline's weights live beside its `flat.json`, and the loader
@@ -93,6 +103,22 @@ def score_one(entry, task, test_rows, names):
                 "games": games,
                 "params": sum(p.numel() for p in model.parameters()),
                 "kind": "policy", "n_patches": int(cfg.get("n_patches", 0))}
+    if task == "role_next":
+        if rows is None or train_idx is None:
+            raise RuntimeError("role_next needs the full corpus and train rows")
+        model, patch_index, cfg = M.load_policy(entry.path)
+        if not str(cfg.get("arch", "")).startswith("naive_transformer"):
+            raise RuntimeError(
+                "role_next needs the transformer's shared slot head; %s is %r"
+                % (entry.name, cfg.get("arch")))
+        fearless_roles = M.PRO_DATA.build_fearless_roles(rows)
+        freq = M.role_next_frequency_tables(rows, train_idx)
+        games = M.score_role_next(model, patch_index, test_rows, names,
+                                  fearless_roles, freq)
+        return {"agg": M.aggregate(games, "slots"), "by_phase": None,
+                "games": games,
+                "params": sum(p.numel() for p in model.parameters()),
+                "kind": "role_next", "n_patches": int(cfg.get("n_patches", 0))}
     enc, patch_index, cfg = M.load_masked(entry.path)
     games = M.score_masked(enc, patch_index, test_rows, names)
     return {"agg": M.aggregate(games, "slots"), "by_phase": None,
@@ -127,6 +153,15 @@ def baseline_next_move(rows, splits, test_rows, names):
         ranks, _n = M.popularity_reference(patch, source)
         games.extend(M.score_popularity(patch_rows, ranks))
     return games, M.N_MOVES * M.NUM_CHAMPS * len(grouped)
+
+
+def baseline_role_next(rows, splits, test_rows, names):
+    """Train-only per-(patch, role) frequency table on the same pick states."""
+    fearless_roles = M.PRO_DATA.build_fearless_roles(rows)
+    freq = M.role_next_frequency_tables(rows, splits["train"])
+    states = M.role_next_states(test_rows, None, fearless_roles)
+    games = M.score_role_next_frequency(states, freq)
+    return games, M.role_next_table_size(freq)
 
 
 def fmt_row(name, agg, extra="", params=None):
@@ -169,8 +204,8 @@ def attach_paired(report, task, ref_name, ref_games, scored):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--task", choices=("next_move", "masked", "both"),
-                    default="both")
+    ap.add_argument("--task", choices=TASKS + ("both", "all"),
+                    default="all")
     ap.add_argument("--limit", type=int, default=0,
                     help="score a random N of the test games (0 = all 2,448). "
                          "Random, not the first N: the test tail is ordered by "
@@ -191,7 +226,12 @@ def main(argv=None):
     ap.add_argument("--out", default="")
     args = ap.parse_args(argv)
 
-    tasks = ["next_move", "masked"] if args.task == "both" else [args.task]
+    if args.task == "all":
+        tasks = list(TASKS)
+    elif args.task == "both":
+        tasks = ["next_move", "masked"]
+    else:
+        tasks = [args.task]
     entries = []
     for task in tasks:
         entries += R.scan(include_archive=args.include_archive, task=task)
@@ -284,10 +324,24 @@ def main(argv=None):
             scored[BASELINE] = base_games
             print(fmt_row(BASELINE, base["agg"], params=cells))
 
+        if task == "role_next" and args.baseline:
+            base_games, cells = baseline_role_next(rows, splits, test_rows,
+                                                   names)
+            base = {"name": ROLE_BASELINE, "path": None, "track": "baseline",
+                    "archived": False, "comparable": True, "split_note": "",
+                    "kind": "frequency", "params": cells, "baseline": True,
+                    "n_patches": None, "seconds": 0.0,
+                    "split_counts": {k: len(v) for k, v in splits.items()},
+                    "agg": M.aggregate(base_games, "slots")}
+            report[task][ROLE_BASELINE] = base
+            scored[ROLE_BASELINE] = base_games
+            print(fmt_row(ROLE_BASELINE, base["agg"], params=cells))
+
         for entry in task_entries:
             t0 = time.time()
             try:
-                out = score_one(entry, task, test_rows, names)
+                out = score_one(entry, task, test_rows, names, rows=rows,
+                                train_idx=splits["train"])
             except Exception as exc:                   # noqa: BLE001
                 # One unloadable checkpoint must not take the leaderboard with
                 # it: the whole point of scanning a directory is that a future
@@ -337,9 +391,9 @@ def main(argv=None):
                          p["this_only"], p["reference_only"]))
 
     report["suite"]["seconds"] = round(time.time() - t_start, 1)
+    suffix = "" if args.task in ("all", "both") else "_" + args.task
     out = Path(args.out) if args.out else (
-        HERE / "reports" / ("suite%s.json" % ("" if args.task == "both"
-                                              else "_" + args.task)))
+        HERE / "reports" / ("suite%s.json" % suffix))
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=1, ensure_ascii=False)

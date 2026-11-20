@@ -22,7 +22,7 @@ Given the first *m* moves, what is move *m*? 20 states per game, prefix only.
 
 ### Comparable
 
-The first row is the reference point the question is asked against: a per-patch move-frequency table fitted on train rows only, ranked under the same legality filter every model gets. Its `Δ vs ref` is the incumbent's margin over a lookup table.
+The `00-*` row is the reference point the question is asked against: a train-only frequency table fitted on the same states and ranked under the same legality filter every model gets. Its `Δ vs ref` is the incumbent's margin over a lookup table.
 
 | model | params | n | top-1 | 95% CI | top-5 | top-10 | mean rank | Δ vs ref (pp) | discordant | p |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -93,11 +93,26 @@ Trained on a different split, so some of these test rows are in their training d
 | `masking-proonly-through-wlds-ig-tes` | 2,489,266 | 24,480 | 26.7% | [26.2, 27.3] | 67.1% | 85.0% | 5.25 | - | - | - |
 | `masking-sharedsplitthrough-las-dk-c-t1-r` | 2,489,522 | 24,480 | 26.4% | [25.8, 26.9] | 66.8% | 83.9% | 5.43 | - | - | - |
 
+## Role-conditioned next pick
+
+Given the prefix before a PICK and the true role of that pick, who is the champion? Only the target slot's role is pinned; the other empty slots stay FLEX. 10 pick states per game; no later picks are visible. Ban moves are excluded because their target has no true role.
+
+### Comparable
+
+The `00-*` row is the reference point the question is asked against: a train-only frequency table fitted on the same states and ranked under the same legality filter every model gets. Its `Δ vs ref` is the incumbent's margin over a lookup table.
+
+| model | params | n | top-1 | 95% CI | top-5 | top-10 | mean rank | Δ vs ref (pp) | discordant | p |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `00-role-frequency-table` | 93,420 | 24,480 | 28.3% | [27.8, 28.9] | 73.4% | 88.6% | 4.64 | +24.7 | 6602/549 | <1e-300 |
+| `nextpick-naivetransformer-d512-l8-h8-k5-through-lcp-df-sw` | 25,509,037 | 24,480 | 3.6% | [3.4, 3.8] | 14.2% | 24.6% | 42.24 | - | - | - |
+| `nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw` | 25,509,037 | 24,480 | 24.4% | [23.9, 25.0] | 64.7% | 81.4% | 6.09 | +20.8 | 5380/280 | <1e-300 |
+
+
 ## Reading it honestly
 
-`params` counts what the model stores. For anything with a weight vector (the set transformers, the flat MLP) it is `sum(p.numel())` off the loaded module. For the frequency table it is the table's own size - 20 moves x 173 champions x one per test patch - because that is what it costs to hold. For the forest it is the total node count across all trees, a tree ensemble having no weight vector. The three are not the same kind of quantity and the column is there to size a model, not to rank one.
+`params` counts what the model stores. For anything with a weight vector (the set transformers, the flat MLP) it is `sum(p.numel())` off the loaded module. For a frequency table it is the table's own size - one entry per champion per patch (and per move or role, depending on the question) - because that is what it costs to hold. For the forest it is the total node count across all trees, a tree ensemble having no weight vector. The three are not the same kind of quantity and the column is there to size a model, not to rank one.
 
 The intervals are Wilson 95% on the pooled rate. Two rows whose intervals overlap are not separated by this split; the `Δ vs ref` column is the paired McNemar against the incumbent, which is the sharper test because it only counts items where the two models disagree. A `p` above 0.05 with a small `Δ` means "not shown to be different", not "equal".
 
-The two tasks are never pooled: masked completion is an easier question by construction, so a single accuracy number across both families would rank the easier question higher rather than the better model.
+The three tasks are never pooled: `masked` can see the target's neighbourhood (including later picks) and `role_next` is told the target's true role, so both are easier questions than `next_move`. A single accuracy number across the families would rank the easiest question higher rather than the better model.
 

@@ -14,10 +14,12 @@ different things and must not be scored by the same function:
 * `score_masked` - given the complete draft with one pick hidden, who was it?
   10 states per game, and the other nine slots *including later picks* are
   visible.
+* `score_role_next` - given the same prefix but TOLD the true role of the
+  upcoming pick, who is it? 10 pick states per game, no later picks. This is
+  the role board's cell-level question, scored separately from both above.
 
-The asymmetry is the whole point and it is not a bug: masked completion is a
-different and easier question, which is why the two suites are reported
-separately and never averaged together.
+The asymmetry is the whole point and it is not a bug: these are different
+questions, which is why they are reported separately and never averaged.
 """
 from __future__ import annotations
 
@@ -25,6 +27,7 @@ import importlib.util
 import json
 import math
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -231,6 +234,128 @@ def score_masked(enc, patch_index, rows, id_to_name):
             })
         slots.sort(key=lambda s: (s["move"] is None, s["move"]))
         games.append({"gameid": row["gameid"], "slots": slots})
+    return games
+
+
+# ------------------------------------------------ role-conditioned next pick
+# A third protocol, deliberately separate from both suites above: prefix only
+# (no later picks), but the TRUE role of the upcoming pick is pinned into the
+# target slot's role input. This is the cell-level shape of the role board's
+# question - "who belongs in red MID given what is known now?" - without the
+# full-draft future leakage of `score_masked`. Ban moves are excluded: their
+# target has no true role (`build_prefix` records IGNORE_INDEX), so the question
+# "who fills this role?" is undefined there.
+def role_next_states(rows, patch_index, fearless_roles):
+    """One state per PICK move: prefix + the target slot's true role pinned."""
+    states = []
+    for row in rows:
+        patch = P.patch_key(row.get("patch"))
+        for m, move in enumerate(row["moves"]):
+            kind, team, champ, role = move
+            if kind != MOVE_PICK:
+                continue
+            team, role, champ = int(team), int(role), int(champ)
+            slot = team * 5 + role
+            sample = PRO_DATA.build_prefix(
+                row, m, NUM_CHAMPS, patch_index, fearless_roles)
+            # build_prefix leaves unpicked slots at ROLE_FLEX_ID. Pinning the
+            # target role is the entire experiment: the model is TOLD which
+            # role it is filling instead of having to guess it from the pick
+            # order. The champion stays PAD and pad_mask stays True.
+            sample["role_ids"][slot] = role
+            states.append({
+                "sample": sample, "row": row, "move": m, "slot": slot,
+                "role": role, "target": champ, "patch": patch,
+            })
+    return states
+
+
+def role_next_frequency_tables(rows, train_idx):
+    """Per (patch, role) champion counts from TRAIN picks only, plus backoff."""
+    by_pair = defaultdict(lambda: np.zeros(NUM_CHAMPS, dtype=np.float64))
+    by_role = np.zeros((5, NUM_CHAMPS), dtype=np.float64)
+    for i in train_idx:
+        row = rows[i]
+        patch = P.patch_key(row.get("patch"))
+        for kind, _team, champ, role in row["moves"]:
+            if kind != MOVE_PICK:
+                continue
+            by_pair[(patch, int(role))][int(champ)] += 1.0
+            by_role[int(role)][int(champ)] += 1.0
+    return dict(by_pair), by_role
+
+
+def role_next_table_size(freq):
+    """What the lookup table costs to hold: one row per (patch, role, champ)."""
+    by_pair, by_role = freq
+    return len(by_pair) * NUM_CHAMPS + by_role.shape[0] * NUM_CHAMPS
+
+
+def _role_next_item(state, rank, id_to_name=None):
+    item = {
+        "slot": state["slot"], "move": state["move"],
+        "role": ROLE_NAMES.get(state["role"], "?"), "rank": int(rank),
+    }
+    if id_to_name:
+        item["actual"] = id_to_name[state["target"]]
+    return item
+
+
+def score_role_next(model, patch_index, rows, names, fearless_roles, freq,
+                    chunk=160):
+    """Rank the upcoming pick's champion, given its prefix and true role."""
+    states = role_next_states(rows, patch_index, fearless_roles)
+    by_game = {}
+    for start in range(0, len(states), chunk):
+        part = states[start:start + chunk]
+        batch = PRO_DATA.pro_collate([s["sample"] for s in part])
+        with torch.no_grad():
+            logits = model(batch)["slot_logits"]
+        for i, state in enumerate(part):
+            slot = state["slot"]
+            lg = logits[i, slot]
+            target = state["target"]
+            if not bool(torch.isfinite(lg[target])):
+                raise RuntimeError(
+                    "target %d is masked at role_next state %s move %d"
+                    % (target, state["row"]["gameid"], state["move"]))
+            by_game.setdefault(state["row"]["gameid"], []).append(
+                _role_next_item(state, _rank_of(lg, target), names))
+    games = []
+    for gid, items in by_game.items():
+        items.sort(key=lambda s: (s["move"], s["slot"]))
+        games.append({"gameid": gid, "slots": items})
+    return games
+
+
+def score_role_next_frequency(states, freq):
+    """The same items and legality filter, ranked by a train-only lookup table."""
+    by_pair, by_role = freq
+    by_game = {}
+    for state in states:
+        table = by_pair.get((state["patch"], state["role"]))
+        if table is None:
+            table = by_role[state["role"]]
+        sample = state["sample"]
+        legal = np.flatnonzero(~sample["taken_mask"].numpy()
+                               & ~sample["unavailable_mask"].numpy())
+        target = state["target"]
+        if target not in legal:
+            raise RuntimeError(
+                "target %d is illegal at role_next state %s move %d"
+                % (target, state["row"]["gameid"], state["move"]))
+        scores = table[legal]
+        # Same tie rule as eval_role.py: a deterministic id tie-break keeps a
+        # sparse per-patch table from being penalised for counts that tie.
+        rank = int(np.count_nonzero(
+            (scores > table[target])
+            | ((scores == table[target]) & (legal < target))))
+        by_game.setdefault(state["row"]["gameid"], []).append(
+            _role_next_item(state, rank))
+    games = []
+    for gid, items in by_game.items():
+        items.sort(key=lambda s: (s["move"], s["slot"]))
+        games.append({"gameid": gid, "slots": items})
     return games
 
 

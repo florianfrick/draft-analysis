@@ -28,8 +28,9 @@ ExecuTorch.
 - **Role board / masked completion:** `masking-proonly-nov13-through-lcp-df-sw`
 - **Next move:** `nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw`
 - **Canonical evaluation split:** 39,720 / 4,771 / 2,448 drafts over 99 patches.
-  Two suites are scored separately: `next_move` (prefix-only) and `masked`
-  (one slot hidden, including later picks as context).
+  Three suites are scored separately: `next_move` (prefix-only), `masked`
+  (one slot hidden, including later picks as context), and `role_next`
+  (prefix + the pick's true role, no later picks).
 - **Frontend:** `bash frontend/serve.sh` serves the local UI on 127.0.0.1.
 - **Android:** Kotlin/Compose with `policy.pte` (26.6 MB, quantized) and
   `masker.pte` (10.0 MB, FP32), bundled champion portraits, and static metadata.

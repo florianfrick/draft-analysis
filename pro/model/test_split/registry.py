@@ -5,7 +5,12 @@ Discovery is by directory name, because the name is already the contract
 
     masking-*    masked completion / the role board      -> the "masked" suite
     nextpick-*   next move                               -> the "next_move" suite
+    role-next-*  prefix + true role of the next pick     -> the "role_next" suite
     anything else                                        -> not scored here
+
+`nextpick-naivetransformer-*` is additionally entered in `role_next`: the same
+weights carry a role-conditioned slot read-out, so one checkpoint can answer
+two questions without pretending the two numbers are one task.
 
 Why a registry instead of a hand-written list: the old harness named five
 checkpoints and five paths in source, so adding a model meant editing the
@@ -33,7 +38,8 @@ ROOT = HERE.parents[2]
 from pro.model.test_split import split as S  # noqa: E402
 
 # Prefix -> task. Order matters only for the error message.
-PREFIX_TASK = {"masking-": "masked", "nextpick-": "next_move"}
+PREFIX_TASK = {"masking-": "masked", "nextpick-": "next_move",
+               "role-next-": "role_next"}
 
 # Where checkpoints live. `archived` ones are scored only when asked for: they
 # are the pre-`nov13` arms, trained on other splits, and their presence in a
@@ -51,6 +57,9 @@ CKPT_ROOTS = [
 REFERENCE = {
     "masked": "masking-proonly-nov13-through-lcp-df-sw",
     "next_move": "nextpick-proonly-nov13-k5-through-lcp-df-sw",
+    # The plain transformer is the control for the role-conditioned query:
+    # the role-tuned checkpoint is the candidate being measured against it.
+    "role_next": "nextpick-naivetransformer-d512-l8-h8-k5-through-lcp-df-sw",
 }
 
 # One checkpoint file per directory, in preference order. `latest.pt` is never
@@ -94,6 +103,23 @@ def task_of(name):
         if name.startswith(prefix):
             return task
     return None
+
+
+def tasks_of(name):
+    """Every task one checkpoint directory is scorable on, in stable order.
+
+    Directory prefix still decides the primary task. The transformer family is
+    the one exception: its shared slot head answers the role-conditioned query
+    too, so the same weights get a second `role_next` entry. `dict.fromkeys`
+    keeps this idempotent if a future directory is named `role-next-*`.
+    """
+    tasks = []
+    primary = task_of(name)
+    if primary:
+        tasks.append(primary)
+    if name.startswith("nextpick-naivetransformer-"):
+        tasks.append("role_next")
+    return tuple(dict.fromkeys(tasks))
 
 
 def checkpoint_file(directory):
@@ -177,10 +203,9 @@ def scan(include_archive=False, task=None):
         for directory in sorted(root.iterdir()):
             if not directory.is_dir():
                 continue
-            t = task_of(directory.name)
-            if t is None:
-                continue
-            if task is not None and t != task:
+            tasks = [t for t in tasks_of(directory.name)
+                     if task is None or t == task]
+            if not tasks:
                 continue
             ckpt = checkpoint_file(directory)
             flat = flat_manifest(directory)
@@ -188,22 +213,25 @@ def scan(include_archive=False, task=None):
                 weights = directory / str(flat.get("weights") or "")
                 if not weights.is_file():
                     continue
-                entry = Entry(name=directory.name, path=weights, task=t,
-                              track=track, archived=archived,
-                              kind=str(flat.get("kind") or "flat"),
-                              params=flat.get("params"))
-            elif ckpt is not None:
-                entry = Entry(name=directory.name, path=ckpt, task=t,
-                              track=track, archived=archived)
-                entry.params = _reported_params(directory)
-            else:
+            elif ckpt is None:
                 # An `llm-*` folder has adapter/ + projector.pt instead, and an
                 # ensemble has ensemble.json; neither is a set-transformer the
                 # suite can score. Skip rather than fail.
                 continue
-            entry.split_counts = _split_counts(directory)
-            _classify(entry, entry.split_counts)
-            out.append(entry)
+            counts = _split_counts(directory)
+            for t in tasks:
+                if flat is not None:
+                    entry = Entry(name=directory.name, path=weights, task=t,
+                                  track=track, archived=archived,
+                                  kind=str(flat.get("kind") or "flat"),
+                                  params=flat.get("params"))
+                else:
+                    entry = Entry(name=directory.name, path=ckpt, task=t,
+                                  track=track, archived=archived)
+                    entry.params = _reported_params(directory)
+                entry.split_counts = counts
+                _classify(entry, counts)
+                out.append(entry)
     out.sort(key=lambda e: (not e.is_reference, e.archived, e.name))
     return out
 

@@ -58,24 +58,27 @@ python -m pro.model.test_split.split            # print it
 python -m pro.model.test_split.split --check    # verify against the manifest
 ```
 
-## The two suites
+## The three suites
 
-The two model families answer different questions, so they are scored by
-different functions and never pooled:
+The three questions are different, so they are scored by different functions
+and never pooled:
 
 | suite | question | states/game | models |
 |---|---|---|---|
 | `next_move` | given the first *m* moves, what is move *m*? prefix only | 20 | every `nextpick-*` |
 | `masked` | given a complete draft with one pick hidden, who was it? the other nine slots - **including later picks** - are visible | 10 | every `masking-*` |
+| `role_next` | given the prefix before a pick and that pick's **true role**, who is it? no later picks | 10 (picks only) | the `nextpick-naivetransformer-*` pair |
 
-Pooling them would be a mistake with a direction: masked completion is the easier
-question by construction, so a combined accuracy would rank the easier question
-higher and call it a better model. This is also the sense in which a masking
-model *is* a role-conditioned next-pick model - the role vector is an input and
-the query is "who belongs in this slot". What differs is the context each one
-gets to see, and that difference is why the two numbers are never averaged.
+Pooling them would be a mistake with a direction: `masked` sees the answer's
+neighbourhood and `role_next` is handed the answer's role, so both are easier
+questions than `next_move`. A combined accuracy would rank the easiest question
+higher and call it a better model. `role_next` is the cell-level shape of the
+role board's query ("who belongs in red MID?"); unlike the shipped board it
+uses the corpus's *true* role rather than a user-chosen lane, and it scores one
+cell at a time rather than the joint 10-cell assignment. That is why the three
+numbers are never averaged.
 
-`models.py` holds both scorers and is the code the pre-`nov13` harness used, so
+`models.py` holds all three scorers and is the code the pre-`nov13` harness used, so
 a number here is on the same construction as the ones in `STATUS.md` rather than
 a quiet re-derivation. Legality is applied identically to every model and to the
 frequency-table baseline; without it the table would rank already-banned

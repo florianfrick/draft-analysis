@@ -27,13 +27,14 @@
   },
   "tasks": [
    "next_move",
-   "masked"
+   "masked",
+   "role_next"
   ],
   "n_test_games": 2448,
   "limited": false,
   "baseline": true,
   "torch": "2.14.1+cu126",
-  "seconds": 2439.5
+  "seconds": 2981.3
  },
  "models": [
   {
@@ -310,6 +311,28 @@
    "params": 2489522,
    "split_note": "different split: train=42145, val=4763, test=7",
    "path": "pro/model/archive/checkpoints/masking-sharedsplitthrough-las-dk-c-t1-r/best.pt"
+  },
+  {
+   "name": "nextpick-naivetransformer-d512-l8-h8-k5-through-lcp-df-sw",
+   "task": "role_next",
+   "track": "pro",
+   "archived": false,
+   "comparable": true,
+   "kind": "torch",
+   "params": 25509037,
+   "split_note": "",
+   "path": "pro/model/checkpoints/nextpick-naivetransformer-d512-l8-h8-k5-through-lcp-df-sw/best.pt"
+  },
+  {
+   "name": "nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw",
+   "task": "role_next",
+   "track": "pro",
+   "archived": false,
+   "comparable": true,
+   "kind": "torch",
+   "params": 25509037,
+   "split_note": "",
+   "path": "pro/model/checkpoints/nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw/best.pt"
   }
  ],
  "next_move": {
@@ -1934,6 +1957,137 @@
     "delta_top1": 0.016870915032679734,
     "chi2": 32.33835016193561,
     "p": 1.2953146481411054e-08
+   }
+  }
+ },
+ "role_next": {
+  "00-role-frequency-table": {
+   "name": "00-role-frequency-table",
+   "path": null,
+   "track": "baseline",
+   "archived": false,
+   "comparable": true,
+   "split_note": "",
+   "kind": "frequency",
+   "params": 93420,
+   "baseline": true,
+   "n_patches": null,
+   "seconds": 0.0,
+   "split_counts": {
+    "train": 39720,
+    "val": 4771,
+    "test": 2448
+   },
+   "agg": {
+    "n": 24480,
+    "top1": 0.2832107843137255,
+    "top1_ci": [
+     0.27760095786733796,
+     0.2888886407257193
+    ],
+    "top5": 0.734436274509804,
+    "top5_ci": [
+     0.7288674249671749,
+     0.7399315563168734
+    ],
+    "top10": 0.8862745098039215,
+    "top10_ci": [
+     0.8822366806531973,
+     0.8901911233234464
+    ],
+    "mean_rank": 4.639624183006536
+   },
+   "paired": {
+    "vs": "nextpick-naivetransformer-d512-l8-h8-k5-through-lcp-df-sw",
+    "n_paired": 24480,
+    "this_only": 6602,
+    "reference_only": 549,
+    "delta_top1": 0.24726307189542485,
+    "chi2": 5121.899594462313,
+    "p": 0.0
+   }
+  },
+  "nextpick-naivetransformer-d512-l8-h8-k5-through-lcp-df-sw": {
+   "name": "nextpick-naivetransformer-d512-l8-h8-k5-through-lcp-df-sw",
+   "path": "pro/model/checkpoints/nextpick-naivetransformer-d512-l8-h8-k5-through-lcp-df-sw/best.pt",
+   "track": "pro",
+   "archived": false,
+   "comparable": true,
+   "split_note": "",
+   "split_counts": {
+    "n_train": 39720,
+    "n_val": 4771,
+    "n_test": 2448
+   },
+   "kind": "role_next",
+   "params": 25509037,
+   "n_patches": 108,
+   "seconds": 265.9,
+   "agg": {
+    "n": 24480,
+    "top1": 0.03594771241830065,
+    "top1_ci": [
+     0.03368752874475988,
+     0.03835351893135316
+    ],
+    "top5": 0.1423611111111111,
+    "top5_ci": [
+     0.1380399905480062,
+     0.1467944612481531
+    ],
+    "top10": 0.24616013071895426,
+    "top10_ci": [
+     0.24080390206730207,
+     0.2515960160893323
+    ],
+    "mean_rank": 42.23656045751634
+   },
+   "by_phase": null
+  },
+  "nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw": {
+   "name": "nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw",
+   "path": "pro/model/checkpoints/nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw/best.pt",
+   "track": "pro",
+   "archived": false,
+   "comparable": true,
+   "split_note": "",
+   "split_counts": {
+    "n_train": 39720,
+    "n_val": 4771,
+    "n_test": 2448
+   },
+   "kind": "role_next",
+   "params": 25509037,
+   "n_patches": 108,
+   "seconds": 268.5,
+   "agg": {
+    "n": 24480,
+    "top1": 0.24428104575163398,
+    "top1_ci": [
+     0.238939048631823,
+     0.24970328926011956
+    ],
+    "top5": 0.6473447712418301,
+    "top5_ci": [
+     0.6413366749052107,
+     0.653306629763122
+    ],
+    "top10": 0.8138071895424837,
+    "top10_ci": [
+     0.8088817617921434,
+     0.8186341424113864
+    ],
+    "mean_rank": 6.086642156862745
+   },
+   "by_phase": null,
+   "paired": {
+    "vs": "nextpick-naivetransformer-d512-l8-h8-k5-through-lcp-df-sw",
+    "n_paired": 24480,
+    "this_only": 5380,
+    "reference_only": 280,
+    "delta_top1": 0.20833333333333331,
+    "chi2": 4593.6044169611305,
+    "p": 0.0
    }
   }
  }

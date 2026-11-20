@@ -316,7 +316,7 @@ app/src/main/assets/
 app/src/main/java/com/draftassistant/
   MainActivity.kt            initialises LocalEngine and ChatClient
   data/Models.kt             wire DTOs, field-for-field with server.py
-  data/DraftOrder.kt         board -> next turn (ported, not reinvented)
+  data/DraftOrder.kt         board -> next turn
   data/LocalEngine.kt        ExecuTorch runtime, tensor builder, legality, role table
   data/ChatClient.kt         optional Worker client; install id, no API key
   data/ChatModels.kt         chat request/response DTOs
@@ -340,13 +340,3 @@ worker/
 - No checkpoint picker. The two shipped defaults are compiled into the assets.
 - No series persistence across process death. The web client uses
   `localStorage`; this holds the series in memory only.
-
-## Next steps, in order
-
-1. Reach a full 20-move draft end-to-end and confirm the header reads "draft
-   complete" at move 21, not earlier.
-2. Exercise the head path of the role board (ban phase complete) on device and
-   compare a lane cell against `model_tools.predict_in_lane`.
-3. Persist the series across process death.
-4. Consider shipping the masker quantized if ExecuTorch gains the missing
-   out-variants — it would save ~6 MB.

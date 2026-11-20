@@ -211,30 +211,6 @@ class NaiveTransformer(nn.Module):
                                                 picks_only=True),
         }
 
-    @torch.no_grad()
-    def role_suggestions(self, batch, team, role, k=5):
-        """Top-k for `team` (0 blue / 1 red) at `role` (0..4), any draft state.
-
-        Returns None when that slot is already filled. `batch` is the ordinary
-        prefix batch (build_prefix + pro_collate), so this works on ban states:
-        the read-out ignores `is_ban` entirely.
-        """
-        if int(team) not in (0, 1) or not 0 <= int(role) < 5:
-            raise ValueError("team must be 0/1 and role 0..4")
-        slot = int(team) * 5 + int(role)
-        bsz = batch["champ_ids"].size(0)
-        if bsz != 1:
-            raise ValueError("role_suggestions expects a single board")
-        if not bool(batch["pad_mask"][0, slot]):
-            return None
-        hidden = self.encode(batch)
-        logits = self.policy_head(
-            self.head_norm(hidden[:, PICK_START + slot, :]))
-        logits = self._apply_legality(logits, batch, picks_only=True)
-        vals, idx = torch.topk(logits, min(int(k), self.num_champs))
-        return [{"champ": int(c), "logit": float(v)}
-                for c, v in zip(idx[0].tolist(), vals[0].tolist())]
-
 
 def model_kwargs_from_args(args, n_patches):
     """The exact dict stored in every checkpoint and replayed by every loader."""
