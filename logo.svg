@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Draft Assistant logo">
+  <title>Draft Assistant</title>
+  <defs>
+    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8fb8e8"/>
+      <stop offset="1" stop-color="#2f4260"/>
+    </linearGradient>
+    <linearGradient id="red" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f0a5a5"/>
+      <stop offset="1" stop-color="#6b2a2a"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f0c785"/>
+      <stop offset="1" stop-color="#c9a94b"/>
+    </linearGradient>
+    <clipPath id="hex">
+      <path d="M256 40 442 148v216L256 472 70 364V148Z"/>
+    </clipPath>
+  </defs>
+
+  <!-- badge -->
+  <rect width="512" height="512" rx="96" fill="#12151b"/>
+  <path d="M256 40 442 148v216L256 472 70 364V148Z" fill="#232a36"/>
+
+  <g clip-path="url(#hex)">
+    <rect x="70" y="40" width="186" height="432" fill="url(#blue)"/>
+    <rect x="256" y="40" width="186" height="432" fill="url(#red)"/>
+
+    <!-- five pick slots per side, centred vertically, drawn in toward the middle -->
+    <g fill="#12151b" opacity="0.72">
+      <rect x="170" y="141" width="38" height="38" rx="6"/>
+      <rect x="170" y="189" width="38" height="38" rx="6"/>
+      <rect x="170" y="237" width="38" height="38" rx="6"/>
+      <rect x="170" y="285" width="38" height="38" rx="6"/>
+      <rect x="170" y="333" width="38" height="38" rx="6"/>
+      <rect x="304" y="141" width="38" height="38" rx="6"/>
+      <rect x="304" y="189" width="38" height="38" rx="6"/>
+      <rect x="304" y="237" width="38" height="38" rx="6"/>
+      <rect x="304" y="285" width="38" height="38" rx="6"/>
+      <rect x="304" y="333" width="38" height="38" rx="6"/>
+    </g>
+
+    <!-- bans: small boxes pushed outward. Blue column's bottom lines up with
+         the bottom of the blue picks (333+38=371 -> top 351); red column's top
+         lines up with the top of the red picks (y=141). -->
+    <g fill="#12151b" opacity="0.42">
+      <rect x="145" y="247" width="20" height="20" rx="3"/>
+      <rect x="145" y="273" width="20" height="20" rx="3"/>
+      <rect x="145" y="299" width="20" height="20" rx="3"/>
+      <rect x="145" y="325" width="20" height="20" rx="3"/>
+      <rect x="145" y="351" width="20" height="20" rx="3"/>
+      <rect x="347" y="141" width="20" height="20" rx="3"/>
+      <rect x="347" y="167" width="20" height="20" rx="3"/>
+      <rect x="347" y="193" width="20" height="20" rx="3"/>
+      <rect x="347" y="219" width="20" height="20" rx="3"/>
+      <rect x="347" y="245" width="20" height="20" rx="3"/>
+    </g>
+    <!-- selected ban, bottom of the blue side -->
+    <rect x="145" y="351" width="20" height="20" rx="3" fill="none" stroke="url(#gold)" stroke-width="3"/>
+  </g>
+
+  <!-- frame -->
+  <path d="M256 40 442 148v216L256 472 70 364V148Z" fill="none" stroke="url(#gold)" stroke-width="10" stroke-linejoin="round"/>
+</svg>
