@@ -27,9 +27,9 @@ The `00-*` row is the reference point the question is asked against: a train-onl
 | model | params | n | top-1 | 95% CI | top-5 | top-10 | mean rank | Δ vs ref (pp) | discordant | p |
 |---|---|---|---|---|---|---|---|---|---|---|
 | `00-frequency-table` | 342,540 | 48,960 | 10.8% | [10.5, 11.1] | 34.4% | 50.8% | 17.83 | -8.1 | 1857/5841 | <1e-300 |
-| `nextpick-proonly-nov13-k5-through-lcp-df-sw` | 3,350,879 | 48,960 | 18.9% | [18.6, 19.3] | 50.8% | 68.3% | 10.17 | - | - | - |
 | `nextpick-forest-flat-v1` | 2,753,344 | 48,960 | 10.5% | [10.2, 10.7] | 34.8% | 52.5% | 17.52 | -8.5 | 2853/6998 | <1e-300 |
 | `nextpick-mlp-flat-v1` | 2,996,705 | 48,960 | 17.2% | [16.9, 17.5] | 48.2% | 66.1% | 11.22 | -1.7 | 3599/4448 | 3.3e-21 |
+| `nextpick-proonly-nov13-k5-through-lcp-df-sw` | 3,350,879 | 48,960 | 18.9% | [18.6, 19.3] | 50.8% | 68.3% | 10.17 | - | - | - |
 | `nextpick-naivetransformer-d512-l8-h8-k5-through-lcp-df-sw` | 25,509,037 | 48,960 | 20.6% | [20.2, 21.0] | 54.1% | 72.2% | 8.98 | +1.7 | 3415/2601 | 1e-25 |
 | `nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw` | 25,509,037 | 48,960 | 20.7% | [20.3, 21.0] | 54.2% | 72.2% | 8.90 | +1.8 | 3496/2636 | 5.3e-28 |
 | `nextpick-proonly-nov13-k10-through-lcp-df-sw` | 3,350,879 | 48,960 | 19.1% | [18.7, 19.4] | 51.1% | 69.3% | 9.96 | +0.1 | 2654/2591 | 0.39 |
