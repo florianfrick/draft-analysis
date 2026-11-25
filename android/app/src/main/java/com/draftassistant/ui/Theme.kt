@@ -5,7 +5,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-// Palette lifted from frontend/static/style.css so the app reads as the same
+// Palette lifted from webapp/static/style.css so the app reads as the same
 // product rather than a lookalike.
 val Bg = Color(0xFF14171C)
 val Panel = Color(0xFF1D222B)

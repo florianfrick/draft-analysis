@@ -279,7 +279,7 @@ def test_no_registry_entry_points_at_a_deleted_checkpoint():
 def test_every_registry_name_states_its_inference():
     """The directory name is the frontend's contract, so it must be readable.
 
-    `frontend/server._ckpt_roles` decides which slot a checkpoint may fill from
+    `webapp/server._ckpt_roles` decides which slot a checkpoint may fill from
     the prefix alone - `masking-*` for the role board, `nextpick-*` for the
     next-move panel. A name outside that scheme would be offered in both slots
     and fail on load.

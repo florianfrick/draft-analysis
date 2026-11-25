@@ -83,9 +83,14 @@ def available():
     """Whether the soloQ store exists and can be offered as a tool.
 
     Does not open the file - `connect` would lock it, and the explorer may be
-    holding it. Presence is enough to advertise the spec.
+    holding it. Presence is enough to advertise the spec. A deployment that
+    ships neither the analysis package nor duckdb simply has no store: that is
+    an absent tool, not a broken session.
     """
-    from solo_queue.analysis.store import DEFAULT_OUT
+    try:
+        from solo_queue.analysis.store import DEFAULT_OUT
+    except ImportError:
+        return False
     return os.path.exists(os.path.join(DEFAULT_OUT, "store.duckdb"))
 
 

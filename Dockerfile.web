@@ -1,0 +1,79 @@
+# Slim CPU-only image for the hosted web app (Lambda container image).
+#
+# The dev Dockerfile builds a ~12 GB GPU image: nvidia-* 3.6 GB, torch+cu126
+# 1.7 GB, triton 893 MB, plus the analysis stack. None of that is needed to
+# serve the two shipped checkpoints on CPU. This image pulls the matching
+# +cpu torch wheel and copies only the code and data the server imports.
+# Measured: 2.25 GB uncompressed, ~500 MiB compressed in ECR (vs ~12 GB for the
+# GPU dev image). The CPU torch wheel (270 MB compressed) dominates; the two
+# shipped `best.pt` files add only ~20 MB. Only `best.pt` is copied from each
+# run — the last-epoch `latest.pt` files are 321 MB and server.py skips them.
+#
+# Build from the repo root:
+#   docker build --platform linux/amd64 --provenance=false -f Dockerfile.web \
+#     -t draft-web:latest .
+#
+# Lambda supplies the entry point through the AWS Python base image. Local
+# smoke check (without the Lambda runtime):
+#   docker run --rm --entrypoint python draft-web:latest \
+#     -c "import webapp.server; print('slim web image ok')"
+
+# A Lambda container image must either extend an AWS base image or bundle the
+# Runtime Interface Client. The AWS Python image includes the RIC and the
+# local Runtime Interface Emulator, so it is the smaller-risk choice here.
+FROM public.ecr.aws/lambda/python:3.13
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    OMP_NUM_THREADS=2
+
+# torch's CPU kernels need libgomp. The Python 3.13 Lambda image is Amazon
+# Linux 2023, so its package manager is dnf, not apt.
+RUN dnf install -y libgomp ca-certificates \
+    && dnf clean all
+
+WORKDIR ${LAMBDA_TASK_ROOT}
+
+COPY requirements-web.txt ./
+RUN pip install -r requirements-web.txt
+
+# The webapp package (server + Lambda adapter + static files). The dDragon
+# cache is kept so icon URLs have a deterministic offline fallback.
+COPY webapp/ ${LAMBDA_TASK_ROOT}/webapp/
+
+# Pro agent tools and the two shipped checkpoints. No archive, no reranker,
+# no training code, and no naivetransformer modules: the shipped head is the
+# siamese policy and server.py imports that adapter lazily.
+COPY pro/__init__.py ${LAMBDA_TASK_ROOT}/pro/
+COPY pro/model/agent/ ${LAMBDA_TASK_ROOT}/pro/model/agent/
+# Only best.pt from each run. `latest.pt` is last-epoch state that server.py
+# skips by name, and the two of them are 321 MB of build context.
+COPY pro/model/checkpoints/masking-proonly-nov13-through-lcp-df-sw/best.pt \
+     ${LAMBDA_TASK_ROOT}/pro/model/checkpoints/masking-proonly-nov13-through-lcp-df-sw/
+COPY pro/model/checkpoints/nextpick-proonly-nov13-k5-through-lcp-df-sw/best.pt \
+     ${LAMBDA_TASK_ROOT}/pro/model/checkpoints/nextpick-proonly-nov13-k5-through-lcp-df-sw/
+
+# solo_queue is also the shared *model architecture* package, not just the
+# soloQ data track. Only these modules are on the inference import path.
+COPY solo_queue/__init__.py ${LAMBDA_TASK_ROOT}/solo_queue/
+COPY solo_queue/model/__init__.py ${LAMBDA_TASK_ROOT}/solo_queue/model/
+COPY solo_queue/model/finetune/model.py ${LAMBDA_TASK_ROOT}/solo_queue/model/finetune/
+COPY solo_queue/model/policy/infer.py ${LAMBDA_TASK_ROOT}/solo_queue/model/policy/
+COPY solo_queue/model/policy/model.py ${LAMBDA_TASK_ROOT}/solo_queue/model/policy/
+COPY solo_queue/model/policy/lanes.py ${LAMBDA_TASK_ROOT}/solo_queue/model/policy/
+COPY solo_queue/model/pretraining/base_model.py ${LAMBDA_TASK_ROOT}/solo_queue/model/pretraining/
+
+# Tiny tables the server reads at startup, plus the walkthrough cache.
+# champ_attrs.json is copied for completeness: both shipped configs have
+# attr_dim 0/absent, so attr_matrix_for_config() returns None and never reads
+# it. It is 44 KB and makes a future checkpoint swap less surprising.
+COPY data/champ_roles.json ${LAMBDA_TASK_ROOT}/data/
+COPY data/champ_attrs.json ${LAMBDA_TASK_ROOT}/data/
+COPY ["data/solo queue/process matchdata/champ_mapping.json", "/var/task/data/solo queue/process matchdata/champ_mapping.json"]
+COPY ["data/solo queue/process matchdata/champ_names.json", "/var/task/data/solo queue/process matchdata/champ_names.json"]
+COPY ["data/pro play/pro_drafts_full.pt", "/var/task/data/pro play/pro_drafts_full.pt"]
+
+# Lambda invokes this handler through the base image's runtime interface.
+CMD ["webapp.lambda_handler.lambda_handler"]

@@ -22,13 +22,20 @@ afterwards, in a narrower job than it had before: an opt-in next-move model
 ## Run
 
 ```bash
-bash frontend/serve.sh                 # http://127.0.0.1:8777
-bash frontend/serve.sh --port 8780     # or PORT=8780
+bash webapp/serve.sh                 # http://127.0.0.1:8777
+bash webapp/serve.sh --port 8780     # or PORT=8780
 ```
 
 Binds `127.0.0.1` only. The script runs the `dev` image with the repo mounted, so
 there is no GPU requirement and no 4-bit load: the models in the loop are the
 2.49 M Siamese heads, and the LLM is remote.
+
+For the hosted live demo, see `deploy/README.md`: a slim CPU-only Lambda image
+behind a Function URL. The function serves the static app itself, so the
+portfolio page embeds the Function URL directly (no `?api=` needed). The
+hosted adapter rebuilds the board per request and ablates `sql` and
+`soloq_matchup`; everything else — the two heads, the state tools and the
+LangGraph loop — is the same code this local server runs.
 
 | flag | what it does |
 |---|---|
@@ -46,9 +53,9 @@ Through Docker, pass `--host 0.0.0.0` - a published port arrives on the containe
 
 | control | where | why |
 |---|---|---|
-| **first pick**, **Reset draft** | inside `<main>`, above the Blue / Red side panels | both act on the game on the board, so they sit with it rather than in the header |
-| **agent chat + suggestions** | directly below the next-move suggestion panel, which is directly below the head's suggestion list | the head's ranked list, the agent's rerank column, and the agent's prose are the three answers to "what next?" - adjacent, not split across the header. The agent panel and the rerank column are both **on by default**; the **agent features** checkbox in the header hides them (leaving only the base model's suggestions and board updates). |
-| **Real draft ▾** | header, next to the patch dropdown and the agent-features checkbox (the walkthrough bar itself stays above the board) | the walkthrough is an optional comparison against pro games, not the main board |
+| **First Pick** switch, **Reset draft** | inside `<main>`, above the Blue / Red side panels | both act on the game on the board, so they sit with it rather than in the header. The switch carries its own label, aligned opposite the knob, and its knob and subtle translucent track carry the side colour: blue on the left/off, red on the right/on; a loaded real game disables it. |
+| **base suggestions → agent suggestions → agent chat** | below `</main>`, in that order | the three answers to "what next?" sit under the draft board rather than above it. The agent panel and rerank column are both **on by default**; the **Agent** switch in the header hides them and blocks/cancels agent fetches, leaving only the base model's suggestions and board updates. |
+| **Real draft ▾** | header, next to the patch dropdown and the Agent switch (the walkthrough bar itself stays above the board) | the walkthrough is an optional comparison against pro games, not the main board |
 | model names | **not on the page** | chosen with `--ckpt` / `--policy-ckpt` at startup, never inside a session. The header used to print both checkpoint names and a val top-5; that text is gone, so `--ckpt` is the only record of what is loaded. |
 
 The role vocabulary is `TOP / JUNGLE / MIDDLE / BOTTOM / SUPPORT`. Role 4's
@@ -94,9 +101,9 @@ describing the previous checkpoint, so the choice belongs to the process that
 owns the state:
 
 ```bash
-bash frontend/serve.sh --ckpt pro/model/checkpoints/<masking-run>/best.pt \
+bash webapp/serve.sh --ckpt pro/model/checkpoints/<masking-run>/best.pt \
                        --policy-ckpt pro/model/checkpoints/<nextpick-run>/best.pt
-bash frontend/serve.sh --no-policy          # role board only
+bash webapp/serve.sh --no-policy          # role board only
 ```
 
 `GET /api/checkpoints`, `POST /api/load {path, role}` and `POST /api/upload`
@@ -109,17 +116,20 @@ load (`make_predictor`) - a renamed file still loads, a mis-filed one is refused
 Shipped defaults, both pro-track:
 
 * **role** - `masking-proonly-nov13-through-lcp-df-sw/best.pt`.
-* **next move** - `nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw/best.pt`,
-  the role-conditioned naive transformer: a single 61-token encoder and a
-  shared policy head, 25.5 M params. It reads a `[STATE]` token plus pick, ban
-  and fearless tokens and beats the nov13 head by +1.8 pp top-1 on the canonical
-  test split (`pro/model/test_split/REPORT_suite.md`). `pro/model/naivetransformer/serve.py`
-  turns a live board into that prefix batch. The 4B reranker (`llm-lora-rerank5/`)
+* **next move** - `nextpick-proonly-nov13-k5-through-lcp-df-sw/best.pt`, the
+  nov13 siamese policy, 3.35 M params, 12.8 MB on disk. The role-conditioned
+  naive transformer is measurably better (+1.8 pp top-1, +3.4 pp top-5, paired
+  p 5.3e-28, `pro/model/test_split/REPORT_suite.md`) but its `best.pt` is 97 MB,
+  which was 40 % of the hosted Lambda image, so the **hosted** demo ships the
+  small head and trades that accuracy for an image that fits the ECR free tier.
+  Locally, `--policy-ckpt nextpick-naivetransformer-role-d512-l8-h8-k5-…` still
+  selects the transformer; `pro/model/naivetransformer/serve.py` turns a live
+  board into its 61-token prefix batch. The 4B reranker (`llm-lora-rerank5/`)
   is one flag away (`--rerank`) and is **not** the default - §"What the reranker
   is worth" has the numbers and the reason.
 
-The masker is from the nov13 run; the next-move transformer was trained later
-on the same canonical split. Both come from the same **corpus**, not the old
+The masker is from the nov13 run, and so is the shipped next-move policy: same
+run, same canonical split. Both come from the same **corpus**, not the old
 `-wlds-ig-tes` one: the freeze is lifted (`--corpus 2022-full`, 46,939 drafts through 2026-11-13), the pinned
 test series are ordinary rows (`--no-pin`), the split is the fractional 85/10/5
 within-patch tail, and the policy trains on `--prefix-k 5` (5 distinct prefixes
@@ -255,8 +265,9 @@ inference:
 
 Champion art comes from dDragon (`16.20.1`), cached, with a deterministic name
 fallback offline. `GET /api/drafts` + `GET /api/draft` walk through real pro games
-from the cached corpus, showing what the pros actually moved. The dropdown is
-pre-filtered to **WLDs** (`#wt-filter` ships with `value="WLDs"`; the 🎲 button
+from the cached corpus, showing what the pros actually moved. While a game is
+loaded, its teams are shown as **Blue side - T1** / **Red side - Gen.G** in the
+side headers. The dropdown is pre-filtered to **WLDs** (`#wt-filter` ships with `value="WLDs"`; the 🎲 button
 sends the same `q`, so a random game stays in the league on screen). It reads
 `pro_drafts_full.pt` - the *unfrozen* superset, through 2026-11-13 - and falls
 back to the frozen `pro_drafts.pt` (CORPUS_MAX_DATE, 2026-11-08) when that file
@@ -317,11 +328,11 @@ awareness needs an encoder change, not a serving one.
 
 ## The agent panel
 
-Shown by default, directly below the head's suggestion panel (or opened by the
-`#agent` deep link). A header checkbox, **agent
-features**, hides both the chat and the rerank column so only the base model's
-suggestions and board updates remain. The panel's header carries **suggest next
-move**, the one-click reranking button described below.
+Shown by default at the bottom of the answer stack below the draft board (or
+opened by the `#agent` deep link). A header switch, **Agent**, hides both the
+chat and the rerank column, cancels any in-flight
+agent call and blocks new ones so only the base model's suggestions and board
+updates remain. The panel's header carries **Suggest** and **Explain**.
 
 `POST /api/agent {message, picks, bans, first_pick, fearless, patch_id, max_steps}`
 -> one turn, answered in prose, with the tool calls it made and the sandboxes it
@@ -365,14 +376,57 @@ the model tools are simply not offered.
 the agent's own scripts read, so a transcript that names a model names the one
 that answered. The server prints which at startup, or says there is no key.
 
-## The agent's suggestion (the reranking button)
+### Using the Android app's Cloudflare Worker
 
-The header of the agent panel has a **suggest next move** button. It does not
-call `/api/next-move`: that route asks the head for a ranked list. This one asks
-the **agent** - the same tool loop, the same held state - to read the board,
-choose its own `k` for `predict_next_move`, compare the list against the open
-lanes and commit to one champion. That is the reranking job the retired 4B
-adapter used to do, now done with tools and state management.
+The webapp can share the Android app's Worker instead of holding a provider
+key. The Worker's `/v1/chat/completions` route is an OpenAI-compatible
+passthrough: it forwards `messages`, `tools`, `tool_choice`, `temperature`,
+`max_tokens` and the rest, and returns the upstream message **verbatim**, so
+`tool_calls`, `finish_reason`, `reasoning_content`, `model` and `usage` all
+survive. Do not point `LLM_BASE_URL` at the Worker root - that route is the
+Android answer-only API and drops tool calls.
+
+Cloudflare setup, in addition to the Android variables in `android/README.md`:
+
+1. Add a Worker **secret** `WEBAPP_LLM_TOKEN` (a long random string). This is
+   the value the webapp puts in `LLM_API_KEY`; the real DeepSeek key stays in
+   Cloudflare and is never loaded into the browser.
+2. Add plain variables `AGENT_DAILY_LIMIT` (default `200` turns/day) and,
+   optionally, `WEBAPP_ORIGINS` (`https://your-host`, comma separated) to stop
+   unrelated pages relaying through the deployment.
+3. Raise `MAX_TOKENS` to `3000` if you have not already: the agent loop can
+   spend a reply's whole budget on low-effort reasoning, and the Worker applies
+   that ceiling to both routes.
+
+Then, in the repo's `.env` (read by `docker compose` when the container starts):
+
+```dotenv
+LLM_BASE_URL=https://draft-assistant-chat.floriangfrick.workers.dev/v1
+LLM_MODEL=deepseek-flash
+LLM_API_KEY=<the WEBAPP_LLM_TOKEN value>
+```
+
+One webapp request is one **turn**, even though the loop makes several LLM
+calls as it picks tools. The server sends a fresh `X-Agent-Turn` id per request;
+the Worker remembers it in `CHAT_QUOTA` and charges the daily cap once. That cap
+is per deployment until the webapp has login, not per browser user. The
+existing `CHAT_BURST` rate limiter is also keyed by turn on this route, so a
+tool-heavy turn is not mistaken for a burst of users. `python
+pro/model/agent/loop.py --ping` checks the pair before spending a turn.
+
+## The agent's buttons
+
+The header of the agent panel has **Suggest** and **Explain**. Suggest does not
+call `/api/next-move`: that route asks the head for a ranked list. It asks the
+**agent** - the same tool loop, the same held state - to read the board, choose
+its own `k` for `predict_next_move`, compare the list against the open lanes and
+commit to one champion. That is the reranking job the retired 4B adapter used to
+do, now done with tools and state management.
+
+Explain sends the Android app's fixed question - "What team composition
+archetype is each team aiming toward?" - through the ordinary `/api/agent` chat
+route. It gets the same transcript and tool log as a typed question; unlike
+Suggest it is prose, not a parsed move.
 
 `POST /api/agent-suggest` takes the same board payload as `/api/agent` (picks,
 bans, `first_pick`, fearless pool, patch and the series summary; no `message`).
@@ -401,7 +455,7 @@ still attached. No checkpoint is required either: with no next-move model the
 
 ## The agent's suggestions (the top-k rerank column)
 
-Below the head's `#nextmove` list sits a second column, **Agent suggestions**,
+Below the head's `#nextmove` list sits a second column, **Agent Reevaluation**,
 filled by `POST /api/agent-rank`. It is the *same* ablated, explained-prompt
 agent and the *same* budget as the single-move button, but asked to **order**
 the head's top-k rather than commit to one. Each chip is a champion with a
@@ -439,7 +493,7 @@ head's own list with `source: "head"`.
 | `GET /api/champions` | the champion list, art, and the move plan for `first_pick` |
 | `GET /api/checkpoints` | both stores, each entry with its slot and val metric (no UI) |
 | `POST /api/load` | `{path, role}` -> swap a model; a local scripting route, **no browser control** |
-| `POST /api/upload` | a raw `.pt` body -> a checkpoint in `frontend/uploaded/`; same, **no browser control** |
+| `POST /api/upload` | a raw `.pt` body -> a checkpoint in `webapp/uploaded/`; same, **no browser control** |
 | `GET /api/drafts`, `GET /api/draft` | the pro-game walkthrough |
 | `POST /api/next-move` | the head's ranked list for the side on the clock |
 | `POST /api/suggest` | the role board |
@@ -452,7 +506,7 @@ head's own list with `source: "head"`.
 ## Tests
 
 ```bash
-python -m pytest frontend/ -q          # 61 tests, ~40 s
+python -m pytest webapp/ -q          # 61 tests, ~40 s
 python -m pytest pro/model/agent/ -q   # 164 tests
 python -m pytest pro/model/archive/llm/test_eval_api_agent.py -q
 ```
@@ -473,9 +527,9 @@ normalises them), and the page has no model picker while the CLI flags remain.
 
 | removed | why | the numbers live in |
 |---|---|---|
-| `frontend/rerank.py`, the *chat* surface over the `llm-*` slot | a hosted API alone converts 44 % of the ceiling against the local reranker's 67 %, and a reranker can only reorder a shortlist it did not build. The **slot** came back (`--rerank`, `RerankPredictor`) - the chat surface did not, and the 67 % is now quoted as a lane-conditioned number (§"What the reranker is worth") | `pro/model/archive/llm/README.md`, `STATUS.md` §8-§9 |
-| `frontend/chat.py` (rule-based chat) | it read names, a stance cue and a negation and never the reason; a true, a false and an irrelevant "because ..." bought the same weight | `STATUS.md` §8 |
-| `frontend/draftscore.py`, the draft-score panel | it replayed each pick through the head to compare two drafts, which is a question the agent answers directly, and it was never a win probability | `STATUS.md` §8 |
+| `webapp/rerank.py`, the *chat* surface over the `llm-*` slot | a hosted API alone converts 44 % of the ceiling against the local reranker's 67 %, and a reranker can only reorder a shortlist it did not build. The **slot** came back (`--rerank`, `RerankPredictor`) - the chat surface did not, and the 67 % is now quoted as a lane-conditioned number (§"What the reranker is worth") | `pro/model/archive/llm/README.md`, `STATUS.md` §8-§9 |
+| `webapp/chat.py` (rule-based chat) | it read names, a stance cue and a negation and never the reason; a true, a false and an irrelevant "because ..." bought the same weight | `STATUS.md` §8 |
+| `webapp/draftscore.py`, the draft-score panel | it replayed each pick through the head to compare two drafts, which is a question the agent answers directly, and it was never a win probability | `STATUS.md` §8 |
 | `/api/explain`, `/api/breakdown`, `/api/tool` | three ways to ask "why this pick"; the agent is the fourth and the only one that can answer something else too | `STATUS.md` §8 |
 
 The agent's own measurement - whether an LLM holding these tools beats the head -

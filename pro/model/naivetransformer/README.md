@@ -151,7 +151,7 @@ with different epoch counts are different experiments, not reproductions.
 
 Both live in `pro/model/checkpoints/` (weights are git-ignored) and carry
 `config.arch == "naive_transformer"`, which is how `test_split/models.py`,
-`test_split/registry.py` and `frontend/server.py` dispatch to this model
+`test_split/registry.py` and `webapp/server.py` dispatch to this model
 instead of guessing from weight names.
 
 | directory | how it was trained | what it answers |
@@ -208,7 +208,7 @@ fearless-pool champions, so those get FLEX too. `next_move` returns
 `roles: None` — role placement is data-driven, not from this model. `allowed=`
 is applied to the logits before the top-k, the same as the other heads.
 
-`frontend/server.py` loads this architecture via `NaiveTransformerPolicy` when
+`webapp/server.py` loads this architecture via `NaiveTransformerPolicy` when
 `config.arch == "naive_transformer"`, and the `-role-` checkpoint is the
 shipped `POLICY_DEFAULT`. The served model is the one measured offline; the
 adapter exists so the live board is not re-derived into a second model.

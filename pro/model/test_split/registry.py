@@ -1,7 +1,7 @@
 """Which checkpoints exist, which question each answers, and whether it is comparable.
 
 Discovery is by directory name, because the name is already the contract
-(`frontend/server._ckpt_roles` reads the same prefixes):
+(`webapp/server._ckpt_roles` reads the same prefixes):
 
     masking-*    masked completion / the role board      -> the "masked" suite
     nextpick-*   next move                               -> the "next_move" suite

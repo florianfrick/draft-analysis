@@ -24,7 +24,7 @@ tool layer stays usable without `langgraph` installed.
 
 ## Why a SQL fallback at all
 
-`frontend/tools.py` precomputes the aggregates I guessed a coach would want, and
+`webapp/tools.py` precomputes the aggregates I guessed a coach would want, and
 `_probe_tool_power.py` showed the guess was mostly wrong: the per-champion cell
 is 0-2 of 120 boards at a given move. A query tool moves that choice to the
 model, which is the right place for it - provided the schema makes the correct
@@ -373,7 +373,7 @@ board fields:
   construction, and a test asserts a sandbox can never touch it.
 
 **The frontend writes `real` on every request that carries a board.** That is the
-integration, and it is one call: `_publish_state` in `frontend/server.py` maps the
+integration, and it is one call: `_publish_state` in `webapp/server.py` maps the
 UI's riot ids to indices, hands the board to `Store.set_board`, and nothing else
 may write `real`. So the assistant reads the board the user is looking at without
 being told what it is.

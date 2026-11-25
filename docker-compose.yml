@@ -56,7 +56,7 @@ services:
   # a browser at the reranker: the base image has none of those packages, and
   # `pro/model/archive/llm/run.sh` (the training wrapper) publishes no port.
   #
-  # `frontend/serve.sh` is the one-line version of this.
+  # `webapp/serve.sh` is the one-line version of this.
   llm:
     build:
       context: .

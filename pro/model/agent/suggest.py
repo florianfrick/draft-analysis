@@ -44,7 +44,7 @@ import re
 from . import draft_state, prompt_explained
 
 QUESTION = ("Recommend the single best move for the side on the clock. Name the "
-            "champion first, then justify it in at most two sentences.")
+            "champion first, then justify it in at most five sentences.")
 
 # The measured arm's budget: 5 graph steps, 8 tool calls, no data tools. A
 # suggestion is one question with one shortlist to read, not an open-ended

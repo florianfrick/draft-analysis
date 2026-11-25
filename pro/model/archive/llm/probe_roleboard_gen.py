@@ -21,7 +21,7 @@ on held-out games, at a fixed board (10 bans + 6 picks).
 
 Result (2026-11-10, 80 games): masked board 40.6 % top-5 / 9.4 % top-1 in 11 ms;
 this 29.4-34.3 % / 8.7-9.4 % in 0.9-1.3 s, and generation 7.2-7.9 % top-1 with a
-single answer. Not a replacement - see frontend/README.md.
+single answer. Not a replacement - see webapp/README.md.
 """
 import importlib.util
 import sys
@@ -31,7 +31,7 @@ from pathlib import Path
 import torch
 
 ROOT = Path(__file__).resolve().parents[4]   # pro/model/archive/llm -> repo
-sys.path.insert(0, str(ROOT / "frontend"))
+sys.path.insert(0, str(ROOT / "webapp"))
 sys.path.insert(0, str(ROOT))
 spec = importlib.util.spec_from_file_location(
     "propipeline", ROOT / "data" / "pro play" / "pipeline.py")

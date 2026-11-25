@@ -9,7 +9,7 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
- * Guards the port of `frontend/static/draft-order.js` against
+ * Guards the port of `webapp/static/draft-order.js` against
  * `solo_queue/model/policy/infer.py:move_plan`.
  *
  * The plan is rebuilt here from the same four sequences the server uses, so if

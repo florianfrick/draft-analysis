@@ -6,7 +6,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 
 /**
- * Wire models for the Python backend. Field names mirror `frontend/server.py`
+ * Wire models for the Python backend. Field names mirror `webapp/server.py`
  * exactly, because this client is a consumer of that contract, not a second
  * implementation of it.
  *

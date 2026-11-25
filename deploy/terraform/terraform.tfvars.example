@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars (git-ignored) and fill in the token.
+# The ECR repo is PRIVATE and lives in this same region: Lambda requires that.
+region          = "us-west-2"
+name            = "loldraft-web"
+image_tag       = "latest"
+web_origin      = "https://florianfrick.github.io"
+worker_base_url = "https://draft-assistant-chat.floriangfrick.workers.dev/v1"
+llm_model       = "deepseek-flash"
+llm_token       = "COPY_THE_WEBAPP_LLM_TOKEN_VALUE_FROM_.env"
+timeout         = 300

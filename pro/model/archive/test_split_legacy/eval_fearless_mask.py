@@ -3,7 +3,7 @@
 The three `masking-*` checkpoints have no `unavailable` input: the task they
 were trained on never told them a champion was gone. So the only zero-cost
 way to make them respect fearless is on the output side - set the pool to
--inf and renormalise, which is exactly what `frontend/server._top5` does.
+-inf and renormalise, which is exactly what `webapp/server._top5` does.
 
 This measures whether that is enough, on the four fearless games of the test
 split (40 slots per model). Three readings per slot:

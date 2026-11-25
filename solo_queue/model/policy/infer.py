@@ -1,7 +1,7 @@
 """Inference API for the next-move policy.
 
 Board in, recommendation out. No CLI, no dataset import, no training code:
-`frontend/server.py` imports this, and it is the only path that serves the
+`webapp/server.py` imports this, and it is the only path that serves the
 policy. The offline ban-search statistics (bootstrap CIs, paired tests,
 regret) lived in `ban_propose.py`, removed on 2026-11-03 with the rest of the
 ban-analysis thread; `STATUS.md` §5 keeps its conclusions. The rollout-based
@@ -583,7 +583,7 @@ class PolicyPredictor:
         `move_idx` and `kind` still come from the board - only the actor
         changes - so a ban-phase board answers "which ban for that side",
         which is not the question the role board wants; the caller must pose
-        it on a pick move. Measured caveat (frontend/README.md, "The
+        it on a pick move. Measured caveat (webapp/README.md, "The
         fabricated turn"): the two sides come out nearly identical, because
         the pick counts already determine whose turn it is and `to_move` is a
         redundant input to this model.

@@ -226,7 +226,7 @@ def test_resolve_ckpt_path_validation(tmp_path):
     with pytest.raises(ValueError, match="directory"):
         S.resolve_ckpt_path("pro/model/archive/checkpoints/nextpick-proto-ensemble")
     with pytest.raises(ValueError, match="expected a .pt"):
-        S.resolve_ckpt_path("frontend/README.md")
+        S.resolve_ckpt_path("webapp/README.md")
     with pytest.raises(FileNotFoundError):
         S.resolve_ckpt_path("pro/model/archive/checkpoints/nope/best.pt")
     if S.RERANK_DEFAULT.is_dir():
@@ -259,7 +259,7 @@ def test_default_models_are_the_nov13_pair():
     assert S.MASKED_DEFAULT.parent.name == (
         "masking-proonly-nov13-through-lcp-df-sw")
     assert S.POLICY_DEFAULT.parent.name == (
-        "nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw")
+        "nextpick-proonly-nov13-k5-through-lcp-df-sw")
     assert S.MASKED_DEFAULT.name == S.POLICY_DEFAULT.name == "best.pt"
     assert S.MASKED_DEFAULT.parent.parent == S.POLICY_DEFAULT.parent.parent
     assert S.ENSEMBLE_CKPT.suffix == ".json"
@@ -277,12 +277,12 @@ def test_the_reranker_is_opt_in_and_its_failure_is_fatal():
 
     It is not the default: the number that justified that (34.27 %) is measured
     with the *true lane* in the task line, and the panel's question has no lane
-    (20.85 % - frontend/README.md, "What the reranker is worth"). So the head
+    (20.85 % - webapp/README.md, "What the reranker is worth"). So the head
     ships and `--rerank` opts in. Once asked for, a build failure must be fatal:
     a server that starts and silently serves a different model than the flag
     named is worse than one that refuses to start.
     """
-    src = (S.FRONTEND_DIR / "server.py").read_text(encoding="utf-8")
+    src = (S.WEBAPP_DIR / "server.py").read_text(encoding="utf-8")
     assert 'ap.add_argument("--rerank"' in src
     assert "raise SystemExit(\"cannot serve the reranker" in src
     # no automatic preference: the startup block must not reach for
@@ -946,7 +946,7 @@ def test_loading_a_model_rebinds_the_open_board(app, httpd, fresh_store,
 
 
 def test_upload_endpoint(app, httpd, tmp_path):
-    """Raw bytes with a name -> frontend/uploaded/, then loaded."""
+    """Raw bytes with a name -> webapp/uploaded/, then loaded."""
     if not S.POLICY_DEFAULT.is_file():
         pytest.skip("no checkpoint to upload")
     data = S.POLICY_DEFAULT.read_bytes()
@@ -1414,29 +1414,152 @@ def test_the_browser_has_no_model_picker():
 
 
 def test_the_board_controls_and_agent_button_are_where_the_board_is():
-    """First pick / reset live in <main>; the head's suggestion panel is
-    followed by the agent's reranked-suggestions column, then the agent chat
-    (shown by default now, no `hidden`); the Real draft walkthrough starts
-    collapsed."""
+    """First Pick is an in-track blue/red switch inside <main> next to reset;
+    the per-side turn boxes and the add-game button are gone. The three answer
+    panels sit after the board in head -> agent rerank -> chat order; the
+    agent header has Suggest and Explain; a real game names its sides."""
     html = (Path(__file__).resolve().parent / "static" / "index.html").read_text(
         encoding="utf-8")
     main = html[html.index("<main>"):html.index("</main>")]
     assert 'id="first-pick"' in main and 'id="btn-reset"' in main
+    assert '<input type="checkbox" id="first-pick" role="switch"' in main
+    assert '<span class="switch-text">First Pick</span>' in main
     assert 'id="first-pick"' not in html[:html.index("<main>")]
-    # The head's own list, then the agent's rerank column, then the chat it
-    # opens - in that order.
-    assert (html.index('id="nextmove"') < html.index('id="agentsuggest"')
-            < html.index('id="agent"'))
+    assert 'id="series-add"' not in html
+    assert 'id="turn-blue"' not in html and 'id="turn-red"' not in html
+    assert 'id="team-blue-title"' in main and 'id="team-red-title"' in main
+    # Below the board: the head's list, the agent's rerank column, then chat.
+    draft_end = html.index("</main>")
+    assert (draft_end < html.index('id="nextmove"')
+            < html.index('id="agentsuggest"') < html.index('id="agent"'))
     # The agent chat is shown by default (the feature toggle can hide it).
     assert 'id="agent" class="hidden"' not in html
-    # The agent-features toggle lives in the header.
-    assert 'id="agent-features"' in html
+    # The Agent switch lives in the header, and the agent panel carries both
+    # fixed questions.
+    assert '<input type="checkbox" id="agent-features" role="switch"' in html
+    assert '<span class="switch-label">Agent</span>' in html
+    assert '>Suggest<' in html and '>Explain<' in html
+    assert 'id="agent-explain"' in html
     assert 'id="wt-bar" class="hidden"' in html
     assert 'id="btn-wt"' in html
     js = (Path(__file__).resolve().parent / "static" / "app.js").read_text(
         encoding="utf-8")
     assert "function setWalkthrough(" in js
     assert "walkthroughVisible()" in js
+    assert "▶ to ban" not in js
+    assert "function renderTeamNames(" in js and "renderTeamNames();" in js
+    assert "Blue side - " in js and "Red side - " in js
+    agent_js = (Path(__file__).resolve().parent / "static"
+                / "agent.js").read_text(encoding="utf-8")
+    assert "What team composition archetype is each team aiming toward?" in agent_js
+    assert "el('agent-explain').disabled = flag" in agent_js
+    # Every LLM route is abortable and blocked once the Agent switch is off.
+    assert 'let activeCalls = new Set();' in agent_js
+    assert 'function agentFetch(' in agent_js
+    assert 'signal: controller.signal' in agent_js
+    assert 'abortAgentCalls();' in agent_js
+    assert agent_js.count('if (!featuresOn || busy) return;') >= 3
+    assert ("if (!featuresOn) return Promise.reject"
+            in agent_js)
     css = (Path(__file__).resolve().parent / "static" / "style.css").read_text(
         encoding="utf-8")
     assert "#wt-bar.hidden" in css, ".hidden alone cannot beat an ID selector"
+    assert "input:not(:checked) + .switch-track" in css
+    assert "input:checked + .switch-track" in css
+    assert ".fp-toggle .switch-track { width: 76px; padding: 0; }" in css
+    assert (".fp-toggle input:not(:checked) + .switch-track .switch-text "
+            "{ right: 8px; }") in css
+    assert (".fp-toggle input:checked + .switch-track .switch-text "
+            "{ left: 8px; }") in css
+    assert "width: 64px; text-overflow: ellipsis;" in css
+    assert ".fp-toggle .switch-knob { width: 12px; height: 12px; top: 5px; }" in css
+    assert "rgba(47, 124, 212, .24)" in css
+    assert "rgba(212, 74, 47, .24)" in css
+    assert "input:not(:checked) + .switch-track .switch-knob" in css
+    assert "input:checked + .switch-track .switch-knob" in css
+
+
+def test_the_worker_keeps_tool_calls_and_charges_by_turn():
+    """The hosted agent's contract is server-side: the browser never sees it.
+
+    Pointing `LLM_BASE_URL` at the Android root route answers in prose and
+    drops `tool_calls`, so the route name and the forwarded fields are pinned
+    here rather than left to a deployment note.
+    """
+    root = Path(__file__).resolve().parents[1]
+    worker = (root / "android" / "worker" / "src"
+              / "index.js").read_text(encoding="utf-8")
+    assert '"/v1/chat/completions"' in worker
+    assert "WEBAPP_LLM_TOKEN" in worker
+    assert "x-agent-turn" in worker
+    for field in ("tools", "tool_choice", "tool_calls", "finish_reason",
+                  "reasoning_content", "usage"):
+        assert field in worker
+
+    server = (Path(__file__).resolve().parent / "server.py").read_text(
+        encoding="utf-8")
+    assert "def _agent_client(turn_id):" in server
+    assert 'extra_headers={"X-Agent-Turn": turn_id}' in server
+    assert server.count("secrets.token_urlsafe(12)") >= 3
+
+
+def test_the_hosted_deployment_keeps_its_lambda_contract():
+    """The deployment mistakes that only show up at apply time.
+
+    A plain Python base image has no Lambda runtime, a public ECR repo cannot
+    be a same-Region function image source, and ECR rejects a bare
+    tagStatus=TAGGED lifecycle rule. The image also ships only `best.pt` from
+    each run - `latest.pt` is 321 MB of last-epoch state the server skips - and
+    only the siamese head's modules. Pin all of it here so a future slim-image
+    edit fails in tests, not on AWS.
+    """
+    root = Path(__file__).resolve().parents[1]
+    dockerfile = (root / "Dockerfile.web").read_text(encoding="utf-8")
+    assert "FROM public.ecr.aws/lambda/python:" in dockerfile
+    assert 'CMD ["webapp.lambda_handler.lambda_handler"]' in dockerfile
+    assert ("COPY pro/model/checkpoints/"
+            "nextpick-proonly-nov13-k5-through-lcp-df-sw/best.pt") in dockerfile
+    # never ship last-epoch state; comments may name it, COPY lines may not
+    copies = [ln for ln in dockerfile.splitlines() if ln.startswith("COPY")]
+    assert not [ln for ln in copies if "latest.pt" in ln]
+    assert "COPY pro/model/naivetransformer/" not in dockerfile
+    assert "COPY requirements-web.txt" in dockerfile
+
+    main = (root / "deploy" / "terraform" / "main.tf").read_text(
+        encoding="utf-8")
+    assert 'resource "aws_ecr_repository" "web"' in main
+    assert "aws_ecrpublic_repository" not in main
+    assert '${aws_ecr_repository.web.repository_url}:${var.image_tag}' in main
+    assert 'tagStatus   = "any"' in main   # ECR rejects bare TAGGED rules
+
+    adapter = (Path(__file__).resolve().parent / "lambda_handler.py").read_text(
+        encoding="utf-8")
+    assert 'frozenset({"sql", "soloq_matchup"})' in adapter
+    assert "server._STATE_STORE = None" in adapter
+    assert "rawQueryString" in adapter   # Function URL splits path and query
+    # The iframe loads JS/CSS from this Function URL; octet-stream can block it.
+    assert 'ctype or "application/octet-stream"' in adapter
+
+    static = Path(__file__).resolve().parent / "static"
+    app_js = (static / "app.js").read_text(encoding="utf-8")
+    agent_js = (static / "agent.js").read_text(encoding="utf-8")
+    assert "function apiUrl(path)" in app_js
+    assert "apiUrl(url)" in agent_js      # agent.js uses app.js's global
+    html = (static
+            / "index.html").read_text(encoding="utf-8")
+    assert 'href="style.css"' in html
+    assert 'src="app.js"' in html
+
+
+def test_function_url_query_survives_the_adapter():
+    """A bare rawPath used to turn ?i=42 into 'no draft #-1' in the iframe."""
+    from lambda_handler import _request_path
+
+    assert _request_path({"rawPath": "/api/draft",
+                          "rawQueryString": "i=42"}) == "/api/draft?i=42"
+    assert _request_path({"rawPath": "/api/draft"}) == "/api/draft"
+    assert _request_path({"path": "/api/drafts?q=WLDs&limit=3"}) == (
+        "/api/drafts?q=WLDs&limit=3")
+    assert _request_path({"path": "/api/draft",
+                          "queryStringParameters": {"i": "7"}}) == (
+        "/api/draft?i=7")

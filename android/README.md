@@ -96,7 +96,7 @@ adb logcat -v brief | grep -E 'LocalEngine|BoardViewModel'
   label sits inside the switch and whose thumb marks blue (left) or red (right).
 - **Series and fearless pool**, entirely on-device.
 
-The DTOs in `data/Models.kt` stay field-for-field with `frontend/server.py`; the
+The DTOs in `data/Models.kt` stay field-for-field with `webapp/server.py`; the
 app itself makes no request to the Python backend.
 
 ## Series and fearless
@@ -200,14 +200,14 @@ picking side's blue or red. Matching folds curly apostrophes to ASCII, so
    - `DEEPSEEK_MODEL` = `deepseek-flash`
    - `REASONING_EFFORT` = `low`  (`high` if you want deeper thinking)
    - `DAILY_LIMIT` = `30`
-   - `MAX_TOKENS` = `1600`
+   - `MAX_TOKENS` = `3000`
 
    Thinking stays **on** — that is a deliberate preference. `low` effort keeps
    the hidden reasoning from consuming the whole token budget; if you set
    `high`, raise `MAX_TOKENS` too. `max_tokens` is a ceiling, not a target, and
    DeepSeek bills only the tokens actually produced. At Flash output rates,
-   1,600 tokens cost about $0.001 off-peak or $0.002 at peak — roughly
-   2,000–4,000 full answers per $5. Dashboard values override code defaults, so
+   3,000 tokens cost about $0.002 off-peak or $0.004 at peak — roughly
+   1,000–2,000 full answers per $5. Dashboard values override code defaults, so
    update the variables in Cloudflare after redeploying.
 3. **Workers & Pages → KV → Create a namespace**, e.g.
    `draft-assistant-chat-quota`. Back in the Worker's **Variables & Secrets**,
@@ -246,6 +246,24 @@ npx wrangler deploy
 
 The `[[ratelimits]]` block in `wrangler.toml` adds an 8-per-minute burst guard;
 rate-limit bindings are not configurable in the dashboard.
+
+### The same Worker also serves the webapp agent
+
+`src/index.js` has a second route, `POST /v1/chat/completions`. It is an
+OpenAI-compatible passthrough for the hosted webapp's LangGraph loop: it keeps
+`messages`, `tools`, `tool_choice` and the upstream `tool_calls`, where the
+Android root route deliberately returns answer text only. Nothing about the
+Android route changed — same install-id check, same prompt, same quota key.
+
+To enable it, add a Worker **secret** `WEBAPP_LLM_TOKEN` and put that value in
+the webapp server's `LLM_API_KEY`, with `LLM_BASE_URL` ending in `/v1`. Add
+`AGENT_DAILY_LIMIT` (default `200`) for a separate turn budget; optionally set
+`WEBAPP_ORIGINS` to a comma-separated list of allowed browser origins. The
+server sends `X-Agent-Turn` once per agent request — one loop turn can make
+several LLM calls — and the Worker charges the cap once per turn, not once per
+call. The cap is per deployment until the webapp has user login. See
+`webapp/README.md` ("Using the Android app's Cloudflare Worker") for the full
+`.env` example.
 
 **If the app reports "DeepSeek returned an empty answer":** hidden reasoning
 consumed all of `max_tokens` before the final `content` was produced. Keep
@@ -325,7 +343,8 @@ app/src/test/java/com/draftassistant/data/
   DraftOrderTest.kt          pins the plan to infer.move_plan's four sequences
 worker/
   wrangler.toml              Worker name, KV binding, burst limit, model vars
-  src/index.js               DeepSeek proxy + prompt + quota; key is a secret
+  src/index.js               Android chat proxy + OpenAI passthrough for the
+                             webapp agent; keys stay as Worker secrets
 ```
 
 ## Deliberately absent

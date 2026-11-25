@@ -18,8 +18,20 @@ let SERIES = null;                         // {games:[slot], cur, fearless}
 let DRAFT_PLANS = null;                    // {0: [20 moves], 1: [...]} from /api/champions
 let PATCHES = [];                          // [{id, key}] the checkpoint's patch table
 
+// The local server serves /api/* from its own origin. A static/hosted copy
+// cannot, so the embed page sets window.API_BASE to the Lambda Function URL
+// before loading these scripts. Empty base keeps every local path unchanged.
+function apiUrl(path) {
+  let base = String(window.API_BASE || '');
+  if (!base && typeof URLSearchParams !== 'undefined') {
+    base = new URLSearchParams(location.search).get('api') || '';
+  }
+  base = base.replace(/\/+$/, '');
+  return base ? base + path : path;
+}
+
 async function init() {
-  const d = await (await fetch('/api/champions')).json();
+  const d = await (await fetch(apiUrl('/api/champions'))).json();
   CHAMPIONS = d.champions;
   CHAMPIONS.forEach(c => { BY_IDX[c.idx] = c; BY_RIOT[c.riot] = c; });
   DRAFT_PLANS = d.move_plan || null;
@@ -139,7 +151,7 @@ function setPatchByKey(key) {
 function currentFirstPick() {
   // A loaded game dictates the order; a hand-built draft uses the toggle.
   if (WT) return WT.draft.first_pick ? 1 : 0;
-  return +document.getElementById('first-pick').value ? 1 : 0;
+  return document.getElementById('first-pick').checked ? 1 : 0;
 }
 
 function isPolicyModel() {
@@ -206,18 +218,10 @@ function renderTurn() {
   // arrives asynchronously and is deliberately NOT read here: while a step
   // is being rendered it still describes the previous board.
   const t = nextTurn(currentFirstPick());
-  ['blue', 'red'].forEach(name => {
-    const el = document.getElementById('turn-' + name);
-    el.textContent = '';
-    el.title = '';
-  });
   document.querySelectorAll('.turn-target')
     .forEach(el => el.classList.remove('turn-target'));
   if (!t) return;
   const side = t.side === 0 ? 'blue' : 'red';
-  const label = document.getElementById('turn-' + side);
-  label.textContent = t.kind === 'ban' ? '▶ to ban' : '▶ to pick';
-  label.title = t.warning || '';
   const strip = document.getElementById(
     (t.kind === 'ban' ? 'bans-' : 'slots-') + side);
   const empty = strip.querySelector('.empty');
@@ -535,7 +539,7 @@ function loadGame(i) {
   const g = SERIES.games[i];
   picks = g.picks.slice();
   bans = { blue: g.bans.blue.slice(), red: g.bans.red.slice() };
-  document.getElementById('first-pick').value = g.firstPick ? '1' : '0';
+  document.getElementById('first-pick').checked = !!g.firstPick;
   // `cur` is part of the persisted state, so switching games has to be
   // saved here - otherwise "next game in series" (which saves *before*
   // calling this) stores the previous index and a refresh lands on the
@@ -543,19 +547,6 @@ function loadGame(i) {
   saveSeries();
   renderAll();
   requestSuggest();
-}
-
-function addGameSlot() {
-  syncGame();
-  const cur = SERIES.games[SERIES.cur];
-  // A fresh game inherits the pool the current one had - it is the same
-  // point in the series, so the same champions are gone - plus nothing,
-  // because the current game has not been closed.
-  SERIES.games.push(newGameSlot(cur ? cur.firstPick : 0,
-                                cur ? cur.fearless : []));
-  saveSeries();
-  if (WT) clearWT();
-  loadGame(SERIES.games.length - 1);
 }
 
 function nextGameInSeries() {
@@ -570,7 +561,7 @@ function nextGameInSeries() {
   // First-pick side is *kept*, not flipped. The teams swap sides between
   // games but the side holding first pick stays the same in 94% of pro
   // games (18,614 vs 1,139 in the corpus), so keeping it is the better
-  // default - and the select above still overrides it.
+  // default - and the toggle above still overrides it.
   SERIES.games.splice(SERIES.cur + 1, 0, newGameSlot(g.firstPick, pool));
   if (WT) clearWT();
   saveSeries();
@@ -637,13 +628,13 @@ function renderSeries() {
     + ` · first pick ${cur.firstPick ? 'red' : 'blue'}`
     + ` · ${cur.fearless.length} fearless`;
   // A closed game already has its successor; offering "next game" there
-  // would splice a duplicate in between. Use "+ game" to insert one.
+  // would splice a duplicate in between. Open the last game to extend.
   const nextBtn = document.getElementById('series-next');
   const blocked = cur.done && SERIES.cur < SERIES.games.length - 1;
   nextBtn.disabled = blocked;
   nextBtn.title = blocked
-    ? 'this game is already closed - its successor is in the series. Use'
-      + ' "＋ game" to insert one, or open the last game to extend the series'
+    ? 'this game is already closed - its successor is in the series.'
+      + ' Open the last game to extend the series'
     : 'close this game and open the next one: every champion picked here'
       + ' becomes unavailable there. The pool is defined exactly that way in'
       + ' the pro corpus (verified on all 10,021 fearless rows), and the'
@@ -765,7 +756,7 @@ function requestSuggest() {
 
 async function postJSON(url, body) {
   try {
-    const r = await fetch(url, {
+    const r = await fetch(apiUrl(url), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -1016,7 +1007,7 @@ function wtApply() {
 
 async function wtLoad(i) {
   let d;
-  try { d = await (await fetch('/api/draft?i=' + i)).json(); }
+  try { d = await (await fetch(apiUrl('/api/draft?i=' + i))).json(); }
   catch (e) { alert('failed to load the game'); return; }
   if (d.error) { alert(d.error); return; }
   WT = { draft: d, step: 0 };
@@ -1029,7 +1020,7 @@ async function wtLoad(i) {
   }
   sel.value = String(i);
   const fp = document.getElementById('first-pick');
-  fp.value = d.first_pick ? '1' : '0';
+  fp.checked = !!d.first_pick;
   fp.disabled = true;              // the game dictates the order
   setPatchByKey(d.patch);          // ... and the patch it was played on
   // Seed the pool from the game itself: `unavailable` is the real fearless
@@ -1070,7 +1061,17 @@ function resetDraft() {
   renderCompare();
 }
 
+function renderTeamNames() {
+  const blue = document.getElementById('team-blue-title');
+  const red = document.getElementById('team-red-title');
+  if (!blue || !red) return;
+  const d = WT && WT.draft;
+  blue.textContent = d ? `Blue side - ${d.blue || 'Blue'}` : 'Blue side';
+  red.textContent = d ? `Red side - ${d.red || 'Red'}` : 'Red side';
+}
+
 function renderWalkthrough() {
+  renderTeamNames();
   const info = document.getElementById('wt-info');
   const stepEl = document.getElementById('wt-step');
   const prev = document.getElementById('wt-prev');
@@ -1112,8 +1113,8 @@ async function refreshDraftList(q) {
   if (q == null) q = wtFilterValue();
   let d;
   try {
-    d = await (await fetch('/api/drafts?limit=100&q=' +
-      encodeURIComponent(q || ''))).json();
+    d = await (await fetch(apiUrl('/api/drafts?limit=100&q=' +
+      encodeURIComponent(q || '')))).json();
   } catch (e) { return; }
   if (d.error) return;
   sel.innerHTML = `<option value="">— pick a game `
@@ -1131,7 +1132,6 @@ document.getElementById('btn-reset').addEventListener('click', () => {
   if (WT) { wtExit(); return; }
   resetDraft();
 });
-document.getElementById('series-add').addEventListener('click', addGameSlot);
 document.getElementById('series-next').addEventListener('click',
   nextGameInSeries);
 document.getElementById('series-clear').addEventListener('click', () => {
@@ -1199,8 +1199,8 @@ document.getElementById('wt-random').addEventListener('click', async () => {
   // dropdown said WLDs would be a different corpus than the one on screen.
   let d;
   try {
-    d = await (await fetch('/api/drafts?random=1&limit=1&q=' +
-      encodeURIComponent(wtFilterValue() || ''))).json();
+    d = await (await fetch(apiUrl('/api/drafts?random=1&limit=1&q=' +
+      encodeURIComponent(wtFilterValue() || '')))).json();
   } catch (e) { return; }
   if (d.error) { alert(d.error); return; }
   if (d.drafts && d.drafts.length) wtLoad(d.drafts[0].i);

@@ -73,7 +73,7 @@ for t in "data/pro play/test_eval_protocol.py" \
          "pro/model/proonly" \
          "pro/model/archive/bans" \
          "pro/model/test_split" \
-         "frontend/test_server.py"; do
+         "webapp/test_server.py"; do
   echo "=== $t"
   docker compose run --rm -T dev python -m pytest "$t" -q | tail -2
 done
@@ -115,7 +115,7 @@ GPU memory.
 
 ## The frontend
 
-`frontend/server.py` needs torch and a checkpoint, so it belongs in the
+`webapp/server.py` needs torch and a checkpoint, so it belongs in the
 container — but it binds `127.0.0.1` by default, and a port published by Docker
 arrives on the container's `eth0`, not its loopback. A plain `-p 8777:8777`
 therefore returns connection-refused. Pass `--host 0.0.0.0` inside the
@@ -124,7 +124,7 @@ local:
 
 ```bash
 docker compose run --rm -T -p 127.0.0.1:8777:8777 dev \
-    python frontend/server.py --host 0.0.0.0 --port 8777
+    python webapp/server.py --host 0.0.0.0 --port 8777
 ```
 
 That is the **head-only** frontend. The `dev` image has no `transformers`, so the
@@ -134,8 +134,8 @@ the `llm` service, which is the same checkout and mounts with the derived image
 and the venv's `python`:
 
 ```bash
-bash frontend/serve.sh                 # http://127.0.0.1:8777
-bash frontend/serve.sh --port 8780     # publish spec and server agree
+bash webapp/serve.sh                 # http://127.0.0.1:8777
+bash webapp/serve.sh --port 8780     # publish spec and server agree
 ```
 
 `serve.sh` is the command above with `llm` instead of `dev` and `--device cuda`
@@ -152,12 +152,12 @@ command needs no flags. To pin them explicitly, or to run the role board alone:
 
 ```bash
 docker compose run --rm -T -p 127.0.0.1:8777:8777 dev \
-    python frontend/server.py --host 0.0.0.0 --port 8777 \
+    python webapp/server.py --host 0.0.0.0 --port 8777 \
     --ckpt solo_queue/model/checkpoints/masking-finetune/best_mask.pt \
     --policy-ckpt solo_queue/model/checkpoints/nextpick-policy/best_policy.pt
 
 docker compose run --rm -T -p 127.0.0.1:8777:8777 dev \
-    python frontend/server.py --host 0.0.0.0 --port 8777 --no-policy
+    python webapp/server.py --host 0.0.0.0 --port 8777 --no-policy
 ```
 
 The two slots are independent: `--ckpt` takes a `masking-*` checkpoint and

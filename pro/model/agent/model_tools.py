@@ -91,7 +91,7 @@ def role_index(role):
 class ChampIndex:
     """Name -> dense index, tolerant of the ways people type champion names.
 
-    Same normalisation as `schema.key` and `frontend/chat._norm`; longest key
+    Same normalisation as `schema.key` and `webapp/chat._norm`; longest key
     first so 'Dr. Mundo' is not read as 'Dr'. Ints pass through, because a
     caller holding an index should not have to look the name back up.
 
@@ -432,7 +432,7 @@ def predict_next_move(predictor, champs, blue_picks=(), red_picks=(), bans=(),
 def can_answer_in_lane(due, n_bans):
     """Whether the head can be asked a lane question about this board.
 
-    Two conditions, both measured (`frontend/probe_roleboard_fab.py`):
+    Two conditions, both measured (`webapp/probe_roleboard_fab.py`):
 
     * the ban block must be complete - on a ban-phase board a pick-phase
       hypothetical has no honest form (6 bans with a 10-ban move index), and

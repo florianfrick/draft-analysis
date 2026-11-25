@@ -95,7 +95,7 @@ def main():
                      "at least `share` of its own picks and at least `floor` "
                      "times"),
             "note": ("counts are raw pick counts per lane; the rule is applied "
-                     "at read time by frontend/roles.py, so changing a "
+                     "at read time by webapp/roles.py, so changing a "
                      "threshold does not need a rebuild"),
         },
         "roles": ROLES,

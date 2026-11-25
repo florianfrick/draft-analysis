@@ -373,6 +373,54 @@ def test_describe_says_what_a_run_would_use():
     assert cfg == {"model": "m", "base_url": "https://x/v1", "has_key": True}
 
 
+def test_a_client_sends_one_turn_id_for_all_of_its_calls(monkeypatch):
+    """The Worker charges by turn; the loop's several calls must share an id.
+
+    A fresh id per HTTP call would bill one agent answer as 5-8 turns, which
+    is invisible from inside the loop and only shows up on the Cloudflare bill.
+    """
+    seen = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def read(self):
+            return json.dumps({
+                "choices": [{"message": {"content": "ok"},
+                              "finish_reason": "stop"}],
+                "model": "m", "usage": {},
+            }).encode("utf-8")
+
+    def fake_urlopen(req, timeout=None):
+        seen.append({k.lower(): v for k, v in req.header_items()})
+        return FakeResponse()
+
+    monkeypatch.setattr(llm_client.urllib.request, "urlopen", fake_urlopen)
+    call = llm_client.client_from_env(
+        {"LLM_API_KEY": "k", "LLM_MODEL": "m"},
+        extra_headers={"X-Agent-Turn": "turn-abcdefgh"})
+    assert call([{"role": "user", "content": "hi"}])["content"] == "ok"
+    assert call([{"role": "user", "content": "again"}])["content"] == "ok"
+    assert [h.get("x-agent-turn") for h in seen] == ["turn-abcdefgh"] * 2
+    assert seen[0]["authorization"] == "Bearer k"
+    # urllib's default UA is blocked by Cloudflare with error 1010, which
+    # looks like an auth failure from inside the loop. Pin the override.
+    assert seen[0]["user-agent"] == llm_client.USER_AGENT
+
+    seen.clear()
+    call = llm_client.client_from_env({"LLM_API_KEY": "k"})
+    call([{"role": "user", "content": "hi"}])
+    call([{"role": "user", "content": "again"}])
+    turn_ids = [h.get("x-agent-turn") for h in seen]
+    assert len(set(turn_ids)) == 1
+    assert len(turn_ids[0]) >= 8
+    assert all(c.isalnum() or c in "_-" for c in turn_ids[0])
+
+
 def test_the_no_key_message_names_the_model_it_would_have_used(session):
     """The dead end this closes: a key set in `.env` and a loop that ignored it."""
     out = loop.run(session, "x", env={"LLM_MODEL": "deepseek-flash"})

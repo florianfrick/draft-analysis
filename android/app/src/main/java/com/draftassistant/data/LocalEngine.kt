@@ -139,20 +139,16 @@ class LocalEngine private constructor(
     // ---------------------------------------------------------------- suggest
 
     /**
-     * The role board. Routing matches `model_tools.predict_in_lane`: the head
-     * can only answer a lane question once the ban block is done, and during
-     * the ban phase the masking checkpoint answers instead. A single refusal
-     * leaves one cell empty; it never blanks the other nine.
+     * Role labels and confidence for PLACED PICKS only. The Android app has no
+     * role-board grid: the UI uses `assignment`/`conf` for the role badges on
+     * picks and for chat evidence, and uses `nextMove` for the suggestion list.
+     * Both come from the champion-role table via a joint one-to-one search;
+     * no model forward is needed here.
      */
     fun suggest(request: BoardRequest): SuggestResponse {
         val board = buildBoard(request)
         val turn = DraftOrder.nextTurn(board.plan, board.nBans, board.nPicks)
-        val k = (request.k ?: 5).coerceIn(1, 20)
-        val pid = patchIdFor(request.patchId)
 
-        // Role labels come from the champion-role table, not from a model head.
-        // The assignment is one-to-one per side: a joint search over the 5!
-        // injective placements, exactly as `lanes.assign_lanes` does it.
         val lanes = assignLanes(board.picks)
         val assignment = arrayOfNulls<String>(N_SLOTS)
         val conf = arrayOfNulls<Double>(N_SLOTS)
@@ -164,91 +160,27 @@ class LocalEngine private constructor(
         }
 
         val openRoles = HashMap<String, List<String>>()
-        val freeSlots = arrayOfNulls<List<Int>>(2)
         for (side in 0 until 2) {
             val taken = HashSet<String>()
-            val free = ArrayList<Int>()
             for (r in 0 until 5) {
                 val lane = lanes[side * 5 + r]
                 if (lane >= 0) taken.add(roleName(lane))
-                if (board.picks[side * 5 + r] < 0) free.add(side * 5 + r)
             }
-            freeSlots[side] = free
             openRoles[if (side == 0) "blue" else "red"] =
                 meta.roles.filter { it !in taken }
         }
 
-        val blue = HashMap<String, List<Suggestion>>()
-        val red = HashMap<String, List<Suggestion>>()
-        val methods = HashSet<String>()
-
-        // The head's lane question needs a pick move with all ten bans placed.
-        val headCanAnswer = turn != null &&
-            turn.kind == MoveKind.PICK && board.nBans >= 10
-
-        synchronized(lock) {
-            for (side in 0 until 2) {
-                for (lane in 0 until 5) {
-                    val role = roleName(lane)
-                    if (role !in (openRoles[if (side == 0) "blue" else "red"].orEmpty())) continue
-                    val free = freeSlots[side].orEmpty()
-                    if (free.isEmpty()) continue
-                    val top = if (headCanAnswer) {
-                        methods.add("head")
-                        val allowed = legalInLane(lane)
-                        val logits = runPolicy(board, turn!!.index, turn.kind, side, pid)
-                        val masked = applyLegality(logits, board, board.taken, poolOnPicks = true)
-                        // `allowed` is another LOGIT mask, not a top-k filter.
-                        // Without it the cell is empty 13 % of the time.
-                        val keep = BooleanArray(NUM_CHAMPS)
-                        allowed.forEach { keep[it] = true }
-                        for (i in 0 until NUM_CHAMPS) {
-                            if (!keep[i]) masked[i] = NEG_INF
-                        }
-                        topK(softmax(masked), k)
-                    } else {
-                        methods.add("masker")
-                        val target = free[0]
-                        val logits = runMasker(board, lanes, target, lane)
-                        val probs = softmax(logits)
-                        for (i in 0 until NUM_CHAMPS) {
-                            if (board.taken[i] || board.pool[i]) probs[i] = 0f
-                        }
-                        val total = probs.sum()
-                        if (total <= 0f) continue
-                        topK(FloatArray(NUM_CHAMPS) { probs[it] / total }, k)
-                    }
-                    val row = toSuggestions(top)
-                    if (side == 0) blue[role] = row else red[role] = row
-                }
-            }
-        }
-
-        // Flex: a champion under two roles of one side is a real choice,
-        // not a duplicate. The server sets the same flag.
-        markFlex(blue)
-        markFlex(red)
-
-        val method = when (methods.size) {
-            0 -> "none"
-            1 -> methods.first()
-            else -> "mixed"
-        }
-        Log.d(TAG, "suggest method=$method complete=${turn == null} " +
-            "pool=${board.poolCount} blue=${blue.keys} red=${red.keys} " +
-            "first=" + (blue.values.firstOrNull().orEmpty().take(3).joinToString(" ") {
-                "${it.name}:${String.format(Locale.ROOT, "%.3f", it.prob)}"
-            }))
+        Log.d(TAG, "roles assignment=${assignment.toList()} (no role board in UI)")
         return SuggestResponse(
-            blue = blue,
-            red = red,
+            blue = emptyMap(),
+            red = emptyMap(),
             assignment = assignment.toList(),
             conf = conf.toList(),
             openRoles = openRoles,
             complete = turn == null,
-            method = method,
+            method = "none",
             fearlessFiltered = board.poolCount,
-            model = if (method == "masker" || method == "mixed") maskerInfo else policyInfo,
+            model = maskerInfo,
         )
     }
 
@@ -328,8 +260,10 @@ class LocalEngine private constructor(
     // -------------------------------------------------------------- inference
 
     /**
-     * Policy forward: the same 13 tensors `NaiveTransformerPolicy._batch`
-     * builds. Returns the RAW 173 logits; legality is applied by the caller.
+     * TEMP EXPERIMENT: pro-only Siamese policy instead of the shipped naive
+     * transformer. It takes the masks/state batch from
+     * `solo_queue.model.policy.infer._policy_batch` and returns raw [1,173]
+     * logits; legality is applied inside the graph and again by the caller.
      */
     private fun runPolicy(
         board: Board,
@@ -346,7 +280,6 @@ class LocalEngine private constructor(
             val champ = board.picks[slot]
             if (champ >= 0) {
                 champIds[slot] = champ.toLong()
-                roleIds[slot] = (slot % 5).toLong()   // exact role = slot in team
                 padMask[slot] = 0L
             }
         }
@@ -354,10 +287,7 @@ class LocalEngine private constructor(
         val banIds = LongArray(N_BANS) { pad }
         for (i in 0 until board.nBans) banIds[i] = board.bans[i].toLong()
 
-        // Pool tokens ascend by champion index, PAD-filled to 40. The live
-        // board has no prior roles for them, so FLEX is the honest value.
         val fearless = LongArray(FEARLESS_SLOTS) { pad }
-        val fearlessRoles = LongArray(FEARLESS_SLOTS) { ROLE_FLEX.toLong() }
         var p = 0
         for (i in 0 until NUM_CHAMPS) {
             if (!board.pool[i]) continue
@@ -365,21 +295,28 @@ class LocalEngine private constructor(
             fearless[p++] = i.toLong()
         }
 
-        val phase = PHASE_OF[moveIdx].toLong()
-        val isBan = if (kind == MoveKind.BAN) 1L else 0L
+        // The serving boundary folds the fearless pool into taken_mask so a
+        // pool champion cannot be suggested on a ban either.
+        val taken = LongArray(NUM_CHAMPS) { 0L }
+        val unavailable = LongArray(NUM_CHAMPS) { 0L }
+        for (i in 0 until NUM_CHAMPS) {
+            if (board.taken[i] || board.pool[i]) taken[i] = 1L
+            if (board.pool[i]) unavailable[i] = 1L
+        }
+
         val inputs = arrayOf(
             EValue.from(Tensor.fromBlob(champIds, longArrayOf(1, N_SLOTS.toLong()))),
-            EValue.from(Tensor.fromBlob(banIds, longArrayOf(1, N_BANS.toLong()))),
-            EValue.from(Tensor.fromBlob(fearless, longArrayOf(1, FEARLESS_SLOTS.toLong()))),
-            EValue.from(Tensor.fromBlob(fearlessRoles, longArrayOf(1, FEARLESS_SLOTS.toLong()))),
             EValue.from(Tensor.fromBlob(roleIds, longArrayOf(1, N_SLOTS.toLong()))),
             EValue.from(Tensor.fromBlob(padMask, longArrayOf(1, N_SLOTS.toLong()))),
+            EValue.from(Tensor.fromBlob(banIds, longArrayOf(1, N_BANS.toLong()))),
+            EValue.from(Tensor.fromBlob(fearless, longArrayOf(1, FEARLESS_SLOTS.toLong()))),
+            EValue.from(Tensor.fromBlob(taken, longArrayOf(1, NUM_CHAMPS.toLong()))),
+            EValue.from(Tensor.fromBlob(unavailable, longArrayOf(1, NUM_CHAMPS.toLong()))),
             EValue.from(Tensor.fromBlob(longArrayOf(moveIdx.toLong()), longArrayOf(1))),
-            EValue.from(Tensor.fromBlob(longArrayOf(phase), longArrayOf(1))),
+            EValue.from(Tensor.fromBlob(longArrayOf(PHASE_OF[moveIdx].toLong()), longArrayOf(1))),
             EValue.from(Tensor.fromBlob(longArrayOf(team.toLong()), longArrayOf(1))),
             EValue.from(Tensor.fromBlob(longArrayOf(board.firstPick.toLong()), longArrayOf(1))),
-            EValue.from(Tensor.fromBlob(longArrayOf(0L), longArrayOf(1))), // game_num
-            EValue.from(Tensor.fromBlob(longArrayOf(isBan), longArrayOf(1))),
+            EValue.from(Tensor.fromBlob(longArrayOf(if (kind == MoveKind.BAN) 1L else 0L), longArrayOf(1))),
             EValue.from(Tensor.fromBlob(longArrayOf(patchId.toLong()), longArrayOf(1))),
         )
         val outputs = policy.forward(*inputs)

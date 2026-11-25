@@ -1,6 +1,6 @@
 """The queryable view of the pro corpus, and the schema the agent is shown.
 
-`frontend/tools.py` precomputes the aggregates *I* guessed a coach would want,
+`webapp/tools.py` precomputes the aggregates *I* guessed a coach would want,
 and `_probe_tool_power.py` showed the guess was mostly wrong: the per-champion
 cell is 0-2 of 120 boards at a given move. A SQL fallback moves that choice to
 the model, which is the right place for it - but only if the schema makes the
@@ -55,7 +55,7 @@ KINDS = ("ban", "pick")
 SIDES = ("blue", "red")
 
 # The floor below which a rate is not reported. Same number as
-# `frontend/tools.MIN_CELL`, and it is a documented part of the schema rather
+# `webapp/tools.MIN_CELL`, and it is a documented part of the schema rather
 # than a hidden guard: the SQL tool cannot know what an arbitrary aggregate is
 # counting, so the *prompt* has to carry the rule.
 MIN_CELL = 30
@@ -71,9 +71,9 @@ SHARED_SPLIT = dict(val_frac=0.10, test_frac=0.0, val_random=True)
 
 # ------------------------------------------------------------------ helpers
 def names(n=173):
-    """dense champion index -> dDragon name, same table `frontend/tools.py` uses.
+    """dense champion index -> dDragon name, same table `webapp/tools.py` uses.
 
-    Duplicated rather than imported: `frontend/` is an application, `pro/` is
+    Duplicated rather than imported: `webapp/` is an application, `pro/` is
     the model tree, and an experiment must not make the model tree depend on the
     UI. The two readers are four lines each and the JSON is the contract.
     """
@@ -91,7 +91,7 @@ def names(n=173):
 def key(text):
     """Normalised champion key: 'Kai'Sa', 'kaisa' and 'kai sa' all -> 'kaisa'.
 
-    Mirrors `frontend/chat._norm`. The apostrophe is why this exists at all: a
+    Mirrors `webapp/chat._norm`. The apostrophe is why this exists at all: a
     model writing `WHERE champ = 'Kai'Sa'` produces a SQL syntax error, so the
     schema tells it to join on `champ.key` and this is the key it gets.
     """

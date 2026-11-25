@@ -44,7 +44,7 @@ STORE_DIR = HERE.parent / "store"
 STORE_DB = STORE_DIR / "store.duckdb"
 PROC = PROJ / "data" / "solo queue" / "process matchdata"
 STATIC = HERE / "static"
-ICON_CACHE = PROJ / "frontend" / ".cache" / "champion_16.20.1.json"
+ICON_CACHE = PROJ / "webapp" / ".cache" / "champion_16.20.1.json"
 CDN = "https://ddragon.leagueoflegends.com/cdn/"
 VER = "16.20.1"
 

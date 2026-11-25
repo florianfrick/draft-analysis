@@ -2,12 +2,18 @@ name = "draft-assistant-chat"
 main = "src/index.js"
 compatibility_date = "2026-11-19"
 
+# Secrets (never in this file):
+#   DEEPSEEK_API_KEY  - the upstream key, used by both routes
+#   WEBAPP_LLM_TOKEN  - server-side bearer token for /v1/chat/completions
+# Optional var: WEBAPP_ORIGINS = "https://your-webapp-host" (comma separated).
+
 [vars]
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-flash"
 REASONING_EFFORT = "low"
-DAILY_LIMIT = "30"
-MAX_TOKENS = "1600"
+DAILY_LIMIT = "30"          # Android questions per day, per install id + IP
+AGENT_DAILY_LIMIT = "200"   # webapp agent turns per day, per deployment
+MAX_TOKENS = "3000"         # shared ceiling for both routes
 
 [[kv_namespaces]]
 binding = "CHAT_QUOTA"

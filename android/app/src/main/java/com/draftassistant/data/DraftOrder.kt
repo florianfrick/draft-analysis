@@ -13,7 +13,7 @@ data class DraftMove(val kind: MoveKind, val side: Int)
 data class Turn(val kind: MoveKind, val side: Int, val index: Int)
 
 /**
- * The board -> next-move function, ported from `frontend/static/draft-order.js`.
+ * The board -> next-move function, ported from `webapp/static/draft-order.js`.
  *
  * Two things here are easy to get wrong, and both are deliberate in the
  * original:

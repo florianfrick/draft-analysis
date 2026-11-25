@@ -22,7 +22,7 @@ First GitHub source release for the LoL Draft Assistant.
 | Path | Role |
 |---|---|
 | `android/` | The shipped app, ExecuTorch assets, portraits, demo data, and optional Worker proxy. |
-| `pro/`, `solo_queue/`, `data/`, `frontend/` | Reproduction and evaluation tooling; not required for the Android app. |
+| `pro/`, `solo_queue/`, `data/`, `webapp/` | Reproduction and evaluation tooling; not required for the Android app. |
 | `STATUS.md`, `FINDINGS.md`, `PROJECT_REPORT.md` | Measurements, archived experiment index, and project summary. |
 | `LICENSE`, `ASSET_NOTICE.md` | Code license and third-party asset notice. |
 

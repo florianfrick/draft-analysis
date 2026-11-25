@@ -107,7 +107,7 @@ TEST_SERIES = list(P.TEST_SERIES)
 # --------------------------------------------------------------------- models
 # One checkpoint per model class, each in its own track's store
 # (`solo_queue/model/checkpoints/` or `pro/model/checkpoints/`). The name is the
-# contract (see frontend/server._ckpt_roles): `masking-*` answers masked
+# contract (see webapp/server._ckpt_roles): `masking-*` answers masked
 # completion and the role board, `nextpick-*` answers next move. This file is the
 # one place that deliberately spans both tracks - it exists to measure whether
 # solo-queue initialisation buys anything over pro-only.

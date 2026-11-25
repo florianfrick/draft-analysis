@@ -10,13 +10,13 @@ Why it exists: on 4,000 held-out states the head's top-1 is 18.32 % and this
 pipeline's is 34.27 % (+16.0), because the reranker converts 67.0 % of a
 shortlist the head only converts 35.8 % of. The cost is a 4.2 B model in the
 loop, so it needs `--device cuda` and the `llm` image (transformers + peft +
-bitsandbytes); `frontend/server.py` falls back to the head when either is
+bitsandbytes); `webapp/server.py` falls back to the head when either is
 missing rather than failing to start.
 
 What it does *not* change: the candidate set. The head proposes, the reranker
 orders. So top-5 recall is the head's 51.18 % either way - only the ordering
 inside those five improves. That is why this cannot rescue the role board
-(see `frontend/README.md`), and why the honest description of the gain is
+(see `webapp/README.md`), and why the honest description of the gain is
 "picks the right one of five twice as often", not "finds more moves".
 
 The board reaches the prompt as text and as the ten soft tokens, exactly as in
@@ -51,7 +51,7 @@ class RerankPredictor:
     """`next_move`, answered by the Qwen reranker over the head's shortlist."""
 
     kind = "rerank"
-    # `model_info` in frontend/server.py reads these off every predictor. The
+    # `model_info` in webapp/server.py reads these off every predictor. The
     # reranker has no val run of its own: its number is a held-out *rerank*
     # score (34.27 % exact, STATUS.md §9), not a `champ top5` on a training
     # split, and putting it in the val column would invite exactly the

@@ -71,7 +71,7 @@ POLICY_CKPT = ROOT / ("pro/model/checkpoints/"
                       "nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw/best.pt")
 MASKER_CKPT = ROOT / "pro/model/checkpoints/masking-proonly-nov13-through-lcp-df-sw/best.pt"
 DDRAGON = "https://ddragon.leagueoflegends.com/cdn/16.20.1/img/champion/"
-MANIFEST_CACHE = ROOT / "frontend" / ".cache" / "champion_16.20.1.json"
+MANIFEST_CACHE = ROOT / "webapp" / ".cache" / "champion_16.20.1.json"
 PROC = ROOT / "data" / "solo queue" / "process matchdata"
 
 N_SLOTS = 10

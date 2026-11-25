@@ -57,7 +57,7 @@ data/pro play/*.sqlite
 # Patch notes corpus: local only, deliberately not in the repo. It was removed
 # in 8a30a07 and stays out - the measurement in STATUS.md §P3.1 says the
 # input-side adapter cannot turn patch changes into a cold-start prior, which
-# was the only thing the corpus was for. `frontend/llm.py` reads it when it is
+# was the only thing the corpus was for. `webapp/llm.py` reads it when it is
 # present (patch-grounded explanations) and degrades cleanly when it is not.
 data/patch notes/
 *.jsonl
@@ -84,9 +84,9 @@ wandb/
 # installed package on sys.path and `wandb.init` would silently not exist.
 wandb_runs/
 **/wandb_runs/
-frontend/server.log
-frontend/server.err
-frontend/.cache/
+webapp/server.log
+webapp/server.err
+webapp/.cache/
 *.log
 *.err
 __pycache__/
@@ -108,3 +108,13 @@ Thumbs.db
 *.corrupt
 solo_queue/analysis/additive_model.json
 .handrun.json
+.sass-cache/
+
+# ============================================================
+# Terraform state (contains the Worker token in Lambda env)
+# ============================================================
+deploy/terraform/.terraform/
+deploy/terraform/*.tfstate
+deploy/terraform/*.tfstate.*
+deploy/terraform/*.tfvars
+!deploy/terraform/terraform.tfvars.example

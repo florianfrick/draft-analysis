@@ -4,7 +4,7 @@
 `data/build_champ_roles.py`. This module is the reader plus the assignment the
 serving path needs, and it lives in the model package because `infer._fill_roles`
 needs it to decide each placed pick's lane - that value is the encoder's
-`role_ids` input. Reaching into `frontend/` for it would invert the dependency:
+`role_ids` input. Reaching into `webapp/` for it would invert the dependency:
 the frontend imports this package, not the other way round.
 
 Why it exists at all: the encoder is permutation-invariant within a team

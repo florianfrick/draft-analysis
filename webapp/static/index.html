@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>Draft Assistant — pro-only model</title>
-<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
 <header>
@@ -17,10 +17,12 @@
     checkpoint has no patch table, because then the choice would do nothing.">patch
     <select id="patch-select"></select>
   </label>
-  <label class="muted agent-feat" title="When on, the agent chat and the LLM's
+  <label class="switch agent-feat" title="When on, the agent chat and the LLM's
     reranked suggestions are shown. When off, only the base model's own
     suggestions and the board updates remain - the agent never runs.">
-    <input type="checkbox" id="agent-features" checked> agent features
+    <input type="checkbox" id="agent-features" role="switch" checked>
+    <span class="switch-track"><span class="switch-knob"></span></span>
+    <span class="switch-label">Agent</span>
   </label>
   <button id="btn-wt" aria-expanded="false" title="show or hide the walkthrough
     of real pro games - a game picker, its moves one at a time, and how the
@@ -34,7 +36,6 @@
     fearless pool. Game 1 starts empty; each later game cannot pick any
     champion picked in an earlier one.">Series</span>
   <div id="series-games" class="series-games"></div>
-  <button id="series-add" title="add an empty game to the series">＋ game</button>
   <button id="series-next" class="sb-next" title="close this game and open
     the next one: every champion picked here becomes unavailable there. The
     pool is defined exactly that way in the pro corpus (verified on all
@@ -55,50 +56,6 @@
   <span id="fearless-note" class="muted"></span>
 </div>
 
-<section id="nextmove" class="hidden">
-  <div class="nm-head">
-    <span id="nm-turn"></span>
-    <span id="nm-meta" class="muted"></span>
-    <span class="spacer"></span>
-  </div>
-  <div id="nm-subtitle" class="nm-subtitle">Base model suggestions</div>
-  <div id="nm-warning" class="nm-warn hidden"></div>
-  <div class="nm-chips" id="nm-chips"></div>
-</section>
-
-<section id="agentsuggest">
-  <div class="nm-head">
-    <span class="nm-title">Agent suggestions <span class="muted">(rerank
-      of the head's list)</span></span>
-    <span id="as-meta" class="muted"></span>
-    <span class="spacer"></span>
-  </div>
-  <div id="as-warning" class="nm-warn hidden"></div>
-  <div class="nm-chips" id="as-chips"></div>
-</section>
-
-<section id="agent">
-  <div class="ex-head">
-    <span id="agent-title">Agent</span>
-    <span id="agent-model" class="agent-model"></span>
-    <span id="agent-meta" class="muted"></span>
-    <span class="spacer"></span>
-    <button id="agent-suggest" title="one click: ask the agent (not the
-      next-move head) to recommend the single best move on this board. It reads
-      the live state - patch, first pick, series game, fearless pool, picks and
-      bans - calls the head and the role table through tools, and commits to one
-      champion. Needs LLM_API_KEY.">suggest next move</button>
-    <button id="agent-clear" title="forget the conversation, keep the board">clear</button>
-    <button id="agent-close" title="hide this panel">✕</button>
-  </div>
-  <div id="agent-log"></div>
-  <form id="agent-form">
-    <input id="agent-input" autocomplete="off"
-      placeholder="e.g. what does the model take for red's jungle?">
-    <button id="agent-send" type="submit">ask</button>
-  </form>
-</section>
-
 <div id="wt-bar" class="hidden">
   <span class="wt-title">Real draft</span>
   <select id="wt-select"><option value="">— pick a game —</option></select>
@@ -116,21 +73,20 @@
 
 <main>
   <div class="board-tools">
-    <label class="muted fp-label" title="who has first pick in the game on the
-      board (mirrors the whole draft order; ignored while a real game is
-      loaded). Per game: the side holding it stays the same across a series
-      in 94% of pro games, even though the teams swap sides.">first pick
-      <select id="first-pick">
-        <option value="0">blue</option>
-        <option value="1">red</option>
-      </select>
+    <label class="switch fp-toggle" title="First Pick mirrors the whole draft
+      order; ignored while a real game is loaded. Blue when off, red when on.">
+      <input type="checkbox" id="first-pick" role="switch"
+        aria-label="First Pick: blue when off, red when on">
+      <span class="switch-track">
+        <span class="switch-knob"></span><span class="switch-text">First Pick</span>
+      </span>
     </label>
     <button id="btn-reset" title="clear this game's picks and bans, keeping
       the fearless pool">Reset draft</button>
   </div>
 
   <section class="team" id="team-blue">
-    <h2>Blue side <span class="turn" id="turn-blue"></span></h2>
+    <h2 id="team-blue-title">Blue side</h2>
     <div class="row">
       <span class="row-label">Bans</span>
       <div class="strip" id="bans-blue"></div>
@@ -147,7 +103,7 @@
   </section>
 
   <section class="team" id="team-red">
-    <h2>Red side <span class="turn" id="turn-red"></span></h2>
+    <h2 id="team-red-title">Red side</h2>
     <div class="row">
       <span class="row-label">Bans</span>
       <div class="strip" id="bans-red"></div>
@@ -164,6 +120,52 @@
   </section>
 </main>
 
+<section id="nextmove" class="hidden">
+  <div class="nm-head">
+    <span id="nm-turn"></span>
+    <span id="nm-meta" class="muted"></span>
+    <span class="spacer"></span>
+  </div>
+  <div id="nm-subtitle" class="nm-subtitle">Base model suggestions</div>
+  <div id="nm-warning" class="nm-warn hidden"></div>
+  <div class="nm-chips" id="nm-chips"></div>
+</section>
+
+<section id="agentsuggest">
+  <div class="nm-head">
+    <span class="nm-title">Agent Reevaluation</span>
+    <span id="as-meta" class="muted"></span>
+    <span class="spacer"></span>
+  </div>
+  <div id="as-warning" class="nm-warn hidden"></div>
+  <div class="nm-chips" id="as-chips"></div>
+</section>
+
+<section id="agent">
+  <div class="ex-head">
+    <span id="agent-title">Agent</span>
+    <span id="agent-model" class="agent-model"></span>
+    <span id="agent-meta" class="muted"></span>
+    <span class="spacer"></span>
+    <button id="agent-explain" title="ask what composition archetype each side
+      is aiming toward - the same question the Android app asks. Needs
+      LLM_API_KEY.">Explain</button>
+    <button id="agent-suggest" title="one click: ask the agent (not the
+      next-move head) to recommend the single best move on this board. It reads
+      the live state - patch, first pick, series game, fearless pool, picks and
+      bans - calls the head and the role table through tools, and commits to one
+      champion. Needs LLM_API_KEY.">Suggest</button>
+    <button id="agent-clear" title="forget the conversation, keep the board">clear</button>
+    <button id="agent-close" title="hide this panel">✕</button>
+  </div>
+  <div id="agent-log"></div>
+  <form id="agent-form">
+    <input id="agent-input" autocomplete="off"
+      placeholder="e.g. what does the model take for red's jungle?">
+    <button id="agent-send" type="submit">ask</button>
+  </form>
+</section>
+
 <div id="picker" class="hidden">
   <div class="picker-box">
     <div class="picker-head">
@@ -175,8 +177,8 @@
   </div>
 </div>
 
-<script src="/draft-order.js"></script>
-<script src="/app.js"></script>
-<script src="/agent.js"></script>
+<script src="draft-order.js"></script>
+<script src="app.js"></script>
+<script src="agent.js"></script>
 </body>
 </html>

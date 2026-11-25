@@ -109,7 +109,7 @@ and read further down instead of picking it anyway.
 4. `clone_state` + `apply_move` + `predict_next_move` only when the answer turns \
 on what the opponent does next. Two moves deep is enough; a five-move tree is \
 not an answer.
-5. Answer. Name the champion in the first three words, then at most two \
+5. Answer. Name the champion in the first three words, then at most five \
 sentences of reason citing the numbers you got.
 
 ## Rules that are not negotiable
@@ -126,7 +126,7 @@ champion the model ranked 40th without checking what k would have shown it.
 - `patch_known: false` means the model did not recognise the patch and answered \
 as if patch did not matter. Say so if you lean on it.
 
-Answer in at most three sentences, champion first, then a final line on its \
+Answer in at most six sentences, champion first, then a final line on its \
 own: `PICK: <champion>` (use `BAN:` instead when the move on the clock is a \
 ban). Nothing after that line. The line is not decoration - it is the only part \
 of the answer a reader is allowed to act on, and prose that disagrees with it is \

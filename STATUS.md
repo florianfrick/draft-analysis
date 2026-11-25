@@ -37,7 +37,7 @@ The kept checkpoints, each in its track's store: `solo_queue/model/checkpoints/`
 for `masking-soloqueue`, `masking-finetune` and `nextpick-policy`; everything
 else under `pro/model/checkpoints/`. The track says which data trained the
 model; the directory name states the inference it serves and the stage that
-produced it, and `frontend/server._ckpt_roles` reads that prefix to decide which
+produced it, and `webapp/server._ckpt_roles` reads that prefix to decide which
 of the two UI slots may load it.
 
 | class | checkpoint | inference |
@@ -546,7 +546,7 @@ frequency table with legality applied:
    enough for the role board.** Their raw top-5 puts a fearless-unavailable
    champion in it on 85 of 120 slots (three models × four fearless games); the
    next-move models get `unavailable_mask` as an input and break it zero times.
-   Set the pool to `-inf` and renormalise — which `frontend/server._top5` already
+   Set the pool to `-inf` and renormalise — which `webapp/server._top5` already
    does — and the answer is legal by construction while the real pick stays in
    the top-5 **0.95 / 0.875 / 0.625** of the time (`masking-proonly` /
    `masking-finetune` / `masking-soloqueue`), against 0.475 for a role-frequency
@@ -698,7 +698,7 @@ Evidence: `pro/model/proonly/reports/compare_shared_random_{masked,policy}.json`
 > board, `/api/next-move`, `/api/suggest` and `/api/agent` - and `/api/explain`,
 > `/api/breakdown`, `/api/draft-score`, `/api/tool`, `/api/chat` and the reranker
 > slot below no longer exist (§9, "The frontend was replaced"). Their measured
-> results are kept because they are why the agent exists; `frontend/README.md`
+> results are kept because they are why the agent exists; `webapp/README.md`
 > describes what ships.
 
 Two model slots, loaded at once and chosen independently: `masking-*` drives the
@@ -772,7 +772,7 @@ refused at load rather than failing later.
   have no such input, and their answers are filtered rather than conditioned —
   the bar says so.
 
-- **Chat** (`/api/chat`, `frontend/chat.py` + `frontend/tools.py`) — the inverted
+- **Chat** (`/api/chat`, `webapp/chat.py` + `webapp/tools.py`) — the inverted
   loop. The adapter cannot generate (7-8 % top-1, one name, no stop token) but
   can select (33.85 %), so the server computes the legal pool, the head's whole
   distribution over it, and the corpus evidence, and the model only chooses
@@ -1250,7 +1250,7 @@ model, no tool support) are otherwise indistinguishable from inside a batch.
 
 ### The frontend was replaced, and the tool surface with it (2026-11-12/13)
 
-The agent is now the *only* assistant surface. Removed from `frontend/`:
+The agent is now the *only* assistant surface. Removed from `webapp/`:
 `chat.py` (rule-based chat), `rerank.py` and the `llm-*` slot, `draftscore.py`
 and the draft-score panel, `tools.py` + `POST /api/tool`, `llm.py` and the
 explain route, `roles.py`, `breakdown.html`/`breakdown.js`, and their JS and CSS.
@@ -1277,7 +1277,7 @@ Three contract changes came with it:
   good one - a distribution for an illegal board is indistinguishable from a good
   one. `/api/suggest` may stay lenient and let the panel show `state_error`.
 
-Tests: `frontend/` 47, `pro/model/agent/` 137. The panel's JS is checked against
+Tests: `webapp/` 47, `pro/model/agent/` 137. The panel's JS is checked against
 the route table, so a retired route cannot be called from a stale panel.
 
 ### The reranking arm became a button (2026-11-13)
@@ -1308,11 +1308,11 @@ Three contract changes, all in the state rather than in a prompt:
 
 Degradation is explicit: no key -> `stop: "no client"` with the state and head
 attached, no head -> `head: null`, complete draft -> no LLM call, refused board
--> 400. Tests: `frontend/` 53 (6 new), `pro/model/agent/` 149 (12 new), plus
+-> 400. Tests: `webapp/` 53 (6 new), `pro/model/agent/` 149 (12 new), plus
 `pro/model/llm/test_eval_api_agent.py`. One **pre-existing** failure remained in
-`frontend/test_server.py::test_policy_default_is_the_ban_aware_arm`: the working
+`webapp/test_server.py::test_policy_default_is_the_ban_aware_arm`: the working
 tree's `POLICY_DEFAULT` was already `nextpick-proonly-randomvalsplit-*` while
-the server docstring, `frontend/README.md` and that test named
+the server docstring, `webapp/README.md` and that test named
 `nextpick-bans-aware-through-wlds-ig-tes`. The next change resolved it (below):
 the randomvalsplit pair is the decision, and the docs and test now say so.
 
@@ -1343,7 +1343,7 @@ ban-aware arm and the 3-member ensemble remain selectable with
 is gone - no dropdowns, Load buttons or file upload - while `--ckpt`,
 `--policy-ckpt` and `--no-policy` stay, and the `/api/load` + `/api/upload`
 routes survive as a tested local scripting surface with no UI. The CLI help,
-server docstring, `frontend/README.md`, `serve.sh` and the default test now
+server docstring, `webapp/README.md`, `serve.sh` and the default test now
 name the same two directories. **No new number was measured.**
 
 **Layout.** `first pick` and `Reset draft` moved into `<main>` above the Blue /
@@ -1391,7 +1391,7 @@ head, not a data dive - while the free-form panel and the MCP server keep both
 data tools. `patch` is a legitimate scope filter here, so the
 `test_no_tool_takes_a_board` guard now excludes it from the board-field set.
 
-Tests: `frontend/` 61, `pro/model/agent/` 164 (incl. `test_soloq_tool.py`), plus
+Tests: `webapp/` 61, `pro/model/agent/` 164 (incl. `test_soloq_tool.py`), plus
 `pro/model/llm/test_eval_api_agent.py` and `test_eval_api_rerank.py`. **No new
 model number was measured** - the tool reads a prebuilt cube and ablates from the
 measured reranking arm.
@@ -1816,12 +1816,12 @@ Green today (2026-11-13, after the frontend replacement):
 `pytest pro/model/proonly pro/model/bans pro/model/test_split` 47 passed 1 skipped;
 `pytest "data/pro play"` 41 passed;
 `pytest pro/model/agent` 137 passed;
-`pytest frontend` 47 passed (the suite was rewritten with the surface: the 76
+`pytest webapp` 47 passed (the suite was rewritten with the surface: the 76
 count included the chat, rerank and draft-score tests, and those modules are
 gone). `pro/model/llm` still needs `bash pro/model/llm/run.sh python -m pytest
 pro/model/llm/test_llm_prompt.py -q`, since it imports `transformers`.
 
-**`pytest frontend` read 58 passed 18 skipped for a while after the split, and
+**`pytest webapp` read 58 passed 18 skipped for a while after the split, and
 that was a lie.** Three globs in `test_server.py` still named pre-split paths
 (`model/checkpoints/nextpick-policy/best_policy.pt`, `.../masking-finetune/*.pt`)
 and the `policy_ckpt` fixture called `pytest.skip` when its glob came up empty,

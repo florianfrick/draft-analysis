@@ -2861,9 +2861,9 @@
   "lane_floor": 5,
   "models": {
     "policy": {
-      "ckpt": "pro/model/checkpoints/nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw/best.pt",
-      "arch": "naive_transformer",
-      "val_top5": 0.5574722280444351
+      "ckpt": "pro/model/checkpoints/nextpick-proonly-nov13-k5-through-lcp-df-sw/best.pt",
+      "arch": "siamese_policy_proonly",
+      "val_top5": 0.5209599664640536
     },
     "masker": {
       "ckpt": "pro/model/checkpoints/masking-proonly-nov13-through-lcp-df-sw/best.pt",

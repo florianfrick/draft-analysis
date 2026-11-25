@@ -14,7 +14,7 @@ Three things are deliberately different from the single-turn arms in
    its top-20 85.2 %, so k is a real decision: k=5 throws away a third of the
    answers, k=20 buys them back at the cost of a longer list to read.
 2. **No `sql`.** SQL makes the agent spend its budget building queries, and the
-   aggregate tier (`frontend/tools.py`) already answers the questions a draft
+   aggregate tier (`webapp/tools.py`) already answers the questions a draft
    panel asks. It is ablated, not merely absent, so a model that invents the
    tool name gets a refusal it can read. `rank_candidates` needs no ablation:
    comparing a shortlist is the harnessed model's own job now, so the tool does
@@ -49,7 +49,7 @@ price of inferring lanes at serve time.
 - **Prose parsing.** The answer is prose, so it is parsed: first sentence
   first, whole answer as a fallback, and the mode is recorded per row. A run
   with a high `body` count is a run whose metric is partly a parser's.
-- **The shipped chat surface.** This is the tool loop, not `frontend/chat.py`.
+- **The shipped chat surface.** This is the tool loop, not `webapp/chat.py`.
 
 ## Usage
 

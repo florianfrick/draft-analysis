@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Serve the frontend: the board, the role board, the next move, the agent and
+# Serve the web app: the board, the role board, the next move, the agent and
 # its one-click suggestion.
 #
 # Two images can serve it, and the difference is one model:
@@ -12,7 +12,7 @@
 # `--rerank` switches to the `llm` image and `--device cuda`. It is opt-in on
 # purpose: the model's 34.27 % headline is measured with the *true lane* in the
 # task line, and the panel's question has no lane, where it scores 20.85 %
-# (frontend/README.md, "What the reranker is worth"). The role board does name
+# (webapp/README.md, "What the reranker is worth"). The role board does name
 # a lane, which is the surface it is in-distribution for.
 #
 # Two things have to be true in either image:
@@ -29,12 +29,12 @@
 # - so re-run this after adding a key. Without a key the agent panel still
 # opens and says there is none; the board and the role board are unaffected.
 #
-#   bash frontend/serve.sh                       # http://127.0.0.1:8777
-#   bash frontend/serve.sh --rerank              # the 4B, needs a GPU
-#   bash frontend/serve.sh --port 8780           # or PORT=8780
-#   bash frontend/serve.sh --ckpt pro/model/archive/checkpoints/masking-proonly-randomvalsplit-through-wlds-ig-tes/best.pt
-#   bash frontend/serve.sh --policy-ckpt pro/model/archive/checkpoints/nextpick-proto-ensemble/ensemble.json
-#   bash frontend/serve.sh --no-policy           # role board only
+#   bash webapp/serve.sh                       # http://127.0.0.1:8777
+#   bash webapp/serve.sh --rerank              # the 4B, needs a GPU
+#   bash webapp/serve.sh --port 8780           # or PORT=8780
+#   bash webapp/serve.sh --ckpt pro/model/archive/checkpoints/masking-proonly-randomvalsplit-through-wlds-ig-tes/best.pt
+#   bash webapp/serve.sh --policy-ckpt pro/model/archive/checkpoints/nextpick-proto-ensemble/ensemble.json
+#   bash webapp/serve.sh --no-policy           # role board only
 #
 # `pro/model/checkpoints/` holds the shipped pair:
 # `masking-proonly-nov13-through-lcp-df-sw` (role board) and
@@ -45,7 +45,7 @@
 # examples above do. The reranker is served only when `--rerank` asks.
 # There is no model picker in the browser - models are chosen at startup.
 #
-# Every argument is passed through to frontend/server.py; --port and --rerank
+# Every argument is passed through to webapp/server.py; --port and --rerank
 # are consumed here as well, because the publish spec and the image have to
 # agree with them.
 set -euo pipefail
@@ -72,8 +72,8 @@ done
 #
 # If you invoke the container by hand instead, use `bash -c`, never `bash -lc`:
 # a login shell resets PATH, `python` becomes a different interpreter, and the
-# frontend then fails to import what this image installed.
+# webapp then fails to import what this image installed.
 exec docker compose run --rm -T \
   -p "127.0.0.1:${PORT}:${PORT}" \
-  "$SERVICE" python frontend/server.py --host 0.0.0.0 --port "$PORT" \
+  "$SERVICE" python webapp/server.py --host 0.0.0.0 --port "$PORT" \
   "${ARGS[@]+"${ARGS[@]}"}"

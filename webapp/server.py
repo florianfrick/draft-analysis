@@ -1,6 +1,6 @@
 """Local-only prototype frontend for the SoloQ draft model.
 
-Run:    python frontend/server.py --port 8777
+Run:    python webapp/server.py --port 8777
 Open:   http://127.0.0.1:8777   (binds 127.0.0.1 only - no external access)
 
 Five things, and the board is the only one that is not a question:
@@ -170,6 +170,7 @@ import glob
 import json
 import random
 import re
+import secrets
 import sys
 import threading
 import time
@@ -180,8 +181,8 @@ from urllib.request import urlopen
 
 import torch
 
-FRONTEND_DIR = Path(__file__).resolve().parent
-ROOT = FRONTEND_DIR.parent                     # .../lol draft analysis
+WEBAPP_DIR = Path(__file__).resolve().parent
+ROOT = WEBAPP_DIR.parent                     # .../lol draft analysis
 PROC_DIR = ROOT / "data" / "solo queue" / "process matchdata"
 # Two artefact stores, one per track. Nothing is shared: a checkpoint trained
 # on solo queue lives under `solo_queue/`, everything trained on pro drafts
@@ -193,7 +194,7 @@ PRO_CKPT_DIR = ROOT / "pro" / "model" / "checkpoints"
 # `--rerank` / `--policy-ckpt` / `--ckpt`, never by a default.
 ARCHIVE_CKPT_DIR = ROOT / "pro" / "model" / "archive" / "checkpoints"
 CKPT_DIRS = (SOLOQ_CKPT_DIR, PRO_CKPT_DIR)
-STATIC_DIR = FRONTEND_DIR / "static"
+STATIC_DIR = WEBAPP_DIR / "static"
 # Only the masking family: `nextpick-*/best.pt` also matches a bare
 # `*/best.pt` glob, and picking a policy checkpoint as the fallback role model
 # would fail at load. The name says which inference, so the glob uses it.
@@ -206,7 +207,7 @@ CKPT_PATTERNS = tuple(            # what /api/checkpoints lists (no torch.load)
     # is the thing you name; listing `projector.pt` instead would offer a file
     # that is one piece of it
     + [("checkpoints", str(d / "llm-*")) for d in CKPT_DIRS]
-    + [("uploaded", str(FRONTEND_DIR / "uploaded" / "*.pt"))]
+    + [("uploaded", str(WEBAPP_DIR / "uploaded" / "*.pt"))]
 )
 # Shipped defaults, one per job. The role board needs a *masking* checkpoint
 # (role head + MASK queries); the next-move panel needs a *nextpick* one. They
@@ -216,12 +217,14 @@ CKPT_PATTERNS = tuple(            # what /api/checkpoints lists (no torch.load)
 
 MASKED_DEFAULT = PRO_CKPT_DIR / "masking-proonly-nov13-through-lcp-df-sw" / "best.pt"
 
-# The shipped next-move model is the naive transformer fine-tuned with the
-# auxiliary slot loss: +1.8 pp top-1 over the nov13 head on the canonical split
-# (pro/model/test_split/REPORT_suite.md). It is still a `nextpick-*` checkpoint
-# and still fills the policy slot; only its batch is different.
-POLICY_DEFAULT = (PRO_CKPT_DIR
-                  / "nextpick-naivetransformer-role-d512-l8-h8-k5-through-lcp-df-sw"
+# The shipped next-move model is the nov13 siamese head. The naive transformer
+# with the auxiliary slot loss is measurably better - +1.8 pp top-1 and +3.4 pp
+# top-5 on the canonical split (20.7/54.2 vs 18.9/50.8, p 5.3e-28,
+# pro/model/test_split/REPORT_suite.md) - but its best.pt is 97 MB against
+# 12.8 MB here, and that one file is 40 % of the hosted Lambda image. The
+# hosted demo trades the accuracy for an image that fits the ECR free tier;
+# local runs can still point --policy-ckpt at the transformer.
+POLICY_DEFAULT = (PRO_CKPT_DIR / "nextpick-proonly-nov13-k5-through-lcp-df-sw"
                   / "best.pt")
 
 # The reranker: a *directory* (adapter/ + projector.pt), not a best.pt, because
@@ -260,13 +263,13 @@ RERANK_DEFAULT = ARCHIVE_CKPT_DIR / "llm-lora-rerank5"
 # `.json` manifest is a model, and `read_ensemble` + logit-averaging is the
 # contract the +1.33 pp was measured under. Do not "simplify" it to one .pt.
 ENSEMBLE_CKPT = ARCHIVE_CKPT_DIR / "nextpick-proto-ensemble" / "ensemble.json"
-UPLOAD_DIR = FRONTEND_DIR / "uploaded"
+UPLOAD_DIR = WEBAPP_DIR / "uploaded"
 MAX_UPLOAD_BYTES = 512 * 1024 * 1024      # generous; ckpts are 20-150 MB
 LOAD_LOCK = threading.Lock()              # serialize runtime model swaps
 # dDragon static champion art (model patch 16.20)
 DDRAGON_VERSION = "16.20.1"
 DDRAGON_CDN = "https://ddragon.leagueoflegends.com/cdn/"
-DDRAGON_CACHE = FRONTEND_DIR / ".cache" / ("champion_%s.json" % DDRAGON_VERSION)
+DDRAGON_CACHE = WEBAPP_DIR / ".cache" / ("champion_%s.json" % DDRAGON_VERSION)
 # Real pro games for the walkthrough. Two caches exist and they answer different
 # questions:
 #   pro_drafts.pt       the FROZEN corpus (CORPUS_MAX_DATE=2026-11-08). Every
@@ -374,7 +377,7 @@ def _bind_models():
     return store.attach(_engine(store.champs))
 
 
-def _agent_session(ablate=(), max_calls=None):
+def _agent_session(ablate=None, max_calls=None):
     """A `Session` over the live store, its engine, and the corpus.
 
     The corpus database is optional: without it the SQL tool is simply not
@@ -385,14 +388,33 @@ def _agent_session(ablate=(), max_calls=None):
     `ablate` and `max_calls` are per turn: the free-form agent turn asks
     anything, while the one-click suggestion runs the measured reranking arm
     (no SQL, a smaller budget) through the same session and the same store.
+    `APP["agent_ablate"]` lets a deployment remove tools globally without a
+    second session factory - the Lambda/web image uses it to drop the data
+    tools it does not ship.
     """
     from pro.model.agent.session import Session
 
+    if ablate is None:
+        ablate = APP.get("agent_ablate", ())
     con = None
     if Path(agent_schema.DB_PATH).exists():
         con = agent_schema.connect(str(agent_schema.DB_PATH))
     return Session(con=con, store=state_store(), ablate=ablate,
                    max_calls=int(max_calls or APP.get("agent_calls", 24)))
+
+
+def _agent_client(turn_id):
+    """The LLM client for one agent request.
+
+    The Worker charges by turn, and one loop turn makes several LLM calls as
+    it picks tools. A fresh client per request with a shared turn id is what
+    makes those calls one unit. `APP["agent_client"]` stays the test seam: an
+    explicit entry wins, and None keeps the loop's own environment fallback.
+    """
+    if "agent_client" in APP:
+        return APP["agent_client"]
+    return llm_client.client_from_env(
+        extra_headers={"X-Agent-Turn": turn_id})
 
 
 def _head_top_legal(st, k=20):
@@ -806,7 +828,7 @@ def make_reranker(path, device=None, head_path=None):
     """Build the 4B reranker, or say why this image cannot.
 
     The import is inside the function on purpose: `transformers`/`peft` live in
-    the `llm` image only, and `frontend/server.py` has to import cleanly in the
+    the `llm` image only, and `webapp/server.py` has to import cleanly in the
     base one. A missing package is a one-line explanation, not a traceback at
     startup.
 
@@ -820,7 +842,7 @@ def make_reranker(path, device=None, head_path=None):
     except Exception as exc:                       # ImportError, mostly
         raise ValueError(
             "%s is the 4B reranker and this image has no LLM stack (%s). "
-            "Serve it with `bash frontend/serve.sh --rerank`, which uses the "
+            "Serve it with `bash webapp/serve.sh --rerank`, which uses the "
             "llm image and --device cuda." % (Path(path).name, exc))
     if head_path is None:
         pol = APP.get("policy")
@@ -1379,9 +1401,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, {"error": str(exc)})
             return
         try:
-            # `agent_client` is a seam: a test (or a local model) can answer
-            # without a network, and with nothing set the environment decides.
-            out = loop.run(sess, message, client=APP.get("agent_client"),
+            # One id for every LLM call this turn makes. The Worker charges by
+            # turn, so eight tool-step calls are one unit, not eight.
+            turn = secrets.token_urlsafe(12)
+            out = loop.run(sess, message, client=_agent_client(turn),
+                           system=APP.get("agent_system") or loop.SYSTEM,
                            state_id=draft_state.REAL_ID,
                            max_steps=int(payload.get("max_steps") or 8))
         except Exception as exc:  # noqa: BLE001 - one panel, not the server
@@ -1447,7 +1471,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             out = loop.run(sess, suggest.QUESTION,
-                           client=APP.get("agent_client"),
+                           client=_agent_client(secrets.token_urlsafe(12)),
                            system=suggest.system(),
                            state_id=draft_state.REAL_ID,
                            max_steps=suggest.MAX_STEPS)
@@ -1532,7 +1556,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             out = loop.run(sess,
                            suggest.rank_question(k, st.to_move()["kind"]),
-                           client=APP.get("agent_client"),
+                           client=_agent_client(secrets.token_urlsafe(12)),
                            system=suggest.system(),
                            state_id=draft_state.REAL_ID,
                            max_steps=suggest.RANK_STEPS, seed=seed)
@@ -1751,7 +1775,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, {"model": model_info(pred), "role": slot_of(pred)})
 
     def _handle_upload(self):
-        """Raw .pt bytes with ?name=x.pt -> frontend/uploaded/x.pt, then load."""
+        """Raw .pt bytes with ?name=x.pt -> webapp/uploaded/x.pt, then load."""
         try:
             length = int(self.headers.get("Content-Length", 0))
             if length <= 0:
@@ -1817,7 +1841,7 @@ def main():
                          "--policy-ckpt; it re-orders that head's shortlist, so "
                          "the head still proposes. Needs a GPU and the `llm` "
                          "image, and a failure to build it is fatal. Read "
-                         "frontend/README.md 'What the reranker is worth' "
+                         "webapp/README.md 'What the reranker is worth' "
                          "first: it is worth ~2 s/board and, on the panel's "
                          "unconstrained question, a few pp"
                          % RERANK_DEFAULT.name)
@@ -1845,7 +1869,7 @@ def main():
     # request.
     #
     # The reranker was going to be the default. It is not, because the number
-    # that justified it does not survive a served comparison (frontend/README.md
+    # that justified it does not survive a served comparison (webapp/README.md
     # "What the reranker is worth", STATUS.md §9):
     #
     #   * its 34.27 % is measured with the *true lane* in the task line, and the
@@ -1912,7 +1936,7 @@ def main():
     print("champions: %d, device: %s" % (len(mapping), args.device))
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    print("frontend: http://%s:%d%s"
+    print("webapp: http://%s:%d%s"
           % (args.host, args.port,
              " (local only)" if args.host == "127.0.0.1" else ""))
     try:

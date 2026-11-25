@@ -1,7 +1,7 @@
 # Ban-aware next-move policy
 
 **Shipped on 2026-11-07.** `nextpick-bans-aware-through-wlds-ig-tes` is the
-frontend's next-move default (`frontend/server.py`, `POLICY_DEFAULT`), and the
+frontend's next-move default (`webapp/server.py`, `POLICY_DEFAULT`), and the
 three flags are off by default on `PolicyValueModel` so every older checkpoint
 still rebuilds unchanged. Read the caveat at the end of "Where the gain comes
 from" before quoting the number: it is **one seed**, and the single-switch arms

@@ -1,0 +1,14 @@
+# Runtime for the hosted web/Lambda deployment only.
+#
+# The root requirements.txt pins torch+cu126 for local GPU work; that CUDA
+# stack is ~5.5 GB of the dev image and is useless on CPU-only Lambda. This
+# file uses the CPU wheel of the SAME torch version, so checkpoints load the
+# same way, and keeps only the other dependency the agent loop actually needs.
+#
+# `+cpu` exists only on the PyTorch CPU index, hence the extra index. Pip
+# still resolves langgraph and its transitive packages from PyPI.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.14.1+cpu
+# Torch logs a warning without it, and the draft cache is loaded through it.
+numpy==2.3.4
+langgraph==1.0.4

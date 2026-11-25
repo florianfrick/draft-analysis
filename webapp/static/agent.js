@@ -21,17 +21,20 @@
 //   the mix      how many calls, and what share were SQL: above half means the
 //                high-level tools are under-specified, not that SQL is good
 //
-// The header's "suggest next move" button is a fourth thing: a fixed question
-// to the same agent, run through /api/agent-suggest with SQL ablated and the
-// explained prompt. It is the reranking arm - the model reads the held state,
-// asks the head for a shortlist and commits to one champion - so its answer is
-// shown as a move (parsed from the final PICK:/BAN: line) next to the head's
-// own #1. The answer is still prose and the tools are still logged; the button
-// only fixes the question and the budget.
+// The header's "Suggest" button is a fourth thing: a fixed question to the
+// same agent, run through /api/agent-suggest with SQL ablated and the explained
+// prompt. It is the reranking arm - the model reads the held state, asks the
+// head for a shortlist and commits to one champion - so its answer is shown as
+// a move (parsed from the final PICK:/BAN: line) next to the head's own #1.
+// "Explain" asks the Android app's composition-archetype question through the
+// ordinary chat route; it is prose and a tool log, not a parsed move.
 (function () {
   const el = id => document.getElementById(id);
   let busy = false;
   let turns = 0;
+  // The Android panel's Explain button asks this exact question.
+  const EXPLAIN_QUESTION =
+    'What team composition archetype is each team aiming toward?';
 
   // ---- agent suggestions (the reranked top-k) ---------------------------
   // A second column under the head's own #nextmove list, filled by
@@ -42,6 +45,7 @@
   // line that records what the board did between reranks.
   let featuresOn = true;
   let autoTimer = null;
+  let activeCalls = new Set();
   let convoSeed = [];        // [{role, content}] recent chat, for the rerank
   let lastSeen = null;       // {picks, bans, fearless} the last rank described
   let rankedOnce = false;    // so the first (initial) rerank also logs to chat
@@ -64,6 +68,28 @@
       patch_id: currentPatchId(),
       patch: (typeof currentPatchKey === 'function' ? currentPatchKey() : null)
     };
+  }
+
+  // Every LLM route goes through here. Feature-off is a hard stop, and an
+  // in-flight call is abortable so switching the agent off mid-turn really
+  // stops the work rather than only hiding its result.
+  function isSilentCancel(e) {
+    return !featuresOn || (e && e.name === 'AbortError');
+  }
+
+  function agentFetch(url, body) {
+    if (!featuresOn) return Promise.reject(new Error('agent features off'));
+    const controller = new AbortController();
+    activeCalls.add(controller);
+    return fetch(apiUrl(url), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body), signal: controller.signal
+    }).finally(() => activeCalls.delete(controller));
+  }
+
+  function abortAgentCalls() {
+    activeCalls.forEach(c => c.abort());
+    activeCalls.clear();
   }
 
   function esc(s) {
@@ -97,9 +123,9 @@
         + 'cannot edit it';
     }
     add('system', 'Ask about the board, ask what happens if a champion is '
-      + 'taken, or press "suggest next move" for one recommended pick. The '
-      + 'assistant can clone the board to try it, then answer from the '
-      + 'model\u2019s ranking on the clone.');
+      + 'taken, press "Suggest" for one recommended pick, or "Explain" for a '
+      + 'composition read. The assistant can clone the board to try it, then '
+      + 'answer from the model\u2019s ranking on the clone.');
   }
 
   function add(kind, text) {
@@ -220,6 +246,7 @@
     busy = flag;
     el('agent-send').disabled = flag;
     el('agent-suggest').disabled = flag;
+    el('agent-explain').disabled = flag;
   }
 
   // ---- agent suggestions list --------------------------------------------
@@ -341,10 +368,8 @@
     const thinking = (note || initial)
       ? add('model pending', 'Agent is thinking\u2026') : null;
     try {
-      const r = await fetch('/api/agent-rank', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(Object.assign(boardBody(), { messages: convoSeed.slice() }))
-      });
+      const r = await agentFetch('/api/agent-rank',
+        Object.assign(boardBody(), { messages: convoSeed.slice() }));
       const res = await r.json();
       if (thinking) thinking.remove();
       if (!r.ok || res.error) {
@@ -368,6 +393,7 @@
       rankedOnce = true;
     } catch (e) {
       if (thinking) thinking.remove();
+      if (isSilentCancel(e)) return;
       if (note) addBoardChange('Board changed: ' + note + ' (agent ranking error)');
     }
   }
@@ -389,15 +415,13 @@
   }
 
   async function send(text) {
-    if (busy) return;
+    if (!featuresOn || busy) return;
     setBusy(true);
     add('user', text);
     const pending = add('model pending', 'thinking\u2026');
     try {
-      const r = await fetch('/api/agent', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(Object.assign(boardBody(), { message: text }))
-      });
+      const r = await agentFetch('/api/agent',
+        Object.assign(boardBody(), { message: text }));
       const res = await r.json();
       pending.remove();
       if (!r.ok || res.error) {
@@ -416,24 +440,22 @@
       }
     } catch (e) {
       pending.remove();
+      if (isSilentCancel(e)) return;
       add('error', String(e));
     } finally {
       setBusy(false);
-      el('agent-input').focus();
+      if (featuresOn) el('agent-input').focus();
     }
   }
 
   async function suggest() {
-    if (busy) return;
+    if (!featuresOn || busy) return;
     setBusy(true);
-    add('user', 'suggest the next move (agent rerank)');
+    add('user', 'Suggest and justify the optimal next move (Blue/Red to Pick/Ban).');
     const pending = add('model pending',
       'reading the state and the head\u2019s ranking\u2026');
     try {
-      const r = await fetch('/api/agent-suggest', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(boardBody())
-      });
+      const r = await agentFetch('/api/agent-suggest', boardBody());
       const res = await r.json();
       pending.remove();
       if (!r.ok) {
@@ -444,22 +466,30 @@
         // the state, the head's #1 and the "no client" reason still say what
         // happened. render() shows that reason rather than hiding it.
         render(res);
-        pushSeed('user', 'suggest the next move (agent rerank)');
+        pushSeed('user', 'Suggest and justify the optimal next move (Blue/Red to Pick/Ban).');
         pushSeed('assistant', res.answer || '');
         scheduleAutoRank();
       }
     } catch (e) {
       pending.remove();
+      if (isSilentCancel(e)) return;
       add('error', String(e));
     } finally {
       setBusy(false);
-      el('agent-input').focus();
+      if (featuresOn) el('agent-input').focus();
     }
+  }
+
+  function explain() {
+    if (!featuresOn || busy) return;
+    open();
+    send(EXPLAIN_QUESTION);
   }
 
   function init() {
     if (!el('agent')) return;
     el('agent-suggest').addEventListener('click', suggest);
+    el('agent-explain').addEventListener('click', explain);
     // The chat form submits natively (the "ask" button is type=submit), which
     // would reload the whole page. Intercept it so it runs the chat turn (the
     // "thinking" pending line + the transcript) in place.
@@ -487,7 +517,7 @@
       lastSeen = null;
       scheduleAutoRank();
     });
-    // The agent-features toggle: off hides both the chat and the rerank column
+    // The Agent toggle: off hides both the chat and the rerank column
     // and stops the agent from running at all (only the base model's own
     // suggestions and board updates remain).
     const feat = el('agent-features');
@@ -509,7 +539,11 @@
     if (on) {
       scheduleAutoRank();
     } else {
+      // Stop the timer and anything already in flight. `featuresOn` is false
+      // first, so the abandoned catch blocks stay silent.
       clearTimeout(autoTimer);
+      abortAgentCalls();
+      setBusy(false);
     }
   }
 

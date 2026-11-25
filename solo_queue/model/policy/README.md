@@ -295,7 +295,7 @@ the side on the clock — one forward pass, ban or pick. The patch is an input
 (`patch_id`), selected in the UI from the checkpoint's own `patch_vocab`;
 `patch_id_for` clamps anything the checkpoint cannot embed to UNK. It
 imports no dataset or training module, so serving does not pull in
-`datasets.py`. `frontend/server.py` dispatches on the state-dict keys and
+`datasets.py`. `webapp/server.py` dispatches on the state-dict keys and
 exposes it as `POST /api/next-move`; the masked-draft path stays available
 for comp-completion queries.
 

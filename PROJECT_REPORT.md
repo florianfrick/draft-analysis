@@ -19,7 +19,7 @@ ExecuTorch.
 | `data/` | Raw Oracle's Elixir pro CSVs, soloQ match data, derived draft caches, and the pro data pipeline. |
 | `solo_queue/` | Siamese base encoder, masked pretraining, soloQ→pro finetune, policy head, and soloQ analysis store. |
 | `pro/` | Pro-only training, the canonical evaluation suite, baselines, checkpoints, and the board-holding agent. |
-| `frontend/` | Local FastAPI/JS draft UI and model-serving endpoints. |
+| `webapp/` | Local FastAPI/JS draft UI and model-serving endpoints. |
 | `android/` | Native Kotlin/Compose offline client, ExecuTorch export tools, bundled assets, and demo videos. |
 | `STATUS.md` / `FINDINGS.md` | Historical measurements, decisions, and dead ends. These are the source of truth for "what was measured". |
 
@@ -31,7 +31,7 @@ ExecuTorch.
   Three suites are scored separately: `next_move` (prefix-only), `masked`
   (one slot hidden, including later picks as context), and `role_next`
   (prefix + the pick's true role, no later picks).
-- **Frontend:** `bash frontend/serve.sh` serves the local UI on 127.0.0.1.
+- **Frontend:** `bash webapp/serve.sh` serves the local UI on 127.0.0.1.
 - **Android:** Kotlin/Compose with `policy.pte` (26.6 MB, quantized) and
   `masker.pte` (10.0 MB, FP32), bundled champion portraits, and static metadata.
   It needs no backend, network, auth, TLS, or API key. The optional Agent

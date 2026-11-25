@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -28,6 +29,11 @@ DEFAULT_BASE_URL = "https://api.deepseek.com"
 # does not exist and 404s. DeepSeek defaults here because it is the model this
 # experiment was specified against; any OpenAI-compatible endpoint works.
 DEFAULT_MODEL = "deepseek-flash"
+
+# Cloudflare's WAF returns 1010 for urllib's default `Python-urllib/x.y` UA
+# (confirmed from Lambda and from a local probe). An explicit, honest UA gets
+# through to the Worker's own auth and validation without spoofing a browser.
+USER_AGENT = "DraftAssistantWeb/1.0"
 
 
 class LLMError(RuntimeError):
@@ -92,7 +98,8 @@ def _normalise(message):
             "reasoning": message.get("reasoning_content") or ""}
 
 
-def client_from_env(env=None, temperature=0.2, max_tokens=None):
+def client_from_env(env=None, temperature=0.2, max_tokens=None,
+                    extra_headers=None):
     """-> callable(messages, tools=None) -> normalised assistant message.
 
     Returns None when no key is configured, which is the same contract the
@@ -103,6 +110,11 @@ def client_from_env(env=None, temperature=0.2, max_tokens=None):
     `max_tokens` is opt-in and absent from the body when None, because the
     loop's answers are prose of unknown length while a reranker eval asks for
     one name and pays for every token it does not need.
+
+    `extra_headers` is for a proxy that needs request metadata the model does
+    not. The Cloudflare Worker uses `X-Agent-Turn` to charge one agent turn
+    rather than each of its LLM calls, so a turn id is generated once per
+    client when the caller does not supply one. Providers ignore the header.
     """
     env = os.environ if env is None else env
     key = (env.get("LLM_API_KEY") or "").strip()
@@ -111,6 +123,17 @@ def client_from_env(env=None, temperature=0.2, max_tokens=None):
     base = (env.get("LLM_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
     model = env.get("LLM_MODEL") or DEFAULT_MODEL
     timeout = float(env.get("LLM_TIMEOUT") or 60)
+
+    headers = {"Content-Type": "application/json",
+               "Authorization": "Bearer " + key,
+               "User-Agent": USER_AGENT}
+    has_turn = False
+    for name, value in (extra_headers or {}).items():
+        headers[name] = value
+        if str(name).lower() == "x-agent-turn":
+            has_turn = True
+    if not has_turn:
+        headers["X-Agent-Turn"] = secrets.token_urlsafe(12)
 
     def call(messages, tools=None):
         body = {"model": model, "messages": messages,
@@ -123,8 +146,7 @@ def client_from_env(env=None, temperature=0.2, max_tokens=None):
         req = urllib.request.Request(
             base + "/chat/completions",
             data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json",
-                     "Authorization": "Bearer " + key})
+            headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
